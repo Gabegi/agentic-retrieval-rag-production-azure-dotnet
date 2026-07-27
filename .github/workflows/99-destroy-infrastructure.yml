@@ -1,8 +1,8 @@
 name: 99 - Destroy Infrastructure
 
 on:
-  schedule:
-    - cron: "0 15 * * 1-5"  # Mon–Fri 5pm Amsterdam (CEST/UTC+2)
+  # schedule:
+  #  - cron: "0 15 * * 1-5"  # Mon–Fri 5pm Amsterdam (CEST/UTC+2)
   workflow_dispatch:
     inputs:
       confirmation:
