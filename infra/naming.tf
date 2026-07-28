@@ -35,4 +35,8 @@ locals {
   region   = local.region_short[var.location]
   env      = local.env_short[var.environment]
   instance = "001"
+
+  # Gates var.dev_allowed_ips to development regardless of what's in a given
+  # .tfvars file - see variables.tf's dev_allowed_ips for the full rationale.
+  dev_direct_access_ips = var.environment == "development" ? var.dev_allowed_ips : []
 }

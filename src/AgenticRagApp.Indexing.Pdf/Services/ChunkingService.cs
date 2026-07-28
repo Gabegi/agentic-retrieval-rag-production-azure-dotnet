@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 using AgenticRagApp.Indexing.Pdf.Utils;
@@ -31,7 +32,7 @@ public class ChunkingService : IChunkingService
     // Converts ExtractionDocuments into indexed DocumentChunks,
     // computes ChunkingResults, and emits all chunk telemetry in one place.
     public (IReadOnlyList<DocumentChunk> Docs, ChunkingResults Stats) ChunkDocuments(
-        IReadOnlyList<ExtractionDocument> docs)
+        IReadOnlyList<PdfExtractionDocument> docs)
     {
         var result = new List<DocumentChunk>();
 
@@ -43,6 +44,13 @@ public class ChunkingService : IChunkingService
             // outline) is preferred when present; otherwise fall back to the first
             // DI-detected heading on this page. Null when the page has neither - previously
             // this was always null, since nothing ever set TextChunk.Heading.
+            //
+            // TODO: most of this corpus has no bookmark outline (see docs/260727 run), so
+            // Breadcrumb is rarely populated and this falls back to a flat single heading
+            // with no parent chain. Once a PdfHeadingBreadCrumbBuilder exists - walking
+            // doc.Headings with depth inferred from numbering prefixes ("2.3 ..." -> depth 2),
+            // the same stack algorithm as PdfSectionBreadCrumbBuilder - prefer its output here
+            // ahead of the flat FirstOrDefault() fallback.
             var heading = doc.Breadcrumb ?? doc.Headings.FirstOrDefault()?.Content;
 
             // Chunk ordinal is scoped to this document (SourceId + Ordinal), not the run —
@@ -87,7 +95,6 @@ public class ChunkingService : IChunkingService
                     SelectionMarks        = doc.SelectionMarks,
                     Figures               = doc.Figures,
                     Lines                 = doc.Lines,
-                    AverageWordConfidence = doc.AverageWordConfidence,
                 });
             }
         }

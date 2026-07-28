@@ -26,7 +26,7 @@ public class EmbeddingServiceTests
         OpenAiEmbeddingDimensions = dims,
     };
 
-    private static ProtocolDocument Document(string id, string content, string? summary = null) => new()
+    private static ChunkStatsSource Document(string id, string content, string? summary = null) => new()
     {
         Id      = id,
         Content = content,

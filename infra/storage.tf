@@ -62,13 +62,25 @@ resource "azurerm_storage_account" "data" {
   account_kind             = "StorageV2"
   min_tls_version          = "TLS1_2"
 
-  public_network_access_enabled   = false
+  # Only flips to true when dev_allowed_ips has entries (development only, per
+  # variables.tf's dev_allowed_ips) - the network_rules block below still denies
+  # everything except those specific IPs, so this isn't a general public-access opt-in.
+  public_network_access_enabled   = length(local.dev_direct_access_ips) > 0 ? true : false
   allow_nested_items_to_be_public = false
   # shared_access_key_enabled left at its default (true): disabling it would
   # require the deploying identity to have Storage Blob Data Contributor
   # (data-plane RBAC, separate from Contributor) before Terraform can manage
   # containers via storage_use_azuread, which risks an RBAC-propagation race
   # on a fresh apply. Revisit once that identity's data-plane access is set up.
+
+  dynamic "network_rules" {
+    for_each = length(local.dev_direct_access_ips) > 0 ? [1] : []
+    content {
+      default_action = "Deny"
+      bypass         = ["AzureServices"]
+      ip_rules       = local.dev_direct_access_ips
+    }
+  }
 
   blob_properties {
     delete_retention_policy {
@@ -88,32 +100,21 @@ resource "azurerm_storage_container" "documents" {
   container_access_type = "private"
 }
 
-resource "azurerm_storage_container" "chunks" {
-  name                  = "chunks"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
-}
-
-resource "azurerm_storage_container" "reports" {
-  name                  = "reports"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
-}
-
-# Written by IPipelineArtifactWriter (Observability/PipelineArtifactWriter.cs) -
-# always-on full extraction/chunking/embedding artifact archive, one blob per
-# pipeline stage per run under {instanceId}/.
-resource "azurerm_storage_container" "indexing_artifacts" {
-  name                  = "indexing-artifacts"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
-}
-
 # Written by IRunReportWriter (Observability/RunReportWriter.cs) - gated on
 # IsEnabled (env.IsDevelopment()), so this stays empty unless DOTNET_ENVIRONMENT
-# is set to Development on the function app.
-resource "azurerm_storage_container" "telemetry_reports" {
-  name                  = "telemetry-reports"
+# is set to Development on the function app. Name must match the container name
+# RunReportWriter's registration uses (Program.cs, GetBlobContainerClient("pipeline-reports"));
+# previously named "telemetry-reports" here, which didn't match and left this
+# container permanently empty while writes went to an unmanaged, auto-created
+# "pipeline-reports" container instead.
+resource "azurerm_storage_container" "pipeline_reports" {
+  name                  = "pipeline-reports"
+  storage_account_id    = azurerm_storage_account.data.id
+  container_access_type = "private"
+}
+
+resource "azurerm_storage_container" "test_questions" {
+  name                  = "test-questions"
   storage_account_id    = azurerm_storage_account.data.id
   container_access_type = "private"
 }

@@ -5,7 +5,7 @@ using AgenticRagApp.Infrastructure.Configuration;
 namespace AgenticRagApp.Infrastructure.Clients.Search;
 
 // Schema is the union of every field either doc-type's chunks populate: PDF-only fields
-// (table_count/has_table/page_quality/figure_captions) sit alongside CSV-only fields
+// (table_count/has_table/figure_captions) sit alongside CSV-only fields
 // (summary/department/quick_code/relative_path/check_date/version) in the same index.
 // A field one doc-type never populates is simply left null/empty on that doc-type's rows
 // — Azure AI Search doesn't require every document to set every field.
@@ -47,12 +47,12 @@ public class IndexService : IIndexService
     private SearchIndex BuildIndexDefinition(VectorSearch vectorSearch, SemanticSearch semanticSearch) =>
         new SearchIndex(_config.SearchIndexName)
         {
-            Description = "Internal knowledge base for Contoso (Dutch elderly and disability care " +
+            Description = "Internal knowledge base for Cordaan (Dutch elderly and disability care " +
               "organization). Contains the full text of organizational documents: care and " +
               "quality protocols, work instructions, job descriptions (functiebeschrijvingen), " +
               "HR policies, facility and safety plans, financial procedures, privacy/security " +
               "policies, and software manuals (e.g. ONS/ECD, CIS). Use this index for questions " +
-              "about Contoso's internal policies, procedures, role responsibilities, and " +
+              "about Cordaan's internal policies, procedures, role responsibilities, and " +
               "care-related instructions.",
             VectorSearch   = vectorSearch,
             SemanticSearch = semanticSearch,
@@ -75,7 +75,7 @@ public class IndexService : IIndexService
                 // CSV-only — from FOLDER_MINI_FULL_PATH, bounded set of department/category
                 // values (HR, Kwaliteit, Facilitaire zaken, ...). Null for PDF rows.
                 new SearchableField("department")                                          { IsFilterable = true, IsFacetable = true },
-                // CSV-only — from QUICK_CODE, Contoso's internal document code. Null for PDF rows.
+                // CSV-only — from QUICK_CODE, Cordaan's internal document code. Null for PDF rows.
                 new SimpleField("quick_code",         SearchFieldDataType.String)         { IsFilterable = true },
                 // CSV-only — from RELATIVE_PATH, path back to the original source file.
                 // Structured provenance metadata, not free-text search material. Null for PDF rows.
@@ -108,7 +108,6 @@ public class IndexService : IIndexService
                 // (docs/chunking-rewrite-plan.md's Tier 2). Null/default for CSV rows.
                 new SimpleField("table_count",        SearchFieldDataType.Int32)          { IsFilterable = true },
                 new SimpleField("has_table",          SearchFieldDataType.Boolean)        { IsFilterable = true, IsFacetable = true },
-                new SimpleField("page_quality",       SearchFieldDataType.Double)         { IsFilterable = true, IsSortable = true },
                 new SearchableField("figure_captions", collection: true)                   { AnalyzerName = "nl.microsoft" },
 
                 new VectorSearchField("content_vector", _config.OpenAiEmbeddingDimensions, "vector-profile") { IsHidden = true, IsStored = false }

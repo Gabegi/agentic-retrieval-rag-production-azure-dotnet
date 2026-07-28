@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Common.Models;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -26,8 +27,7 @@ public class PdfPipelineValidatorTests
         SelectionMarks: [],
         Figures: [],
         Lines: [],
-        Sections: [],
-        PageQuality: []);
+        Sections: []);
 
     // One file's worth of PDFExtractionResult, carrying whatever pages/structure the
     // test needs - the validator flattens this (and any other files) internally now,
@@ -99,8 +99,8 @@ public class PdfPipelineValidatorTests
         var clean = BuildCleaner().CleanPdf([page]);
         var metadataDiagnostics = new PdfStepDiagnostics(
             [
-                new ExtractionWarning { DocumentId = "doc1.pdf", Message = "No native Title in the PDF's Info dictionary - falls back to a filename-derived title downstream." },
-                new ExtractionWarning { DocumentId = "doc1.pdf", Message = "No native Producer in the PDF's Info dictionary — possible non-standard export pipeline." },
+                new ExtractionWarning(RowNumber: null, DocumentId: "doc1.pdf", Message: "No native Title in the PDF's Info dictionary - falls back to a filename-derived title downstream."),
+                new ExtractionWarning(RowNumber: null, DocumentId: "doc1.pdf", Message: "No native Producer in the PDF's Info dictionary — possible non-standard export pipeline."),
             ],
             []);
 
@@ -208,8 +208,8 @@ public class PdfPipelineValidatorTests
         var page  = Page("doc1.pdf", "Some content");
         var clean = BuildCleaner().CleanPdf([page]);
         var structure = Structure(
-            new TableInfo(2, 3, [new TableCellInfo(0, 0, "content", "a", null, null)], Offset: 0, PageNumber: 1),
-            new TableInfo(1, 1, [new TableCellInfo(0, 0, "content", "b", null, null)], Offset: 10, PageNumber: 1));
+            new TableInfo(2, 3, [new TableCellInfo(0, 0, "content", "a", null, null)], Offset: 0, PageNumber: 1, Caption: null, Footnotes: [], Regions: []),
+            new TableInfo(1, 1, [new TableCellInfo(0, 0, "content", "b", null, null)], Offset: 10, PageNumber: 1, Caption: null, Footnotes: [], Regions: []));
 
         var report = BuildValidator().Validate([FileResult("doc1.pdf", [page], structure)], clean);
 
@@ -221,7 +221,7 @@ public class PdfPipelineValidatorTests
     {
         var page  = Page("doc1.pdf", "Some content");
         var clean = BuildCleaner().CleanPdf([page]);
-        var structure = Structure(new TableInfo(0, 0, [], Offset: 0, PageNumber: 1));
+        var structure = Structure(new TableInfo(0, 0, [], Offset: 0, PageNumber: 1, Caption: null, Footnotes: [], Regions: []));
 
         var report = BuildValidator().Validate([FileResult("doc1.pdf", [page], structure)], clean);
 
@@ -234,7 +234,7 @@ public class PdfPipelineValidatorTests
     {
         var page  = Page("doc1.pdf", "Some content");
         var clean = BuildCleaner().CleanPdf([page]);
-        var structure = Structure(new TableInfo(2, 2, [], Offset: 0, PageNumber: 1));
+        var structure = Structure(new TableInfo(2, 2, [], Offset: 0, PageNumber: 1, Caption: null, Footnotes: [], Regions: []));
 
         var report = BuildValidator().Validate([FileResult("doc1.pdf", [page], structure)], clean);
 

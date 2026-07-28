@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AgenticRagApp.Indexing.Csv.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Csv.Services;
 
@@ -11,12 +12,12 @@ namespace AgenticRagApp.Indexing.Csv.Services;
 // One bad page becomes a CleaningError; it never aborts the whole run.
 public class DataCleaner : IDataCleaner
 {
-    // Standalone "contoso"/"CONTOSO" logo lines only — lowercase and all-caps are
-    // both confirmed logo text; mixed-case "Contoso" is left untouched since that's
+    // Standalone "cordaan"/"CORDAAN" logo lines only — lowercase and all-caps are
+    // both confirmed logo text; mixed-case "Cordaan" is left untouched since that's
     // where real prose (org charts, sentences) shows up. Leading/trailing
     // spaces/tabs around the logo line are tolerated.
-    private static readonly Regex ContosoBoilerplate =
-        new(@"^[ \t]*(contoso|CONTOSO)[ \t]*$\n?", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex CordaanBoilerplate =
+        new(@"^[ \t]*(cordaan|CORDAAN)[ \t]*$\n?", RegexOptions.Multiline | RegexOptions.Compiled);
 
     // Markdown image placeholders, e.g. ![alt](path) — carry no text value.
     private static readonly Regex ImagePlaceholder =
@@ -70,11 +71,9 @@ public class DataCleaner : IDataCleaner
     private static void ReportDuplicatePage(JoinedPageRecord page, CleanResult result)
     {
         result.CountDuplicateSkipped();
-        result.AddWarning(new CleaningWarning
-        {
-            DocumentId = page.DocumentId,
-            Message    = $"Duplicate page {page.PageIndex} in source — kept the first occurrence.",
-        });
+        result.AddWarning(new CleaningWarning(
+            DocumentId: page.DocumentId,
+            Message:    $"Duplicate page {page.PageIndex} in source — kept the first occurrence."));
     }
 
     // Cleans one page and adds it to the result.
@@ -88,25 +87,21 @@ public class DataCleaner : IDataCleaner
             if (mojibakeFixed)
             {
                 result.CountMojibakeRepaired();
-                result.AddWarning(new CleaningWarning
-                {
-                    DocumentId = page.DocumentId,
-                    Message    = $"Page {page.PageIndex}: repaired mojibake in source text (e.g. 'â€™' -> \"'\").",
-                });
+                result.AddWarning(new CleaningWarning(
+                    DocumentId: page.DocumentId,
+                    Message:    $"Page {page.PageIndex}: repaired mojibake in source text (e.g. 'â€™' -> \"'\")."));
             }
 
             if (string.IsNullOrWhiteSpace(content))
-                result.AddWarning(new CleaningWarning
-                {
-                    DocumentId = page.DocumentId,
-                    Message    = $"PageContent is empty after cleanup (page {page.PageIndex}) — likely a blank source page.",
-                });
+                result.AddWarning(new CleaningWarning(
+                    DocumentId: page.DocumentId,
+                    Message:    $"PageContent is empty after cleanup (page {page.PageIndex}) — likely a blank source page."));
 
             result.AddRecord(ToCleanedRecord(page, content));
         }
         catch (Exception ex)
         {
-            result.AddError(new CleaningError { DocumentId = page.DocumentId, Message = ex.Message });
+            result.AddError(new CleaningError(DocumentId: page.DocumentId, Message: ex.Message));
         }
     }
 
@@ -155,7 +150,7 @@ public class DataCleaner : IDataCleaner
             mojibakeFixed = true;
         }
 
-        text = ContosoBoilerplate.Replace(text, "");
+        text = CordaanBoilerplate.Replace(text, "");
         text = ImagePlaceholder.Replace(text, "");
         text = ExcessBlankLines.Replace(text, "\n\n");
         return (text.Trim(), mojibakeFixed);

@@ -30,8 +30,23 @@ public class PdfSectionBreadCrumbBuilderTests
 
         var (_, diagnostics) = PdfSectionBreadCrumbBuilder.BuildSectionBreadcrumbs(bookmarks, pageCount: 5, "doc.pdf");
 
-        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("1 bookmark(s) skipped - no resolvable page")));
+        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("1 bookmark(s) excluded - no resolvable page")));
         Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("1 bookmark(s) excluded - point to an external file")));
+    }
+
+    [TestMethod]
+    public void AllBookmarksUnresolvable_ReturnsEmptyWithoutOutOfRangeOrEmptyWarnings()
+    {
+        // Every bookmark fails the PageNumber > 0 filter - ordered.Count hits 0 and the
+        // method returns early, before the out-of-range/skipped-level/empty-result warnings
+        // (which only make sense once at least one bookmark resolved to a page) ever run.
+        var bookmarks = new[] { Bm("Broken", 0, null) };
+
+        var (breadcrumbs, diagnostics) = PdfSectionBreadCrumbBuilder.BuildSectionBreadcrumbs(bookmarks, pageCount: 5, "doc.pdf");
+
+        Assert.AreEqual(0, breadcrumbs.Count);
+        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("1 bookmark(s) excluded - no resolvable page")));
+        Assert.IsFalse(diagnostics.Warnings.Any(w => w.Message.Contains("resolved to a page but none produced")));
     }
 
     [TestMethod]
@@ -43,7 +58,7 @@ public class PdfSectionBreadCrumbBuilderTests
 
         Assert.AreEqual(0, breadcrumbs.Count);
         Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("point beyond this document's 3 page(s)")));
-        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("existed but none resolved to a breadcrumb")));
+        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("resolved to a page but none produced a breadcrumb")));
     }
 
     [TestMethod]

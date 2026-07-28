@@ -155,21 +155,22 @@ public class CsvExtractionOrchestrator : IExtractionOrchestrator
                 r.PageContent.Length > 300 ? r.PageContent[..300] + "…" : r.PageContent))
             .ToList();
 
-        return new ExtractionOutput(
-            Docs:                   extractionDocs,
-            ValidationErrors:       errors,
-            ValidationWarnings:     warnings,
-            ReconciliationProblems: report.ReconciliationProblems.Count,
-            StaleDocCount:          report.StaleDocCount,
-            MojibakeRepairedPages:  report.MojibakeRepairedPages,
-            DetectedTableCount:     report.DetectedTableCount,
-            DocsWithoutHeadings:    report.DocumentsNeedingFallbackChunking.Count,
-            MissingTitleCount:      missingTitle,
-            MissingVersionCount:    missingVersion,
-            MissingDepartmentCount: missingDepartment,
-            Issues:                 issues,
-            RedFlags:               report.RedFlags.ToList(),
-            SpotCheckSample:        spotCheck);
+        return new ExtractionOutput(extractionDocs)
+        {
+            ValidationErrors       = errors,
+            ValidationWarnings     = warnings,
+            ReconciliationProblems = report.ReconciliationProblems.Count,
+            StaleDocCount          = report.StaleDocCount,
+            MojibakeRepairedPages  = report.MojibakeRepairedPages,
+            DetectedTableCount     = report.DetectedTableCount,
+            DocsWithoutHeadings    = report.DocumentsNeedingFallbackChunking.Count,
+            MissingTitleCount      = missingTitle,
+            MissingVersionCount    = missingVersion,
+            MissingDepartmentCount = missingDepartment,
+            Issues                 = issues,
+            RedFlags               = report.RedFlags.ToList(),
+            SpotCheckSample        = spotCheck,
+        };
     }
 
     // Everything this run logs and emits as metrics, in one place: whether the caller's

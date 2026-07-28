@@ -27,7 +27,6 @@ public record SearchUploadChunk(
     [property: JsonPropertyName("content_vector")] float[]? ContentVector,
     [property: JsonPropertyName("table_count")] int TableCount,
     [property: JsonPropertyName("has_table")] bool HasTable,
-    [property: JsonPropertyName("page_quality")] double? PageQuality,
     [property: JsonPropertyName("figure_captions")] IReadOnlyList<string> FigureCaptions)
 {
     public static SearchUploadChunk From(DocumentChunk doc) => new(
@@ -49,6 +48,5 @@ public record SearchUploadChunk(
         ContentVector:    doc.ContentVector,
         TableCount:       doc.TableCount,
         HasTable:         doc.HasTable,
-        PageQuality:      doc.PageQuality,
         FigureCaptions:   doc.FigureCaptions);
 }

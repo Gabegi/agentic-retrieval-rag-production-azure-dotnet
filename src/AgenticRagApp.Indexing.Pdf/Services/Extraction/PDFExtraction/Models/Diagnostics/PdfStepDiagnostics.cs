@@ -1,3 +1,5 @@
+using AgenticRagApp.Common.Models;
+
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // One pipeline step's non-fatal findings for one PDF file (PdfDocumentValidator,
@@ -13,7 +15,15 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 // twice. These are written by WriteReportsAsync for humans to read, nothing else.
 public sealed record PdfStepDiagnostics(
     IReadOnlyList<ExtractionWarning> Warnings,
-    IReadOnlyList<ExtractionError>   Errors)
+    IReadOnlyList<ExtractionError>   Errors,
+    IReadOnlyList<ExtractionWarning>? Info = null)
 {
+    // Successes worth reporting ("N bookmarks found", "XMP packet parsed") land here,
+    // not in Warnings - a step finding something present and fine is not the same
+    // signal as a step finding something missing/broken, and folding both into one
+    // list makes Warnings useless as a quality signal (see GetIssuesFromMetadataDiagnostics
+    // in PdfPipelineValidator, which reads only Warnings for exactly that reason).
+    public IReadOnlyList<ExtractionWarning> Info { get; init; } = Info ?? [];
+
     public static readonly PdfStepDiagnostics Empty = new([], []);
 }

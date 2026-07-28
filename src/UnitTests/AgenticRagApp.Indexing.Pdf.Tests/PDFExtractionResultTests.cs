@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -12,7 +13,7 @@ public class PDFExtractionResultTests
         Assert.ThrowsExactly<ArgumentException>(() => new PDFExtractionResult(
             Ok: true, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: null,
             NativeMetadata: null, RawContent: null, Pages: [], Structure: null,
-            EstimatedCostUsd: null, Error: new ExtractionError { DocumentId = "doc1.pdf", Message = "boom" }));
+            EstimatedCostUsd: null, Error: new ExtractionError(RowNumber: 0, DocumentId: "doc1.pdf", Message: "boom")));
     }
 
     [TestMethod]
@@ -50,7 +51,7 @@ public class PDFExtractionResultTests
         var result = new PDFExtractionResult(
             Ok: false, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: null,
             NativeMetadata: null, RawContent: null, Pages: null, Structure: null,
-            EstimatedCostUsd: null, Error: new ExtractionError { DocumentId = "doc1.pdf", Message = "boom" });
+            EstimatedCostUsd: null, Error: new ExtractionError(RowNumber: 0, DocumentId: "doc1.pdf", Message: "boom"));
 
         Assert.IsFalse(result.Ok);
     }

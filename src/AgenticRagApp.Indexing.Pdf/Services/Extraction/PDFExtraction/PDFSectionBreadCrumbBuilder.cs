@@ -1,4 +1,5 @@
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
@@ -18,82 +19,119 @@ public static class PdfSectionBreadCrumbBuilder
     //    by outline depth (Level):
     //    - Trim the stack to Level before adding, so a new top-level bookmark discards
     //      any deeper sub-sections left over from the previous chapter.
-    //    - Push the bookmark's title; join the stack's non-empty entries with " > ".
+    //    - Push the bookmark's title; join the stack's non-blank entries with " > ".
     //    - A skipped outline level (e.g. Level 2 directly under Level 0) stays blank and
     //      gets filtered out, so it renders as "Chapter 3 > 3.2.1", not "Chapter 3 >  > 3.2.1"
     //      - also counted as a diagnostic, since it usually means a sloppily-authored outline.
+    //    - Bookmarks pointing past the last page still take part in this walk (they carry
+    //      hierarchy for nothing that follows, but skipping them would desync the stack);
+    //      they simply never get assigned to a page in step 3.
     // 3. Walk every page 1..pageCount, assigning whichever breadcrumb was most recently
     //    active as of that page.
+    //
+    // ASSUMPTION: Bookmark.Level is 0-based (top-level == 0). If the extractor ever emits
+    // 1-based levels, every top-level bookmark is miscounted as a level gap and the first
+    // stack slot stays permanently blank. Covered by unit test.
     //
     // diagnostics is report/diagnostic material only (see PdfStepDiagnostics) - this
     // method never fails; a bad/sparse outline just produces fewer breadcrumbs.
     public static (Dictionary<int, string> Breadcrumbs, PdfStepDiagnostics Diagnostics) BuildSectionBreadcrumbs(
         IReadOnlyList<Bookmark>? bookmarks, int pageCount, string blobName)
     {
-        var result   = new Dictionary<int, string>();
         var warnings = new List<ExtractionWarning>();
+        void Warn(string message) =>
+            warnings.Add(new ExtractionWarning(RowNumber: null, DocumentId: blobName, Message: message));
 
         if (bookmarks is not { Count: > 0 })
-            return (result, new PdfStepDiagnostics(warnings, []));
+            return ([], new PdfStepDiagnostics(warnings, []));
 
+        var ordered = KeepBookmarksWithPageNumbers(bookmarks, pageCount, Warn);
+        if (ordered.Count == 0)
+            return ([], new PdfStepDiagnostics(warnings, []));
+
+        var breakpoints = BuildBreakpoints(ordered, Warn);
+        var result      = AssignBreadcrumbsToPages(breakpoints, pageCount);
+
+        if (result.Count == 0)
+            Warn($"{ordered.Count} bookmark(s) resolved to a page but none produced a breadcrumb - "
+                 + $"every one is either past page {pageCount} or has a blank title.");
+
+        return (result, new PdfStepDiagnostics(warnings, []));
+    }
+
+    // Keeps only bookmarks with a resolvable page number, warns about everything dropped
+    // (split into external-file vs. unresolvable-internal, and separately, in-range vs.
+    // beyond the document), and returns the survivors sorted by page.
+    private static List<Bookmark> KeepBookmarksWithPageNumbers(
+        IReadOnlyList<Bookmark> bookmarks, int pageCount, Action<string> warn)
+    {
         var unresolvable         = bookmarks.Where(b => b.PageNumber is not > 0).ToList();
         var externalCount        = unresolvable.Count(b => b.IsExternal);
         var unresolvableInternal = unresolvable.Count - externalCount;
 
         if (unresolvableInternal > 0)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"{unresolvableInternal} bookmark(s) skipped - no resolvable page.",
-            });
+            warn($"{unresolvableInternal} bookmark(s) excluded - no resolvable page.");
 
         if (externalCount > 0)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"{externalCount} bookmark(s) excluded - point to an external file, not a page in this document.",
-            });
+            warn($"{externalCount} bookmark(s) excluded - point to an external file, not a page in this document.");
 
         // Stable sort matters here: two bookmarks on the same page keep their original
-        // outline order (OrderBy is guaranteed stable in .NET) - if it weren't, a page
-        // with multiple bookmarks could end up with the wrong one "most recently active".
+        // outline order (OrderBy is documented as stable) - if it weren't, a page with
+        // multiple bookmarks could end up with the wrong one "most recently active".
         var ordered = bookmarks
             .Where(b => b.PageNumber is > 0)
             .OrderBy(b => b.PageNumber)
             .ToList();
 
         if (ordered.Count == 0)
-            return (result, new PdfStepDiagnostics(warnings, []));
+            return ordered;
 
         var outOfRange = ordered.Count(b => b.PageNumber > pageCount);
         if (outOfRange > 0)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"{outOfRange} bookmark(s) point beyond this document's {pageCount} page(s) - never assigned to a breadcrumb.",
-            });
+            warn($"{outOfRange} bookmark(s) point beyond this document's {pageCount} page(s) - never assigned to a breadcrumb.");
 
-        var stack           = new List<string>();
+        return ordered;
+    }
+
+    // Walks the page-ordered bookmarks maintaining a "stack" of titles indexed by outline
+    // depth (Level), emitting one breakpoint per bookmark: the full " > "-joined path
+    // active from that bookmark's page onward. See the class-level comment for the
+    // trim/pad/push mechanics and the out-of-range/0-based-Level assumptions.
+    private static List<(int PageNumber, string Path)> BuildBreakpoints(
+        IReadOnlyList<Bookmark> ordered, Action<string> warn)
+    {
+        var stack            = new List<string>();
         var breakpoints      = new List<(int PageNumber, string Path)>();
         var skippedLevelGaps = 0;
 
         foreach (var bm in ordered)
         {
-            if (bm.Level > stack.Count) skippedLevelGaps++;
+            // Clamp: a malformed outline can hand us a negative depth, which would throw
+            // in RemoveRange. Treat anything below 0 as top-level.
+            var level = Math.Max(0, bm.Level);
 
-            if (stack.Count > bm.Level) stack.RemoveRange(bm.Level, stack.Count - bm.Level);
-            while (stack.Count < bm.Level) stack.Add("");
-            stack.Add(bm.Title);
+            if (level > stack.Count) skippedLevelGaps++;
 
-            breakpoints.Add((bm.PageNumber!.Value, string.Join(" > ", stack.Where(s => s.Length > 0))));
+            if (stack.Count > level) stack.RemoveRange(level, stack.Count - level);
+            while (stack.Count < level) stack.Add("");
+            stack.Add(bm.Title?.Trim() ?? "");
+
+            var path = string.Join(" > ", stack.Where(s => !string.IsNullOrWhiteSpace(s)));
+            breakpoints.Add((bm.PageNumber!.Value, path));
         }
 
         if (skippedLevelGaps > 0)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"{skippedLevelGaps} bookmark(s) skip an outline level (e.g. Level 2 directly under Level 0) - sloppy outline structure.",
-            });
+            warn($"{skippedLevelGaps} bookmark(s) skip an outline level (e.g. Level 2 directly under Level 0) - sloppy outline structure.");
+
+        return breakpoints;
+    }
+
+    // Sweeps every page 1..pageCount, assigning whichever breakpoint's path was most
+    // recently active as of that page.
+    private static Dictionary<int, string> AssignBreadcrumbsToPages(
+        IReadOnlyList<(int PageNumber, string Path)> breakpoints, int pageCount)
+    {
+        var result = new Dictionary<int, string>();
 
         var breakpointIndex = 0;
         string? current = null;
@@ -102,17 +140,25 @@ public static class PdfSectionBreadCrumbBuilder
             while (breakpointIndex < breakpoints.Count && breakpoints[breakpointIndex].PageNumber <= pageNum)
                 current = breakpoints[breakpointIndex++].Path;
 
-            if (current != null)
-                result[pageNum] = $"_Section: {current}_";
+            if (!string.IsNullOrEmpty(current))
+                result[pageNum] = $"_Section: {EscapeMarkdown(current)}_";
         }
 
-        if (result.Count == 0)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"{ordered.Count} bookmark(s) existed but none resolved to a breadcrumb on any page.",
-            });
+        return result;
+    }
 
-        return (result, new PdfStepDiagnostics(warnings, []));
+    // Breadcrumbs are emitted as markdown, so raw titles containing emphasis characters
+    // would render as formatting instead of text.
+    private static string EscapeMarkdown(string value)
+    {
+        var sb = new System.Text.StringBuilder(value.Length + 8);
+
+        foreach (var ch in value)
+        {
+            if (ch is '_' or '*' or '`' or '[' or ']' or '\\') sb.Append('\\');
+            sb.Append(ch is '\r' or '\n' ? ' ' : ch);
+        }
+
+        return sb.ToString();
     }
 }

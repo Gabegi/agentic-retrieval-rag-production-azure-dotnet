@@ -1,4 +1,5 @@
 using Azure.AI.DocumentIntelligence;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Models
 {
@@ -34,7 +35,30 @@ namespace AgenticRagApp.Indexing.Pdf.Models
     // missing cell to anything reconstructing the table layout downstream.
     public sealed record TableCellInfo(int RowIndex, int ColumnIndex, string Kind, string Content, int? RowSpan, int? ColumnSpan);
 
-    public sealed record TableInfo(int RowCount, int ColumnCount, IReadOnlyList<TableCellInfo> Cells, int? Offset, int PageNumber);
+    // Offset/PageNumber stay the anchor pattern (first BoundingRegion only) other Get*
+    // records use. Regions is deliberately different: a table is a 2D area, not a point in
+    // the content flow, and a table split across a page break has one BoundingRegion per
+    // page - anchor-only would silently discard every page after the first, and
+    // re-acquiring that geometry later means a paid re-analysis, not a re-read of stored
+    // data. So Regions follows SectionInfo's "every region" convention instead.
+    // Caption/Footnotes are free fields off the same DocumentTable GetTables already reads.
+    // A table chunk without its caption loses most of what makes the table findable by
+    // search - whoever builds the chunk-metadata step must carry Caption through into
+    // whatever text represents this table, not just the cell content.
+    public sealed record TableInfo(
+        int RowCount,
+        int ColumnCount,
+        IReadOnlyList<TableCellInfo> Cells,
+        int? Offset,
+        int PageNumber,
+        string? Caption,
+        IReadOnlyList<string> Footnotes,
+        IReadOnlyList<DocumentRegion> Regions);
+
+    // A polygon paired with the page it's on - a bare polygon list is meaningless across
+    // pages, since page units reset per page (see PageDimensions). Shared shape for
+    // multi-region geometry (TableInfo today; figures once C fetches crops).
+    public sealed record DocumentRegion(int PageNumber, IReadOnlyList<PolygonPoint> Polygon);
 
     // Confidence/Polygon come straight off the same DocumentSelectionMark GetSelectionMarks
     // already iterates for State/Offset - free fields on an object already in hand.
@@ -69,13 +93,6 @@ namespace AgenticRagApp.Indexing.Pdf.Models
     // a section tree is left to a future chunk-builder, not done at extraction time.
     public sealed record SectionInfo(IReadOnlyList<SectionSpan> Spans, IReadOnlyList<string> Elements);
 
-    // Average OCR word-confidence for one page - a data-quality signal only, never a
-    // chunk-boundary signal (that's what SectionInfo is for). Kept as its own record
-    // rather than folded into PageDimensions: PageDimensions is DI's physical-geometry
-    // measurement of a page, this is DI's confidence in what it read off that page - two
-    // different concerns that happen to both be "one value per page".
-    public sealed record PageQuality(int PageNumber, double AverageWordConfidence);
-
     // One non-fatal warning DI attached to the whole-document analysis (e.g. a page that
     // partially failed OCR) - distinct from the zero-pages case DIAnalyzeDocumentAsync
     // already treats as an outright failure. Wraps Azure's DocumentIntelligenceWarning so
@@ -98,8 +115,7 @@ namespace AgenticRagApp.Indexing.Pdf.Models
         IReadOnlyList<SelectionMarkInfo> SelectionMarks,
         IReadOnlyList<FigureInfo> Figures,
         IReadOnlyList<LineInfo> Lines,
-        IReadOnlyList<SectionInfo> Sections,
-        IReadOnlyList<PageQuality> PageQuality);
+        IReadOnlyList<SectionInfo> Sections);
 
     // Result of calling the (paid) Document Intelligence analyze API once:
     // - Ok = true  -> Result contains a successful, non-empty analysis (at least one page -
@@ -121,7 +137,7 @@ namespace AgenticRagApp.Indexing.Pdf.Models
     // - Ok = true  -> RawContent/Pages/Structure/EstimatedCostUsd are populated.
     // - Ok = false -> Error explains what went wrong, whether the failure happened during
     //   preflight checks or during the paid Document Intelligence call itself.
-    public sealed record PDFStructureExtractorResult(
+    public sealed record DocumentAnalyzedResults(
         bool Ok,
         string? RawContent,                            // analysis.Content, unsplit, before per-page assembly
         IReadOnlyList<PdfPageRecord>? Pages,
@@ -131,5 +147,10 @@ namespace AgenticRagApp.Indexing.Pdf.Models
     {
         // Empty (not null) when Ok is false - there's no analysis to have warned about.
         public IReadOnlyList<AnalysisWarning> Warnings { get; init; } = [];
+
+        // Informational, non-defect findings (e.g. cosmetic normalization counts, the
+        // estimated-cost echo) - kept separate from Warnings so callers can tell "worth a
+        // human look" apart from "worth knowing." Empty (not null) when Ok is false.
+        public IReadOnlyList<AnalysisWarning> Infos { get; init; } = [];
     }
 }

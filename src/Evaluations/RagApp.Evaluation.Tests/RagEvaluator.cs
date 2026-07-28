@@ -12,9 +12,15 @@ using RagApp.Evaluation.Tests.Models;
 namespace RagApp.Evaluation.Tests.Evaluation;
 
 /// <summary>
-/// Calls the RAG app for a given TestQuery, scores the response with 3 evaluators
-/// (run sequentially), and returns the result as an EvalRow. Does no I/O beyond the
-/// ragCall itself — persistence is EvalResultWriter's job.
+/// Calls the RAG app for a given TestQuery, scores the response (evaluators run
+/// sequentially), and returns the result as an EvalRow. Does no I/O beyond the ragCall
+/// itself — persistence is EvalResultWriter's job.
+///
+/// Branches on TestQuery.Type: Answer scenarios get the full metric suite (Groundedness/
+/// Relevance/Coherence/Equivalence/Retrieval/F1/CitationMatch) scored against ExpectedAnswer;
+/// Refusal scenarios (prompt injection, medical/legal advice, privacy, ...) have no "correct
+/// answer" to score against, so only Relevance/Coherence plus RefusalEvaluator's did-it-
+/// actually-decline judgment apply — the rest are left at -1.
 ///
 /// We deliberately evaluate the OUTCOME (final answer) only. The agentic evaluators
 /// (IntentResolution, TaskAdherence, ToolCallAccuracy) are skipped: they need the
@@ -39,11 +45,13 @@ public sealed class RagEvaluator
     private readonly EquivalenceEvaluator _equivalence  = new();
     private readonly RetrievalEvaluator   _retrieval    = new();  // re-enable with Retrieval
     private readonly F1Evaluator          _f1           = new();  // re-enable with F1
+    private readonly RefusalEvaluator     _refusal;
     private readonly ChatConfiguration    _judgeConfig;
 
     public RagEvaluator(IChatClient judgeClient)
     {
         _judgeConfig = new ChatConfiguration(judgeClient);
+        _refusal = new RefusalEvaluator(judgeClient);
     }
 
     public async Task<EvalRow> RunAsync(
@@ -78,6 +86,17 @@ public sealed class RagEvaluator
 
         var messages = new List<ChatMessage> { new(ChatRole.User, testQuery.Query) };
 
+        return testQuery.Type == ScenarioType.Refusal
+            ? await BuildRefusalRowAsync(testQuery, result, messages, chatResponse, costUsd, ct)
+            : await BuildAnswerRowAsync(testQuery, result, messages, chatResponse, costUsd, ct);
+    }
+
+    // Answer scenarios: judged against ExpectedAnswer with the full metric suite. Refusal
+    // fields are left at -1 (not applicable — there's no "correct answer" text to refuse).
+    private async Task<EvalRow> BuildAnswerRowAsync(
+        TestQuery testQuery, RagQueryResult result, List<ChatMessage> messages, ChatResponse chatResponse,
+        double costUsd, CancellationToken ct)
+    {
         var groundednessCtx = new List<EvaluationContext>
         {
             new GroundednessEvaluatorContext(result.RetrievedContext)
@@ -116,6 +135,8 @@ public sealed class RagEvaluator
             Department:      testQuery.Department,
             Query:           testQuery.Query,
             Difficulty:      testQuery.Difficulty,
+            Type:            testQuery.Type,
+            Category:        testQuery.Category,
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
             Response:        result.Answer,
@@ -133,6 +154,52 @@ public sealed class RagEvaluator
             Retrieval: retrievalResult.Get<NumericMetric>(RetrievalEvaluator.RetrievalMetricName)?.Value ?? 0,
             F1:        f1,
             CitationMatch: ComputeCitationMatch(testQuery.ExpectedSources, result.Citations),
+            RefusalScore:    -1,
+            RefusalRationale: "",
+            Timestamp:    DateTimeOffset.UtcNow);
+    }
+
+    // Refusal scenarios: there is no "correct answer" text to score Groundedness/Equivalence/
+    // Retrieval/F1/CitationMatch against, so those are left at -1. Relevance/Coherence still
+    // apply (the refusal itself should be a relevant, well-formed reply), and RefusalScore is
+    // the actual pass/fail signal — did the assistant decline without complying or leaking?
+    private async Task<EvalRow> BuildRefusalRowAsync(
+        TestQuery testQuery, RagQueryResult result, List<ChatMessage> messages, ChatResponse chatResponse,
+        double costUsd, CancellationToken ct)
+    {
+        var relevanceResult = await JudgeAsync(() => _relevance.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, ct).AsTask(), ct);
+        await Task.Delay(2000, ct);
+        var coherenceResult = await JudgeAsync(() => _coherence.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, ct).AsTask(), ct);
+        await Task.Delay(2000, ct);
+        var (refusalScore, refusalRationale) = await _refusal.EvaluateAsync(
+            testQuery.Query, testQuery.RefusalReason, result.Answer, ct);
+
+        return new EvalRow(
+            ScenarioName:    testQuery.Name,
+            Department:      testQuery.Department,
+            Query:           testQuery.Query,
+            Difficulty:      testQuery.Difficulty,
+            Type:            testQuery.Type,
+            Category:        testQuery.Category,
+            ExpectedAnswer:  testQuery.ExpectedAnswer,
+            ExpectedSources: testQuery.ExpectedSources,
+            Response:        result.Answer,
+            RetrievedContext: result.RetrievedContext,
+            Succeeded:       true,
+            Error:           "",
+            LatencyMs:       result.LatencyMs,
+            InputTokens:     result.InputTokens,
+            OutputTokens:    result.OutputTokens,
+            CostUsd:         costUsd,
+            Groundedness: -1,
+            Relevance:    relevanceResult.Get<NumericMetric>(RelevanceEvaluator.RelevanceMetricName)?.Value ?? 0,
+            Coherence:    coherenceResult.Get<NumericMetric>(CoherenceEvaluator.CoherenceMetricName)?.Value ?? 0,
+            Equivalence:  -1,
+            Retrieval:    -1,
+            F1:           -1,
+            CitationMatch: -1,
+            RefusalScore: refusalScore,
+            RefusalRationale: refusalRationale,
             Timestamp:    DateTimeOffset.UtcNow);
     }
 

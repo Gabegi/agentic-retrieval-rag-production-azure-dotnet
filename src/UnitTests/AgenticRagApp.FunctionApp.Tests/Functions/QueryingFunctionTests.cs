@@ -63,6 +63,10 @@ public class QueryingFunctionTests
     [TestMethod]
     public async Task RunQuery_MalformedJsonBody_ReturnsBadRequest()
     {
+        // HttpRequestDataExtensions.ReadFromJsonAsync<T> surfaces malformed-JSON failures
+        // as an AggregateException wrapping the JsonException (a Task-continuation fault),
+        // not a bare JsonException, so RunQuery's catch filters on GetBaseException() to
+        // unwrap that chain down to the root JsonException.
         var function = BuildFunction(MockRagService());
         var context  = new FakeFunctionContext();
         var request  = new FakeHttpRequestData(context, "not json at all");

@@ -1,15 +1,20 @@
-﻿using System.Text;
+﻿using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
 // Cleans extracted PDF page records for RAG indexing.
 //
 // End goal - every transform must either:
-//   - repair extraction damage (mojibake, ligatures, broken hyphenation), or
+//   - repair extraction damage (mojibake, ligatures, broken hyphenation),
 //   - strip characters that add embedding/search noise without carrying meaning
-//     (control chars, zero-width chars, whitespace debris).
+//     (control chars, zero-width chars, whitespace debris), or
+//   - normalize structure DI encodes as raw HTML back into plain markdown
+//     (table tags - see ConvertTablesToMarkdown) so no downstream stage has to work
+//     around HTML sitting inside an otherwise-markdown text field.
 // Nothing here rewrites or paraphrases actual content - chunking and retrieval need
 // the source text, just undamaged. One bad page becomes a CleaningError; it never
 // aborts the whole run.
@@ -17,7 +22,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // Explicitly out of scope:
 //   - Duplicate (BlobName, PageNumber) pages - that's an extractor invariant
 //     violation, asserted once in PdfPipelineValidator, not here.
-//   - Header/footer/boilerplate stripping - Contoso's PDF conventions aren't
+//   - Header/footer/boilerplate stripping - Cordaan's PDF conventions aren't
 //     confirmed yet, and a wrong regex here silently deletes real content, which is
 //     worse for RAG than leaving a repeated footer in. Add once real sample PDFs
 //     confirm the patterns. Document Intelligence can already exclude
@@ -70,6 +75,49 @@ public class PdfCleaner : IPdfCleaner
         ("\uFB01", "fi"), ("\uFB02", "fl"), ("\uFB00", "ff"), ("\uFB03", "ffi"), ("\uFB04", "ffl"),
     ];
 
+    // \u2500\u2500 Table HTML -> markdown \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // DI renders tables as real HTML with rowspan/colspan (see PdfDocumentAnalyzer's
+    // OutputContentFormat comment) - the regexes/grid logic below turn that into a plain
+    // GFM pipe table, in place within the page's markdown text. Merged cells are expanded
+    // into a full grid so every row has the same column count - a ragged pipe table (rows
+    // with different cell counts) renders as broken columns in markdown, which is exactly
+    // the "bad table shape" this exists to prevent.
+    private static readonly Regex TableRegex = new(
+        @"<table\b[^>]*>(.*?)</table\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex RowRegex = new(
+        @"<tr\b[^>]*>(.*?)</tr\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CellRegex = new(
+        @"<(th|td)\b([^>]*)>(.*?)</\1\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CaptionRegex = new(
+        @"<caption\b[^>]*>(.*?)</caption\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex InnerTagRegex = new(@"<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex WhitespaceRunRegex = new(@"\s+", RegexOptions.Compiled);
+
+    private static readonly Regex ColSpanRegex = new(
+        @"colspan\s*=\s*[""']?(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RowSpanRegex = new(
+        @"rowspan\s*=\s*[""']?(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Figure HTML -> caption text, or stripped entirely.
+    // DI marks every detected figure as a <figure> placeholder in Content, but never embeds
+    // the actual image there (a figure's pixels only exist behind a separate fetch-by-id
+    // endpoint - see PDFDocumentAnalyzer.GetFigures) - so the tag itself carries zero
+    // retrieval-useful information. If DI attached a caption/alt text, that's real content
+    // (a label for what the figure is about) worth keeping; a bare placeholder with neither
+    // wastes chunk/embedding budget on nothing and is worse than no tag at all.
+    private static readonly Regex FigureRegex = new(
+        @"<figure\b[^>]*>(.*?)</figure\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex FigCaptionRegex = new(
+        @"<figcaption\b[^>]*>(.*?)</figcaption\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex AltTextRegex = new(
+        @"alt\s*=\s*[""']([^""']*)[""']", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public PdfCleanResult CleanPdf(IReadOnlyList<PdfPageRecord> pages)
     {
         var result = new PdfCleanResult();
@@ -85,29 +133,32 @@ public class PdfCleaner : IPdfCleaner
         try
         {
             var (content, mojibakeFixed) = CleanPageContent(page.PageContent ?? "");
+            content = ConvertTablesToMarkdown(content);
+            content = ConvertFigures(content);
+
+            // Stripping an empty <figure> placeholder can leave a blank line behind where
+            // the tag used to sit - re-collapse before this reaches the index, same pass
+            // CleanPageContent already applies to everything else.
+            content = ExcessBlankLines.Replace(content, "\n\n").Trim();
 
             if (mojibakeFixed)
             {
                 result.CountMojibakeRepaired();
-                result.AddWarning(new CleaningWarning
-                {
-                    DocumentId = page.BlobName,
-                    Message    = $"Page {page.PageNumber}: repaired mojibake in source text (round-trip re-decode).",
-                });
+                result.AddWarning(new CleaningWarning(
+                    DocumentId: page.BlobName,
+                    Message:    $"Page {page.PageNumber}: repaired mojibake in source text (round-trip re-decode)."));
             }
 
             if (string.IsNullOrWhiteSpace(content))
-                result.AddWarning(new CleaningWarning
-                {
-                    DocumentId = page.BlobName,
-                    Message    = $"PageContent is empty after cleanup (page {page.PageNumber}) - likely a blank source page.",
-                });
+                result.AddWarning(new CleaningWarning(
+                    DocumentId: page.BlobName,
+                    Message:    $"PageContent is empty after cleanup (page {page.PageNumber}) - likely a blank source page."));
 
             result.AddRecord(ToCleanedRecord(page, content));
         }
         catch (Exception ex)
         {
-            result.AddError(new CleaningError { DocumentId = page.BlobName, Message = ex.Message });
+            result.AddError(new CleaningError(DocumentId: page.BlobName, Message: ex.Message));
         }
     }
 
@@ -131,6 +182,10 @@ public class PdfCleaner : IPdfCleaner
     //      retrieval noise.
     //   5. Hyphenation repair before whitespace collapse - it consumes a \n.
     //   6. Whitespace last, over the fully repaired text.
+    // Table HTML -> markdown (ConvertTablesToMarkdown) runs separately, after this whole
+    // pipeline (see CleanSinglePage) - it changes structure rather than repairing/stripping
+    // characters, and it builds its own clean spacing, so it doesn't need to precede or be
+    // followed by any of the character/whitespace passes below.
     private static (string Content, bool MojibakeFixed) CleanPageContent(string raw)
     {
         var text = raw.Replace("\r\n", "\n").Replace("\r", "\n");
@@ -178,5 +233,171 @@ public class PdfCleaner : IPdfCleaner
             // scripts, etc.) - genuine content, not mojibake. Leave it untouched.
             return (text, false);
         }
+    }
+
+    // Cheap substring check before the regex engine ever runs - the overwhelming majority
+    // of pages have no table at all, and shouldn't pay for a Singleline scan over the whole
+    // page just to find nothing.
+    private static string ConvertTablesToMarkdown(string content)
+    {
+        if (!content.Contains("<table", StringComparison.OrdinalIgnoreCase)) return content;
+
+        return TableRegex.Replace(content, m => ConvertTable(m.Groups[1].Value));
+    }
+
+    private static string ConvertTable(string tableInner)
+    {
+        var rowMatches = RowRegex.Matches(tableInner);
+        if (rowMatches.Count == 0) return "";
+
+        var grid = BuildGrid(rowMatches);
+        if (grid.Count == 0) return "";
+
+        var columnCount = grid.Max(r => r.Count);
+        if (columnCount == 0) return "";
+
+        foreach (var row in grid)
+            while (row.Count < columnCount)
+                row.Add("");
+
+        var sb = new StringBuilder();
+
+        var captionMatch = CaptionRegex.Match(tableInner);
+        if (captionMatch.Success)
+        {
+            var caption = CleanCellContent(captionMatch.Groups[1].Value);
+            if (!string.IsNullOrWhiteSpace(caption))
+            {
+                sb.Append(caption);
+                sb.Append('\n');
+                sb.Append('\n');
+            }
+        }
+
+        AppendRow(sb, grid[0]);
+        sb.Append('\n');
+        sb.Append('|');
+        for (var i = 0; i < columnCount; i++)
+            sb.Append(" --- |");
+        sb.Append('\n');
+
+        for (var r = 1; r < grid.Count; r++)
+        {
+            AppendRow(sb, grid[r]);
+            if (r < grid.Count - 1) sb.Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    private static void AppendRow(StringBuilder sb, List<string> row)
+    {
+        sb.Append('|');
+        foreach (var cell in row)
+        {
+            sb.Append(' ');
+            sb.Append(cell);
+            sb.Append(" |");
+        }
+    }
+
+    // Resolves rowspan/colspan into a dense grid - one entry per (row, column), duplicating
+    // a merged cell's text into every cell it visually spans. "pending" tracks a rowspan
+    // cell's remaining life at each column so the following row(s) place it before pulling
+    // their own next <td>/<th>, exactly like a browser lays out an HTML table.
+    private static List<List<string>> BuildGrid(MatchCollection rowMatches)
+    {
+        var grid = new List<List<string>>();
+        var pending = new Dictionary<int, (int Remaining, string Text)>();
+
+        foreach (Match rowMatch in rowMatches)
+        {
+            var cellMatches = CellRegex.Matches(rowMatch.Groups[1].Value);
+            var row = new List<string>();
+            var col = 0;
+            var ci = 0;
+
+            while (ci < cellMatches.Count || pending.ContainsKey(col))
+            {
+                if (pending.TryGetValue(col, out var carry))
+                {
+                    row.Add(carry.Text);
+                    if (carry.Remaining - 1 > 0)
+                        pending[col] = (carry.Remaining - 1, carry.Text);
+                    else
+                        pending.Remove(col);
+                    col++;
+                    continue;
+                }
+
+                if (ci >= cellMatches.Count) break;
+
+                var cellMatch = cellMatches[ci++];
+                var attrs     = cellMatch.Groups[2].Value;
+                var colSpan   = ParseSpan(ColSpanRegex, attrs);
+                var rowSpan   = ParseSpan(RowSpanRegex, attrs);
+                var text      = CleanCellContent(cellMatch.Groups[3].Value);
+
+                for (var i = 0; i < colSpan; i++)
+                {
+                    row.Add(text);
+                    if (rowSpan > 1)
+                        pending[col + i] = (rowSpan - 1, text);
+                }
+                col += colSpan;
+            }
+
+            grid.Add(row);
+        }
+
+        return grid;
+    }
+
+    private static int ParseSpan(Regex regex, string attrs)
+    {
+        var m = regex.Match(attrs);
+        return m.Success && int.TryParse(m.Groups[1].Value, out var v) && v > 0 ? v : 1;
+    }
+
+    // Strips any nested markup (<br>, <sup>, DI's own <br/> line breaks, etc.), decodes HTML
+    // entities, and collapses the cell down to one line - a pipe-table cell can't contain a
+    // literal newline, and a literal '|' would be misread as a column boundary.
+    private static string CleanCellContent(string raw)
+    {
+        var text = InnerTagRegex.Replace(raw, " ");
+        text = WebUtility.HtmlDecode(text);
+        text = WhitespaceRunRegex.Replace(text, " ").Trim();
+        return text.Replace("|", "\\|");
+    }
+
+    // Cheap substring check before the regex engine ever runs - same reasoning as
+    // ConvertTablesToMarkdown: most pages have no figure at all.
+    private static string ConvertFigures(string content)
+    {
+        if (!content.Contains("<figure", StringComparison.OrdinalIgnoreCase)) return content;
+
+        return FigureRegex.Replace(content, m => ConvertFigure(m.Groups[1].Value));
+    }
+
+    // Prefers a <figcaption>, then an <img alt="...">, over the bare tag - either is real
+    // content describing what the figure is about. Neither present means DI gave us nothing
+    // usable, so the whole placeholder is dropped rather than left as dead HTML.
+    private static string ConvertFigure(string figureInner)
+    {
+        var captionMatch = FigCaptionRegex.Match(figureInner);
+        if (captionMatch.Success)
+        {
+            var caption = CleanCellContent(captionMatch.Groups[1].Value);
+            if (!string.IsNullOrWhiteSpace(caption)) return caption;
+        }
+
+        var altMatch = AltTextRegex.Match(figureInner);
+        if (altMatch.Success)
+        {
+            var alt = CleanCellContent(altMatch.Groups[1].Value);
+            if (!string.IsNullOrWhiteSpace(alt)) return alt;
+        }
+
+        return "";
     }
 }

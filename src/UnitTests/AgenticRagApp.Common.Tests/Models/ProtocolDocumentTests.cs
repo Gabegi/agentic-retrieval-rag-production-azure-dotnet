@@ -6,7 +6,7 @@ namespace RagApp.UnitTests.Common;
 [TestClass]
 public class ProtocolDocumentTests
 {
-    private static ProtocolDocument WithContent(string content, string? summary = null) =>
+    private static ChunkStatsSource WithContent(string content, string? summary = null) =>
         new() { Content = content, Summary = summary };
 
     [TestMethod]

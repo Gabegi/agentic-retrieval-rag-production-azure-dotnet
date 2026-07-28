@@ -24,7 +24,7 @@ public static class ServiceCollectionExtensions
     // resolve a temporary provider mid-registration.
     public static IServiceCollection AddPdfIndexing(this IServiceCollection services, IndexerConfig config)
     {
-        services.AddSingleton<IChunkingStrategy, PdfChunkingStrategy1>();
+        services.AddSingleton<IChunkingStrategy, PdfChunkingStrategy2>();
         services.AddSingleton<IChunkingService,  ChunkingService>();
 
         // PDF extraction backend — only registered when Document Intelligence is
@@ -34,8 +34,8 @@ public static class ServiceCollectionExtensions
         // silently change which one gets picked.
         if (!string.IsNullOrWhiteSpace(config.DocumentIntelligenceEndpoint))
         {
-            services.AddSingleton<PdfDocumentAnalyzer>();
-            services.AddSingleton<IPdfExtractor, DocumentIntelligenceExtractor>();
+            services.AddSingleton<PdfDocumentIntelligenceAnalyzer>();
+            services.AddSingleton<IPdfExtractor, PDFExtractor>();
         }
         services.AddSingleton<IPdfCleaner,           PdfCleaner>();
         services.AddSingleton<IPdfPipelineValidator, PdfPipelineValidator>();

@@ -52,17 +52,35 @@ variable "openai_gpt_model_name" {
 variable "search_index_name" {
   type        = string
   description = "Name of the Azure AI Search index used by the indexing/query pipeline"
-  default     = "protocols-index"
+  default     = "zenya-pdf-index"
 }
 
 variable "knowledge_source_name" {
   type        = string
   description = "Name of the Azure AI Search knowledge source"
-  default     = "protocols-knowledge-source"
+  default     = "zenya-knowledgebase-source"
 }
 
 variable "knowledge_base_name" {
   type        = string
   description = "Name of the Azure AI Search knowledge base"
-  default     = "protocols-knowledge-base"
+  default     = "zenya-knowledgebase"
+}
+
+variable "dev_allowed_ips" {
+  type        = list(string)
+  description = "Public IPs allowlisted for direct access to the function app, data storage account, and search service - development convenience only. Every usage site also gates on var.environment == \"development\", so this has no effect even if accidentally set in prod.tfvars."
+  default     = []
+}
+
+variable "dev_developer_object_ids" {
+  type        = list(string)
+  description = "AAD object IDs of developers granted Search Index Data Reader on the dev search service, for manual knowledge-base querying/testing - development convenience only. See dev_access.tf. Gated on var.environment == \"development\" like dev_allowed_ips."
+  default     = []
+}
+
+variable "dev_eval_service_principal_object_id" {
+  type        = string
+  description = "Object ID of the service principal (cor-cap-app-dev-spn) that runs the eval pipeline against dev, e.g. .pipelines/base/run-eval-tests.yml. Granted fixed role assignments in dev_access.tf, independent of data.azurerm_client_config.current (eval_access.tf), so they don't shift if a human applies dev locally. Empty string disables these grants."
+  default     = ""
 }

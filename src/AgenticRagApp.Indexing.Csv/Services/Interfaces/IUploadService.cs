@@ -8,7 +8,7 @@ public interface IUploadService
     // upstream). Cleanup runs AFTER upload succeeds and only removes chunk ids that aren't
     // part of what was just uploaded - see UploadService.
     Task<UploadResult> UploadDocumentsAsync(
-        IEnumerable<ProtocolDocument> documents,
+        IEnumerable<ChunkStatsSource> documents,
         IReadOnlyList<string>         staleDocumentIds,
         CancellationToken             ct = default);
 }

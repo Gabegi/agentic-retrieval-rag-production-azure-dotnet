@@ -55,6 +55,16 @@ resource "azurerm_windows_function_app" "indexer" {
     ip_restriction_default_action     = "Deny"
     scm_ip_restriction_default_action = "Deny"
 
+    dynamic "ip_restriction" {
+      for_each = var.environment == "development" ? var.dev_allowed_ips : []
+      content {
+        name       = "dev-direct-access-${replace(ip_restriction.value, ".", "-")}"
+        ip_address = "${ip_restriction.value}/32"
+        action     = "Allow"
+        priority   = 100
+      }
+    }
+
     cors {
       allowed_origins = ["https://portal.azure.com"]
     }
@@ -63,6 +73,19 @@ resource "azurerm_windows_function_app" "indexer" {
   app_settings = {
     "FUNCTIONS_WORKER_RUNTIME"              = "dotnet-isolated"
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = data.azurerm_application_insights.main.connection_string
+    # Drives IHostEnvironment.IsDevelopment() in Program.cs - gates dev-only diagnostics
+    # (console exporters) and IRunReportWriter's pipeline-reports writes. Derived from
+    # var.environment so it flips to "Production" automatically on a prod deploy rather
+    # than needing a separate var kept in sync.
+    #
+    # Both variables set deliberately: the isolated-worker Functions host determines
+    # IHostEnvironment.EnvironmentName from AZURE_FUNCTIONS_ENVIRONMENT specifically (its
+    # own host-configuration step calls .UseEnvironment() off that value, which takes
+    # precedence over the generic host's DOTNET_ENVIRONMENT handling once deployed) -
+    # DOTNET_ENVIRONMENT alone was set first and confirmed NOT sufficient (pipeline-reports
+    # stayed empty even after it was live and the app restarted).
+    "DOTNET_ENVIRONMENT"          = var.environment == "development" ? "Development" : "Production"
+    "AZURE_FUNCTIONS_ENVIRONMENT" = var.environment == "development" ? "Development" : "Production"
     # Durable Functions managed-identity auth - no connection string needed
     "AzureWebJobsStorage__accountName" = azurerm_storage_account.func.name
     "AzureWebJobsStorage__credential"  = "managedidentity"

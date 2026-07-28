@@ -4,6 +4,7 @@ using Microsoft.Azure.Functions.Worker.OpenTelemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using OpenTelemetry;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -23,6 +24,25 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var host = new HostBuilder()
     .ConfigureFunctionsWorkerDefaults()
+    .ConfigureLogging((ctx, logging) =>
+    {
+        var appInsightsConnectionString = ctx.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+        if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+        {
+            logging.AddOpenTelemetry(options =>
+            {
+                options.IncludeFormattedMessage = true;
+                options.IncludeScopes           = true;
+                options.AddAzureMonitorLogExporter(o => o.ConnectionString = appInsightsConnectionString);
+                // Temporary diagnostic, dev-only: prints every exported log record to stdout
+                // (visible in the Kudu log stream) so we can confirm the OpenTelemetry pipeline
+                // itself is generating/processing records even if the Azure Monitor HTTP export
+                // is the part silently failing. Remove once App Insights ingestion is confirmed working.
+                if (ctx.HostingEnvironment.IsDevelopment())
+                    options.AddConsoleExporter();
+            });
+        }
+    })
     .ConfigureServices((ctx, services) =>
     {
         // Config validation, IndexerConfig, credential, and every Azure SDK client this
@@ -30,20 +50,37 @@ var host = new HostBuilder()
         var config = services.AddAgenticRagAppInfrastructure(ctx.Configuration);
 
         var appInsightsConnectionString = ctx.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]!;
+        var isDevelopment                = ctx.HostingEnvironment.IsDevelopment();
 
         services.AddOpenTelemetry()
             .UseFunctionsWorkerDefaults()
             .ConfigureResource(r => r.AddService(
-                serviceName:    "protocols-indexer",
+                serviceName:    "zenya-indexer",
                 serviceVersion: "1.0.0"))
-            .WithTracing(tracing => tracing
-                .AddSource("Microsoft.Extensions.AI")
-                .AddSource(Instrumentation.ActivitySourceName)
-                .AddAzureMonitorTraceExporter(o => o.ConnectionString = appInsightsConnectionString))
-            .WithMetrics(metrics => metrics
-                .AddMeter("Microsoft.Extensions.AI")
-                .AddMeter(Instrumentation.MeterName)
-                .AddAzureMonitorMetricExporter(o => o.ConnectionString = appInsightsConnectionString));
+            .WithTracing(tracing =>
+            {
+                tracing
+                    .AddSource("Microsoft.Extensions.AI")
+                    .AddSource(Instrumentation.ActivitySourceName)
+                    // Azure SDK clients (Blob, Search, OpenAI, Document Intelligence) emit their
+                    // own dependency spans under this source - without it, HTTP calls to those
+                    // services (including failures like the 403s) never reach App Insights.
+                    .AddSource("Azure.*")
+                    .AddAzureMonitorTraceExporter(o => o.ConnectionString = appInsightsConnectionString);
+                // Temporary diagnostic, dev-only, same reasoning as the logging console exporter
+                // above - remove once App Insights ingestion is confirmed working.
+                if (isDevelopment)
+                    tracing.AddConsoleExporter();
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics
+                    .AddMeter("Microsoft.Extensions.AI")
+                    .AddMeter(Instrumentation.MeterName)
+                    .AddAzureMonitorMetricExporter(o => o.ConnectionString = appInsightsConnectionString);
+                if (isDevelopment)
+                    metrics.AddConsoleExporter();
+            });
 
         services.AddSingleton<IRunReportWriter>(sp =>
             new RunReportWriter(

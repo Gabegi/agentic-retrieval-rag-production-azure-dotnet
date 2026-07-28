@@ -1,0 +1,72 @@
+[
+  {
+    "Name": "wlz-huisdier",
+    "Department": "WLZ",
+    "Query": "Mag de cliënt een huisdier meenemen?",
+    "ExpectedAnswer": "Dat verschilt per locatie. Volgens het 'Contract voor het houden van huisdieren door cliënten van Cordaan VGZ en GGZ' mag een cliënt een huisdier houden als hij of zij het dier zelf goed kan verzorgen en de begeleiding en teammanager akkoord zijn; in een groepswoning moeten ook alle huisgenoten instemmen. Raadpleeg de locatie-informatie voor de regels van de specifieke locatie.",
+    "ExpectedSources": "Contract voor het houden van huisdieren (Zenya); locatiespecifiek: SharePoint 'WLZ-locatie-informatie' (nog niet geïndexeerd)",
+    "Difficulty": "Low",
+    "Value": "Binnen 2 uur; 2 keer gehoord (bellen 2 minuten).",
+    "AnswerableFromCorpus": true
+  },
+  {
+    "Name": "speczorg-zaterdag-inplannen",
+    "Department": "specialistische zorg",
+    "Query": "Mag ik op zaterdag een cliënt inplannen?",
+    "ExpectedAnswer": "Hierover is niets vastgelegd in de documenten. Dit verschilt per locatie; neem telefonisch contact op met de betreffende locatie om te overleggen of een cliënt op zaterdag ingepland kan worden.",
+    "ExpectedSources": "Niet gedocumenteerd; alleen ervaringskennis.",
+    "Difficulty": "Medium",
+    "Value": "",
+    "AnswerableFromCorpus": false
+  },
+  {
+    "Name": "wlz-roken",
+    "Department": "WLZ",
+    "Query": "Mag ik binnen roken?",
+    "ExpectedAnswer": "Nee. Cordaan is een rookvrije organisatie; binnen roken is niet toegestaan en sinds 1 juli 2021 is het wettelijk verboden om rookruimtes voor cliënten of medewerkers in te richten. Alleen cliënten die bij Cordaan wonen mogen in hun eigen (privé)woning of in de open lucht roken.",
+    "ExpectedSources": "Rookbeleid Cordaan",
+    "Difficulty": "Low",
+    "Value": "",
+    "AnswerableFromCorpus": true
+  },
+  {
+    "Name": "speczorg-opnamedag-mailen",
+    "Department": "specialistische zorg",
+    "Query": "Ik wil een opnamedag inplannen. Naar wie moet ik dit mailen?",
+    "ExpectedAnswer": "Dit staat niet in de beschikbare documenten. Meestal mail je de persoonlijk begeleider (PB'er); wie dat is staat in de contactpersonenlijst V&V.",
+    "ExpectedSources": "Beslisboom en contactpersonenlijst V&V (SharePoint, nog niet geïndexeerd)",
+    "Difficulty": "Medium",
+    "Value": "1 case = 4 minuten (lezen beslisboom, communiceren met collega's, beslis maken). Daarna pas met onzekerheid toch de PB'er contacteren met de kans dat het niet klopt.",
+    "AnswerableFromCorpus": false
+  },
+  {
+    "Name": "wlz-eten-locatie-x",
+    "Department": "WLZ",
+    "Query": "Hoe zit het met het eten op locatie x?",
+    "ExpectedAnswer": "Dit staat niet in de beschikbare documenten; het maaltijdaanbod verschilt per locatie (bijvoorbeeld een broodmaaltijd, waarbij cliënten geholpen kunnen worden). Raadpleeg de locatie-informatie van de betreffende locatie.",
+    "ExpectedSources": "SharePoint 'WLZ-locatie-informatie' (nog niet geïndexeerd)",
+    "Difficulty": "",
+    "Value": "",
+    "AnswerableFromCorpus": false
+  },
+  {
+    "Name": "thuiszorg-zorgmoment-niet-gekomen",
+    "Department": "Thuiszorg",
+    "Query": "Ik heb een zorgmoment vandaag, maar die is nog niet gekomen.",
+    "ExpectedAnswer": "Bel de wijkverpleegkundige van uw wijkteam. Het juiste wijkteam en telefoonnummer vindt u op de website van Cordaan op basis van uw postcode.",
+    "ExpectedSources": "Cordaan-website (wijkteam per postcode) en contactpersonenlijst V&V (beide nog niet geïndexeerd)",
+    "Difficulty": "Low",
+    "Value": "In 1 uur, 2 cases (1 bel, 1 email) - 3 minuten (op Cordaan website zoeken naar juiste wijkteam o.b.v. postcode, dat wijkteam opzoeken in Excel en naar juiste telefoonnummer + wijkverpleegkundige zoeken).",
+    "AnswerableFromCorpus": false
+  },
+  {
+    "Name": "thuiszorg-zelf-zorgaanbieder",
+    "Department": "Thuiszorg",
+    "Query": "Mag ik zelf een zorgaanbieder zoeken?",
+    "ExpectedAnswer": "Ja, u mag zelf een zorgaanbieder kiezen; u kunt uw voorkeur aangeven en in principe is altijd een indicatie nodig. Laat het wel aan Cordaan weten als u zorg krijgt van een andere organisatie, anders kan de zorg niet gedeclareerd worden. In de tussentijd kunt u voor benodigde zorg terecht bij de huisarts.",
+    "ExpectedSources": "",
+    "Difficulty": "",
+    "Value": "Wanneer twee zorgorganisaties voor thuiszorg zijn ingezet, kan het niet worden gedeclareerd. Het gebeurt dus regelmatig (1x per 3 maanden) dat cliënten vergeten de zorg af te zeggen bij de andere zorgaanbieder. Daarom gaat het CSB/wijkverpleegkundige haar tijd en resources erin gooien om te horen (een dag van tevoren) dat de andere zorgverlener al was langsgeweest. 1) niet declareerbaar 2) frustrerend.",
+    "AnswerableFromCorpus": true
+  }
+]

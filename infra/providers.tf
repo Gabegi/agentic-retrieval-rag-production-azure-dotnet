@@ -6,6 +6,22 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    # ARM REST passthrough - only used in search.tf to approve the search
+    # service's shared private link connection to the Foundry account.
+    # azurerm has no resource for Cognitive Services private endpoint
+    # connections (unlike Storage/Key Vault), so that one step can't be
+    # done with azurerm alone.
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.0"
+    }
+    # Only used in search.tf to give Azure time to materialize the
+    # shared-private-link connection object on the Foundry account before
+    # azapi looks it up - see the comment there.
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
 
   backend "azurerm" {}
@@ -14,6 +30,8 @@ terraform {
 provider "azurerm" {
   features {}
 }
+
+provider "azapi" {}
 
 # Hub/connectivity subscription (cor-connectivity-prd) - owns the central
 # private DNS zones our private endpoints need to resolve against

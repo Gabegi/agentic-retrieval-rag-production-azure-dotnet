@@ -1,0 +1,155 @@
+[
+  {
+    "Name": "hr-zorgverlof-calamiteiten",
+    "Department": "HR",
+    "Query": "Een medewerker moet plotseling vrij vanwege een noodgeval thuis. Welk verlof is dit en hoeveel uur staat daar maximaal voor?",
+    "ExpectedAnswer": "Calamiteitenverlof. Maximaal 24 uur betaald verlof per jaar; salaris wordt volledig doorbetaald. Aan te vragen via Youforce onder Verlof > Zorgverlof.",
+    "ExpectedSources": "Verlofregelingen cao GGZ (HR documenten)",
+    "Difficulty": "Low",
+    "Value": "Veelvoorkomende vraag bij ziekmelding/noodgeval; helpt agent snel onderscheid maken tussen verloftypen."
+  },
+  {
+    "Name": "hr-beeldschermbril-vergoeding",
+    "Department": "HR",
+    "Query": "Een medewerker heeft oogklachten van beeldschermwerk en vraagt of Cordaan een bril vergoedt. Wat is de procedure en hoeveel wordt vergoed?",
+    "ExpectedAnswer": "Ja, mits vast dienstverband en meer dan 2 uur/dag beeldschermwerk (zie stroomschema). Vergoeding is €200 netto, eens in de 3 jaar. Medewerker en leidinggevende vullen samen het formulier 'Vergoeding Beeldschermbril' in, medewerker gaat naar eigen opticien en declareert de factuur via Youforce.",
+    "ExpectedSources": "Regeling Beeldschermbril",
+    "Difficulty": "Medium",
+    "Value": "Terugkerende Arbo/HR-vraag over vergoedingsbedrag en proces."
+  },
+  {
+    "Name": "hr-geslacht-wijzigen-youforce",
+    "Department": "HR",
+    "Query": "Een medewerker wil de aanduiding van zijn/haar geslacht in Youforce aanpassen. Hoe doe je dat?",
+    "ExpectedAnswer": "Via Mijn Youforce: zoek op 'Aanduiding geslacht', kies het gewenste geslacht en geef eventueel ook een naamswijziging aan, voeg eventueel een bijlage toe (niet verplicht) en klik op Indienen. HR verwerkt de wijziging; deze wordt overgenomen in een aantal applicaties zoals ONS, maar nog niet in alle systemen.",
+    "ExpectedSources": "Geslachtsaanpassing Youforce",
+    "Difficulty": "Low",
+    "Value": "Gevoelige maar weinig gestelde HR-vraag; goede test voor retrieval-precisie op een minder vaak opgevraagd document."
+  },
+  {
+    "Name": "hr-vakantie-wettelijk-vervaltermijn",
+    "Department": "HR",
+    "Query": "Hoe lang blijven wettelijke vakantie-uren geldig voordat ze vervallen?",
+    "ExpectedAnswer": "Een half jaar na het einde van het kalenderjaar waarin ze zijn opgebouwd (dus vervallen per 1 juli het jaar erna), behalve onder cao VVT, waar een verjaringstermijn van 5 jaar geldt. Bovenwettelijke vakantie-uren blijven in alle cao's 5 jaar geldig.",
+    "ExpectedSources": "Regeling Vakantie (Richtlijn Vakantie)",
+    "Difficulty": "Medium",
+    "Value": "Veelgestelde payroll-vraag rond jaarwisseling; antwoord verschilt per cao, dus foutgevoelig zonder document."
+  },
+  {
+    "Name": "facilitair-portofoon-storing",
+    "Department": "Facilitaire zaken",
+    "Query": "De portofoon van het BHV-team doet helemaal niets, ook de lampjes niet. Wat moet ik doen?",
+    "ExpectedAnswer": "Waarschijnlijk is de accu leeg of de lader defect. Controleer of de portofoon goed in de lader staat en de stekker in een werkend stopcontact zit. Werkt dat niet, probeer een andere lader of wissel de batterij met een andere portofoon om te testen of de batterij defect is. Helpt dit niet, neem contact op met KAM&V en geef het type portofoon door.",
+    "ExpectedSources": "Storingen of defecten aan portofoons zelf verhelpen",
+    "Difficulty": "Low",
+    "Value": "Veelvoorkomende BHV/facilitaire melding; voorkomt onnodige escalatie naar KAM&V bij simpele oplossingen."
+  },
+  {
+    "Name": "ons-geen-account-tijdelijk",
+    "Department": "ONS/ECD",
+    "Query": "Een zorgmedewerker heeft voor een avonddienst nog geen actief Cordaan-account en dus geen toegang tot ONS en Meddy. Hoe komt deze medewerker toch aan de benodigde cliëntinformatie?",
+    "ExpectedAnswer": "Volg de alternatieve werkinstructie: een collega print de looplijst uit ONS (inclusief sleutelkluiscode) en het spoedoverzicht/medicatielijst uit Meddy. De medewerker krijgt mondelinge overdracht bij start dienst en noteert rapportages/wijzigingen op de papieren looplijst. Aan het einde van de dienst levert hij/zij deze in zodat een teamlid alles verwerkt in ONS en Meddy; de papieren lijst wordt daarna veilig vernietigd in een vergrendelde container.",
+    "ExpectedSources": "Alternatieve werkinstructie bij GEEN account - Zorg in de Wijk",
+    "Difficulty": "Medium",
+    "Value": "Belangrijke workaround bij last-minute/ad-hoc inzet; AVG-gevoelig, dus nauwkeurigheid is belangrijk."
+  },
+  {
+    "Name": "ict-authenticator-iphone-installeren",
+    "Department": "ICT",
+    "Query": "Een medewerker wil Microsoft Authenticator op zijn eigen (privé) iPhone installeren voor toegang tot Cordaan. Hoe doet hij dat?",
+    "ExpectedAnswer": "Installeer 'Microsoft Authenticator' via de App Store, open de app en kies 'Werk- of schoolaccount toevoegen' > 'QR-code scannen'. Ga op een ander apparaat (laptop/tablet) naar google.nl, zoek op 'aka.ms mfa setup', log in met Cordaan-gegevens en scan de getoonde QR-code met de iPhone. Voer daarna de code in die op het andere apparaat verschijnt en bevestig. Daarna is Authenticator klaar voor gebruik.",
+    "ExpectedSources": "Apple 01 Microsoft Authenticator installeren op een iPhone",
+    "Difficulty": "Low",
+    "Value": "Veelgestelde BYOD-onboardingvraag van nieuwe of tijdelijke medewerkers."
+  },
+  {
+    "Name": "ict-servicepunt-locatie-openingstijden",
+    "Department": "ICT",
+    "Query": "Een medewerker bij Hof van Sloten heeft een ICT-probleem en wil weten of er een Servicepunt op locatie is en hoe laat dat open is.",
+    "ExpectedAnswer": "Ja, Hof van Sloten (Nieuw West) heeft een Servicepunt op locatie, open van 11:00 tot 16:00 uur op de geplande dagen. Voor de exacte data verwijst men naar het overzicht 'Servicepunten 2026'; voor overige vragen kan altijd contact opgenomen worden met de Cordaan servicedesk.",
+    "ExpectedSources": "Servicepunten 2026",
+    "Difficulty": "Low",
+    "Value": "Veelgestelde logistieke vraag; helpt medewerkers snel naar het juiste fysieke steunpunt te routeren."
+  },
+  {
+    "Name": "financien-bunqpas-prive-gebruik",
+    "Department": "Financiën",
+    "Query": "Mag een medewerker de Bunqpas gebruiken om privé boodschappen te doen of contant geld op te nemen?",
+    "ExpectedAnswer": "Nee. De Bunqpas is alleen voor kleine zakelijke aankopen; contant geld opnemen mag niet en privégebruik (ook bijv. spaarzegels) is verboden. Bij geconstateerd privégebruik wordt dit gemeld aan de leidinggevende en het bedrag ingehouden op het salaris of moet direct worden terugbetaald.",
+    "ExpectedSources": "Spelregels gebruik Bunqpas",
+    "Difficulty": "Low",
+    "Value": "Veelvoorkomende compliance-vraag; misbruik komt regelmatig voor en heeft financiële consequenties."
+  },
+  {
+    "Name": "financien-externe-factuur-indienen",
+    "Department": "Financiën",
+    "Query": "Een locatie heeft een dienst geleverd aan een externe partij en wil hiervoor een factuur opstellen. Waar moet dit naartoe gestuurd worden?",
+    "ExpectedAnswer": "Het ingevulde 'Externe Factuur'-formulier (concept factuur) moet gemaild worden naar opbrengstfacturen@cordaan.nl, met eventuele bijlagen gescand toegevoegd en het domein vermeld in het onderwerp. Voor vragen: afdeling Debiteuren via hetzelfde e-mailadres of 020-8866100.",
+    "ExpectedSources": "Externe factuur - aanvraagformulier",
+    "Difficulty": "Low",
+    "Value": "Terugkerende financiële adminvraag; juiste mailbox voorkomt vertraging in facturatie."
+  },
+  {
+    "Name": "csb-wachtlijst-status-urgent",
+    "Department": "CSB",
+    "Query": "Wanneer krijgt een cliënt op de wachtlijst voor wonen de status 'urgent plaatsen' in plaats van 'wacht op voorkeur'?",
+    "ExpectedAnswer": "Als opname of doorplaatsing noodzakelijk is omdat de (thuis)situatie onverantwoord/levensbedreigend is, meestal vanwege een gevaarscriterium (gevaar voor cliënt of omgeving, of maatschappelijke teloorgang), vaak gekoppeld aan IBS, RM, ZM of Wzd art. 28a. Streven is dan om binnen 0-6 weken een plek te vinden.",
+    "ExpectedSources": "Uitleg voorrang op de wachtlijst wacht status aanpassen",
+    "Difficulty": "Medium",
+    "Value": "Helpt CSB-gerelateerde calls snel onderscheid te maken tussen wachtstatussen; vaak gevraagd door locaties/naasten."
+  },
+  {
+    "Name": "privacy-datalek-melden",
+    "Department": "Privacy en informatiebeveiliging",
+    "Query": "Een medewerker heeft per ongeluk een e-mail met cliëntgegevens naar het verkeerde e-mailadres gestuurd. Wat moet hij doen?",
+    "ExpectedAnswer": "Dit is een datalek en moet direct gemeld worden: meld het bij je leidinggevende én via het Servicepunt. Daarna pakt de organisatie het verder op; de medewerker hoeft zelf niets meer te doen.",
+    "ExpectedSources": "Proces datalek melden",
+    "Difficulty": "Low",
+    "Value": "Tijdsgevoelige compliance-vraag; snel en correct antwoord verkort de reactietijd op een datalek."
+  },
+  {
+    "Name": "privacy-veilig-mailen-clientgegevens",
+    "Department": "Privacy en informatiebeveiliging",
+    "Query": "Hoe verstuur je een e-mail met persoonsgegevens van een cliënt op een veilige manier?",
+    "ExpectedAnswer": "Zet het woord 'veilig mailen' in het onderwerp of de tekst van de e-mail; de mail wordt dan automatisch veilig/versleuteld verstuurd.",
+    "ExpectedSources": "Veilig mailen",
+    "Difficulty": "Low",
+    "Value": "Zeer veelvoorkomende praktische vraag voor iedereen die cliëntgegevens mailt; korte en eenvoudige winst voor agents."
+  },
+  {
+    "Name": "privacy-bewaartermijn-medisch-dossier",
+    "Department": "Privacy en informatiebeveiliging",
+    "Query": "Hoe lang moet een medisch (cliënt)dossier minimaal bewaard worden?",
+    "ExpectedAnswer": "In principe 20 jaar, gerekend vanaf de laatste wijziging in het dossier (WGBO). Het kan langer als er een andere wettelijke bewaartermijn geldt, dit nodig is voor goede hulpverlening, of de gegevens van groot belang zijn voor iemand anders.",
+    "ExpectedSources": "Bewaartermijnen bedrijfsdocumenten",
+    "Difficulty": "Medium",
+    "Value": "Compliance/juridische vraag die regelmatig terugkomt bij dossierbeheer en archivering."
+  },
+  {
+    "Name": "kwaliteit-moreel-beraad-aanvragen",
+    "Department": "Kwaliteit",
+    "Query": "Een team heeft een moreel dilemma over een cliëntsituatie en wil hierover in gesprek met een gespreksleider. Hoe vraag je een moreel beraad aan?",
+    "ExpectedAnswer": "Stuur een mail naar moreelberaad@cordaan.nl, of neem voor overleg vooraf contact op met een lid van het ethieknetwerk (terug te vinden in Outlook). Een moreel beraad is een begeleid groepsgesprek (1-2 uur) over een dilemma en staat open voor elk team binnen Cordaan.",
+    "ExpectedSources": "Werkinstructie aanvragen moreel beraad",
+    "Difficulty": "Low",
+    "Value": "Ethische ondersteuning; agents moeten de juiste mailbox/contactroute weten, vaak gevraagd door teamleads."
+  },
+  {
+    "Name": "kwaliteit-medimo-inzage-amo",
+    "Department": "Kwaliteit",
+    "Query": "Hoe print je een actueel medicatieoverzicht (AMO) uit Medimo via de inzageversie?",
+    "ExpectedAnswer": "Log in via WijCordaan > Applicaties > zoek 'Medimo'. Kies in het Medimo hoofdmenu 'Status', zoek de cliënt op (naam of geboortedatum) en selecteer de cliëntregel, klik onderin op de blauwe knop 'AMO(/BMG)'. Medimo genereert een PDF die je met Ctrl+P kunt printen.",
+    "ExpectedSources": "Instructie inloggen inzageversie Medimo",
+    "Difficulty": "Low",
+    "Value": "Veelgevraagde stap-voor-stap lookup voor zorgmedewerkers die snel een medicatieoverzicht nodig hebben."
+  },
+  {
+    "Name": "kwaliteit-wondverpleegkundige-inschakelen",
+    "Department": "Kwaliteit",
+    "Query": "Een hoofdbehandelaar wil een wondverpleegkundige laten meekijken bij een cliënt die niet in zorg is bij het wijkteam. Hoe schakel je deze in?",
+    "ExpectedAnswer": "Verwijs door naar het CSB: (020) 229 06 02, bereikbaar maandag t/m vrijdag 08:30-17:00, of mail naar zorgbemiddeling@cordaan.nl.",
+    "ExpectedSources": "Inschakelen wondverpleegkundige - Zorg in de Wijk",
+    "Difficulty": "Low",
+    "Value": "Snelle triage/verwijsvraag; juiste contactgegevens voorkomen dat de verkeerde afdeling gebeld wordt."
+  }
+]

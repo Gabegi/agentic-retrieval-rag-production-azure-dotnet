@@ -25,7 +25,7 @@ public class DocumentChunkTests
         PageNumber            = 0,
         ChunkIndex            = 0,
         ContentVector         = [0.1f, 0.2f, 0.3f],
-        Author                = "Contoso P&O",
+        Author                = "Cordaan P&O",
         CreatedAt             = DateTimeOffset.Parse("2018-02-01T00:00:00Z"),
         ModDate               = DateTimeOffset.Parse("2023-06-15T00:00:00Z"),
         PageCount             = 12,
@@ -34,12 +34,11 @@ public class DocumentChunkTests
         Breadcrumb            = "_Section: Inleiding_",
         Headings              = [new Heading("Inleiding", "sectionHeading", 0, 0)],
         Boilerplate           = [new Heading("Pagina 1 van 12", "pageFooter", 50, 0)],
-        Tables                = [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0)],
+        Tables                = [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0, null, [], [])],
         Dimensions            = new PageDimensions(0, 8.27, 11.69, "inch"),
         SelectionMarks        = [new SelectionMarkInfo(0, "selected", 5, 0.98, [new PolygonPoint(1f, 1f)])],
-        Figures               = [new FigureInfo("Organogram Contoso", 20, 0, "/figures/0", ["/paragraphs/3"])],
+        Figures               = [new FigureInfo("Organogram Cordaan", 20, 0, "/figures/0", ["/paragraphs/3"])],
         Lines                 = [new LineInfo("Gedragscode medewerkers", 0, 0, [new PolygonPoint(0f, 0f)])],
-        AverageWordConfidence = 0.97,
     };
 
     [TestMethod]
@@ -81,15 +80,13 @@ public class DocumentChunkTests
         Assert.AreEqual(1, restored.Figures.Count);
         Assert.AreEqual(original.Figures[0].Caption, restored.Figures[0].Caption);
         Assert.AreEqual(1, restored.Lines.Count);
-        Assert.AreEqual(original.AverageWordConfidence, restored.AverageWordConfidence);
 
         // Derived Tier 2 fields must still be correct after round-tripping - this is
-        // exactly what was silently zeroed out by the bug (Tables/Figures/
-        // AverageWordConfidence reset to defaults -> these computed from nothing).
+        // exactly what was silently zeroed out by the bug (Tables/Figures reset to
+        // defaults -> these computed from nothing).
         Assert.AreEqual(1, restored.TableCount);
         Assert.IsTrue(restored.HasTable);
-        Assert.AreEqual(0.97, restored.PageQuality);
-        CollectionAssert.AreEqual(new[] { "Organogram Contoso" }, restored.FigureCaptions.ToList());
+        CollectionAssert.AreEqual(new[] { "Organogram Cordaan" }, restored.FigureCaptions.ToList());
     }
 
     [TestMethod]
@@ -108,7 +105,7 @@ public class DocumentChunkTests
             "zenya_document_id", "zenya_version", "zenya_status", "zenya_url",
             "content", "heading",
             "page_number", "chunk_index", "content_vector",
-            "table_count", "has_table", "page_quality", "figure_captions",
+            "table_count", "has_table", "figure_captions",
         };
 
         CollectionAssert.AreEquivalent(expectedKeys.ToList(), actualKeys.ToList());
@@ -121,8 +118,7 @@ public class DocumentChunkTests
 
         Assert.AreEqual(1, upload.TableCount);
         Assert.IsTrue(upload.HasTable);
-        Assert.AreEqual(0.97, upload.PageQuality);
-        CollectionAssert.AreEqual(new[] { "Organogram Contoso" }, upload.FigureCaptions.ToList());
+        CollectionAssert.AreEqual(new[] { "Organogram Cordaan" }, upload.FigureCaptions.ToList());
     }
 
     [TestMethod]

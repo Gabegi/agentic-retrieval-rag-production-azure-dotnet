@@ -3,6 +3,7 @@ using Moq;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Indexing.Pdf.Utils;
+using AgenticRagApp.Common.Models;
 
 namespace RagApp.UnitTests.Indexing;
 
@@ -21,7 +22,7 @@ public class ChunkingServiceTests
     private static ChunkingService BuildService(Mock<IChunkingStrategy> strategy) =>
         new(strategy.Object, NullLogger<ChunkingService>.Instance);
 
-    private static ExtractionDocument Doc(
+    private static PdfExtractionDocument Doc(
         string sourceId, int ordinal, string content,
         string                  title            = "",
         string?                 author           = null,
@@ -42,8 +43,7 @@ public class ChunkingServiceTests
         PageDimensions?         dimensions       = null,
         IReadOnlyList<SelectionMarkInfo>? selectionMarks = null,
         IReadOnlyList<FigureInfo>? figures       = null,
-        IReadOnlyList<LineInfo>? lines           = null,
-        double?                 averageWordConfidence = null) =>
+        IReadOnlyList<LineInfo>? lines           = null) =>
         new(
             SourceId:              sourceId,
             Ordinal:               ordinal,
@@ -67,8 +67,7 @@ public class ChunkingServiceTests
             Dimensions:            dimensions,
             SelectionMarks:        selectionMarks ?? [],
             Figures:               figures ?? [],
-            Lines:                 lines ?? [],
-            AverageWordConfidence: averageWordConfidence);
+            Lines:                 lines ?? []);
 
     [TestMethod]
     public void Name_PassesThroughFromStrategy()
@@ -206,7 +205,7 @@ public class ChunkingServiceTests
         var createdAt = DateTimeOffset.Parse("2020-01-01T00:00:00Z");
         var modDate   = DateTimeOffset.Parse("2023-06-15T00:00:00Z");
         var lastMod   = DateTimeOffset.Parse("2024-05-01T00:00:00Z");
-        var table     = new TableInfo(2, 2, [], Offset: null, PageNumber: 0);
+        var table     = new TableInfo(2, 2, [], Offset: null, PageNumber: 0, Caption: null, Footnotes: [], Regions: []);
         var doc       = Doc("doc1", 0, "content",
             title:            "Title",
             author:           "J. Doe",
@@ -214,8 +213,7 @@ public class ChunkingServiceTests
             modDate:          modDate,
             pageCount:        12,
             lastModifiedDate: lastMod,
-            tables:           [table],
-            averageWordConfidence: 0.97);
+            tables:           [table]);
 
         var (docs, _) = service.ChunkDocuments([doc]);
 
@@ -227,7 +225,6 @@ public class ChunkingServiceTests
         Assert.AreEqual(12, result.PageCount);
         Assert.AreEqual(lastMod, result.LastModifiedDate);
         Assert.AreEqual(1, result.Tables.Count);
-        Assert.AreEqual(0.97, result.AverageWordConfidence);
     }
 
     [TestMethod]

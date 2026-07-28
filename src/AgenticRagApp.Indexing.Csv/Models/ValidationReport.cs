@@ -1,3 +1,5 @@
+using AgenticRagApp.Common.Models;
+
 namespace AgenticRagApp.Indexing.Csv.Models;
 
 public class ValidationReport

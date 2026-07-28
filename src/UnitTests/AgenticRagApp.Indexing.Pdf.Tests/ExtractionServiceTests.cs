@@ -12,7 +12,7 @@ namespace RagApp.UnitTests.CsvExtraction;
 [TestClass]
 public class ExtractionServiceTests
 {
-    private static ExtractionDocument Doc(string sourceId) => new(
+    private static PdfExtractionDocument Doc(string sourceId) => new(
         SourceId:              sourceId,
         Ordinal:               0,
         Content:               "content",
@@ -35,25 +35,25 @@ public class ExtractionServiceTests
         Dimensions:            null,
         SelectionMarks:        [],
         Figures:               [],
-        Lines:                 [],
-        AverageWordConfidence: null);
+        Lines:                 []);
 
-    private static ExtractionOutput BuildOutput(IEnumerable<ExtractionDocument> docs) => new(
-        Docs:                   docs.ToList(),
-        ValidationErrors:       0,
-        ValidationWarnings:     0,
-        ReconciliationProblems: 0,
-        StaleDocCount:          0,
-        MojibakeRepairedPages:  0,
-        DetectedTableCount:     0,
-        DocsWithoutHeadings:    0,
-        MissingTitleCount:      0,
-        MissingVersionCount:    0,
-        MissingDepartmentCount: 0,
-        TraceabilityGapCount:   0,
-        Issues:                 [],
-        RedFlags:               [],
-        SpotCheckSample:        []);
+    private static PdfExtractionOutput BuildOutput(IEnumerable<PdfExtractionDocument> docs) => new(docs.ToList())
+    {
+        ValidationErrors       = 0,
+        ValidationWarnings     = 0,
+        ReconciliationProblems = 0,
+        StaleDocCount          = 0,
+        MojibakeRepairedPages  = 0,
+        DetectedTableCount     = 0,
+        DocsWithoutHeadings    = 0,
+        MissingTitleCount      = 0,
+        MissingVersionCount    = 0,
+        MissingDepartmentCount = 0,
+        TraceabilityGapCount   = 0,
+        Issues                 = [],
+        RedFlags               = [],
+        SpotCheckSample        = [],
+    };
 
     // Fakes the "documents" container's listing - what ExtractionService's own
     // ListDocumentsInBlobAsync reads (via IBlobStore) to build the "source" side of the
@@ -85,18 +85,18 @@ public class ExtractionServiceTests
     {
         var mock = new Mock<IExtractionOrchestrator>();
         mock.SetupGet(m => m.Source).Returns(source);
-        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlySet<string> ids, CancellationToken _) => BuildOutput(ids.Select(Doc)));
+        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlyDictionary<string, PdfBlobInfo>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken _) => BuildOutput(sourceIdsToProcess.Keys.Select(Doc)));
         return mock;
     }
 
-    // Variant for tests that need a fixed ExtractionOutput (e.g. asserting validation
+    // Variant for tests that need a fixed PdfExtractionOutput (e.g. asserting validation
     // fields propagate) rather than one derived from whatever ids got requested.
-    private static Mock<IExtractionOrchestrator> MockExtractorWithFixedOutput(ExtractionOutput output, string source = "pdf")
+    private static Mock<IExtractionOrchestrator> MockExtractorWithFixedOutput(PdfExtractionOutput output, string source = "pdf")
     {
         var mock = new Mock<IExtractionOrchestrator>();
         mock.SetupGet(m => m.Source).Returns(source);
-        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlyDictionary<string, PdfBlobInfo>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(output);
         return mock;
     }
@@ -304,22 +304,23 @@ public class ExtractionServiceTests
     [TestMethod]
     public async Task Stats_PropagatesValidationFieldsFromExtractionOutput()
     {
-        var output = new ExtractionOutput(
-            Docs:                   [Doc("doc1.pdf")],
-            ValidationErrors:       3,
-            ValidationWarnings:     5,
-            ReconciliationProblems: 1,
-            StaleDocCount:          2,
-            MojibakeRepairedPages:  6,
-            DetectedTableCount:     7,
-            DocsWithoutHeadings:    4,
-            MissingTitleCount:      1,
-            MissingVersionCount:    2,
-            MissingDepartmentCount: 3,
-            TraceabilityGapCount:   9,
-            Issues:                 [],
-            RedFlags:               ["some flag"],
-            SpotCheckSample:        []);
+        var output = new PdfExtractionOutput([Doc("doc1.pdf")])
+        {
+            ValidationErrors       = 3,
+            ValidationWarnings     = 5,
+            ReconciliationProblems = 1,
+            StaleDocCount          = 2,
+            MojibakeRepairedPages  = 6,
+            DetectedTableCount     = 7,
+            DocsWithoutHeadings    = 4,
+            MissingTitleCount      = 1,
+            MissingVersionCount    = 2,
+            MissingDepartmentCount = 3,
+            TraceabilityGapCount   = 9,
+            Issues                 = [],
+            RedFlags               = ["some flag"],
+            SpotCheckSample        = [],
+        };
         var blobStore    = MockBlobStore(("doc1.pdf", DateTimeOffset.Parse("2024-01-01")));
         var extractor    = MockExtractorWithFixedOutput(output);
         var indexService = MockIndexService([]);

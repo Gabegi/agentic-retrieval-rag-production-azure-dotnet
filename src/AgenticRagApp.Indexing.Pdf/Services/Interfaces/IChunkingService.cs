@@ -1,4 +1,5 @@
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
@@ -13,5 +14,5 @@ public interface IChunkingService
     // High-level: converts ExtractionDocuments into indexed DocumentChunks,
     // computes ChunkingResults, and emits all chunk telemetry.
     (IReadOnlyList<DocumentChunk> Docs, ChunkingResults Stats) ChunkDocuments(
-        IReadOnlyList<ExtractionDocument> docs);
+        IReadOnlyList<PdfExtractionDocument> docs);
 }

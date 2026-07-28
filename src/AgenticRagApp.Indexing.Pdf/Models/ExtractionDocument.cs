@@ -1,3 +1,5 @@
+using AgenticRagApp.Common.Models;
+
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // One PDF page handed to the chunking pipeline. Fully typed on purpose - PDF is this
@@ -21,13 +23,13 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 //   - PDFExtractionResult.FileSizeBytes/PdfSpecVersion/EstimatedCostUsd - operational
 //     facts already surfaced in the extraction run report, not something a chunk needs.
 //   - PDFExtractionResult.PageErrors/Warnings - not dropped data, already fully surfaced
-//     through PdfPipelineValidator -> ExtractionOutput.Issues -> the run report.
+//     through PdfPipelineValidator -> PdfExtractionOutput.Issues -> the run report.
 //     Duplicating either here would repackage identical data, not add anything new.
 //   - DocMetadata.Producer/Creator/Subject/Keywords - diagnostics-only signals (pipeline
 //     provenance/QA, e.g. flagging a PDF with no Producer as a non-standard export path -
 //     see PdfNativeMetadataExtractor's Producer-missing warning). Not chunk-worthy, same
 //     reasoning as FileSizeBytes/PdfSpecVersion above.
-public record ExtractionDocument(
+public sealed record PdfExtractionDocument(
     string SourceId,   // grouping/chunking boundary — the chunker never blends chunks across different SourceIds; blobName for PDF
     int    Ordinal,    // page number — used for ordering only
 
@@ -98,9 +100,5 @@ public record ExtractionDocument(
 
     IReadOnlyList<SelectionMarkInfo> SelectionMarks,
     IReadOnlyList<FigureInfo>        Figures,
-    IReadOnlyList<LineInfo>          Lines,
-
-    // Average OCR word-confidence for this page - a data-quality signal, not a
-    // chunk-boundary one. Null when DI didn't report a score for this page.
-    double? AverageWordConfidence
-);
+    IReadOnlyList<LineInfo>          Lines
+) : ExtractionDocumentBase(SourceId, Ordinal, Content);

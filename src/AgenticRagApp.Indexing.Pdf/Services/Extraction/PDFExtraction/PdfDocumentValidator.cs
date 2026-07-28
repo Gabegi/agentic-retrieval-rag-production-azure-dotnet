@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Core;
 using UglyToad.PdfPig.Exceptions;
@@ -47,7 +48,7 @@ public static class PdfDocumentValidator
         pdf = null;
         var warnings = new List<ExtractionWarning>();
 
-        if (!IsPDFSizeOkForDI(pdfBytes, blobName, warnings, out error))
+        if (!IsPDFSizeOkForDI(pdfBytes, blobName, logger, warnings, out error))
         {
             diagnostics = new PdfStepDiagnostics(warnings, [error]);
             return false;
@@ -59,7 +60,7 @@ public static class PdfDocumentValidator
             return false;
         }
 
-        if (!IsPDFPageCountOkForDI(pdf, blobName, warnings, out error))
+        if (!IsPDFPageCountOkForDI(pdf, blobName, logger, warnings, out error))
         {
             pdf.Dispose();
             pdf = null;
@@ -87,16 +88,16 @@ public static class PdfDocumentValidator
             //  PdfPig parses the byte stream: reads the PDF header, cross-reference table/trailer, decodes the document catalog and page tree, etc.
             opened = PdfDocument.Open(pdfBytes);
 
-            logger.LogInformation(
-                "Opened PDF '{Blob}': {Pages} page(s), version {Version}",
-                blobName, opened.NumberOfPages, opened.Version);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogInformation(
+                    "Opened PDF '{Blob}': {Pages} page(s), version {Version}",
+                    blobName, opened.NumberOfPages, opened.Version);
 
             if (opened.Version < MinRecommendedVersion)
-                warnings.Add(new ExtractionWarning
-                {
-                    DocumentId = blobName,
-                    Message    = $"PDF spec version {opened.Version} is older than {MinRecommendedVersion} - older PDFs correlate with extraction trouble.",
-                });
+                warnings.Add(new ExtractionWarning(
+                    RowNumber:  null,
+                    DocumentId: blobName,
+                    Message:    $"PDF spec version {opened.Version} is older than {MinRecommendedVersion} - older PDFs correlate with extraction trouble."));
 
             pdf   = opened;
             error = null;
@@ -110,7 +111,8 @@ public static class PdfDocumentValidator
             opened?.Dispose();
             pdf   = null;
             error = OpenError(blobName, PdfOpenFailureReason.Encrypted, $"PDF is encrypted: {ex.Message}");
-            logger.LogWarning(ex, "PDF '{Blob}' is encrypted and could not be opened.", blobName);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(ex, "PDF '{Blob}' is encrypted and could not be opened.", blobName);
             return false;
         }
         // Structurally broken PDF: corrupt header, broken xref/trailer, malformed
@@ -120,7 +122,8 @@ public static class PdfDocumentValidator
             opened?.Dispose();
             pdf   = null;
             error = OpenError(blobName, PdfOpenFailureReason.MalformedFormat, $"PDF structure is malformed: {ex.Message}");
-            logger.LogWarning(ex, "PDF '{Blob}' has a malformed/corrupt structure.", blobName);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(ex, "PDF '{Blob}' has a malformed/corrupt structure.", blobName);
             return false;
         }
         // Anything else PdfPig (or the runtime) threw while opening/inspecting the
@@ -130,75 +133,104 @@ public static class PdfDocumentValidator
             opened?.Dispose();
             pdf   = null;
             error = OpenError(blobName, PdfOpenFailureReason.Unknown, $"Not a parseable PDF: {ex.Message}");
-            logger.LogWarning(ex, "PDF '{Blob}' failed to open for an unrecognized reason.", blobName);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(ex, "PDF '{Blob}' failed to open for an unrecognized reason.", blobName);
             return false;
         }
     }
 
-    private static bool IsPDFSizeOkForDI(byte[] pdfBytes, string blobName, List<ExtractionWarning> warnings, [NotNullWhen(false)] out ExtractionError? error)
+    // Errors/warnings are always written to the diagnostics object regardless of
+    // environment (that's what feeds PdfValidationReport); the logger.IsEnabled(Debug)
+    // gate below controls only whether this step also emits a log line - development-only,
+    // same pattern as the content-hash debug log in PdfExtractionPipeline, so per-file
+    // rejection detail doesn't add to Production log volume/cost.
+    private static bool IsPDFSizeOkForDI(byte[] pdfBytes, string blobName, ILogger logger, List<ExtractionWarning> warnings, [NotNullWhen(false)] out ExtractionError? error)
     {
         if (pdfBytes.Length == 0)
         {
-            error = new ExtractionError { DocumentId = blobName, Message = "Empty file (0 bytes).", Reason = PdfOpenFailureReason.EmptyFile };
+            error = new ExtractionError(RowNumber: 0, DocumentId: blobName, Message: "Empty file (0 bytes).", Reason: PdfOpenFailureReason.EmptyFile);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning("PDF '{Blob}' rejected: empty file (0 bytes).", blobName);
             return false;
         }
 
         if (pdfBytes.Length > MaxBytes)
         {
-            error = new ExtractionError
-            {
-                DocumentId = blobName,
-                Message    = $"File is {pdfBytes.Length / 1024.0 / 1024.0:F1} MB, exceeds the {MaxBytes / 1024 / 1024} MB Document Intelligence limit.",
-                Reason     = PdfOpenFailureReason.TooLarge,
-            };
+            error = new ExtractionError(
+                RowNumber:  0,
+                DocumentId: blobName,
+                Message:    $"File is {pdfBytes.Length / 1024.0 / 1024.0:F1} MB, exceeds the {MaxBytes / 1024 / 1024} MB Document Intelligence limit.",
+                Reason:     PdfOpenFailureReason.TooLarge);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(
+                    "PDF '{Blob}' rejected: {SizeMb:F1} MB exceeds the {MaxMb} MB Document Intelligence limit.",
+                    blobName, pdfBytes.Length / 1024.0 / 1024.0, MaxBytes / 1024 / 1024);
             return false;
         }
 
         if (pdfBytes.Length < MinReasonableBytes)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"File is only {pdfBytes.Length} byte(s) - often a scan-of-nothing or placeholder.",
-            });
+        {
+            warnings.Add(new ExtractionWarning(
+                RowNumber:  null,
+                DocumentId: blobName,
+                Message:    $"File is only {pdfBytes.Length} byte(s) - often a scan-of-nothing or placeholder."));
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning("PDF '{Blob}' is only {Bytes} byte(s) - likely a scan-of-nothing or placeholder.", blobName, pdfBytes.Length);
+        }
         else if (pdfBytes.Length > MaxBytes * NearLimitFraction)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"File is {pdfBytes.Length / 1024.0 / 1024.0:F1} MB, over {NearLimitFraction:P0} of the {MaxBytes / 1024 / 1024} MB Document Intelligence limit.",
-            });
+        {
+            warnings.Add(new ExtractionWarning(
+                RowNumber:  null,
+                DocumentId: blobName,
+                Message:    $"File is {pdfBytes.Length / 1024.0 / 1024.0:F1} MB, over {NearLimitFraction:P0} of the {MaxBytes / 1024 / 1024} MB Document Intelligence limit."));
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(
+                    "PDF '{Blob}' is {SizeMb:F1} MB, over {Fraction:P0} of the {MaxMb} MB Document Intelligence limit.",
+                    blobName, pdfBytes.Length / 1024.0 / 1024.0, NearLimitFraction, MaxBytes / 1024 / 1024);
+        }
 
         error = null;
         return true;
     }
 
     private static ExtractionError OpenError(string blobName, PdfOpenFailureReason reason, string message) =>
-        new() { DocumentId = blobName, Message = message, Reason = reason };
+        new(RowNumber: 0, DocumentId: blobName, Message: message, Reason: reason);
 
-    private static bool IsPDFPageCountOkForDI(PdfDocument pdf, string blobName, List<ExtractionWarning> warnings, [NotNullWhen(false)] out ExtractionError? error)
+    private static bool IsPDFPageCountOkForDI(PdfDocument pdf, string blobName, ILogger logger, List<ExtractionWarning> warnings, [NotNullWhen(false)] out ExtractionError? error)
     {
         if (pdf.NumberOfPages == 0)
         {
-            error = new ExtractionError { DocumentId = blobName, Message = "PDF contains zero pages.", Reason = PdfOpenFailureReason.EmptyDocument };
+            error = new ExtractionError(RowNumber: 0, DocumentId: blobName, Message: "PDF contains zero pages.", Reason: PdfOpenFailureReason.EmptyDocument);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning("PDF '{Blob}' rejected: contains zero pages.", blobName);
             return false;
         }
 
         if (pdf.NumberOfPages > MaxPages)
         {
-            error = new ExtractionError
-            {
-                DocumentId = blobName,
-                Message    = $"{pdf.NumberOfPages} pages exceeds the {MaxPages}-page Document Intelligence limit per analyze call; split before submitting.",
-                Reason     = PdfOpenFailureReason.TooManyPages,
-            };
+            error = new ExtractionError(
+                RowNumber:  0,
+                DocumentId: blobName,
+                Message:    $"{pdf.NumberOfPages} pages exceeds the {MaxPages}-page Document Intelligence limit per analyze call; split before submitting.",
+                Reason:     PdfOpenFailureReason.TooManyPages);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(
+                    "PDF '{Blob}' rejected: {Pages} pages exceeds the {MaxPages}-page Document Intelligence limit per analyze call.",
+                    blobName, pdf.NumberOfPages, MaxPages);
             return false;
         }
 
         if (pdf.NumberOfPages > MaxPages * NearLimitFraction)
-            warnings.Add(new ExtractionWarning
-            {
-                DocumentId = blobName,
-                Message    = $"{pdf.NumberOfPages} pages, over {NearLimitFraction:P0} of the {MaxPages}-page Document Intelligence limit per analyze call.",
-            });
+        {
+            warnings.Add(new ExtractionWarning(
+                RowNumber:  null,
+                DocumentId: blobName,
+                Message:    $"{pdf.NumberOfPages} pages, over {NearLimitFraction:P0} of the {MaxPages}-page Document Intelligence limit per analyze call."));
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogWarning(
+                    "PDF '{Blob}' has {Pages} pages, over {Fraction:P0} of the {MaxPages}-page Document Intelligence limit per analyze call.",
+                    blobName, pdf.NumberOfPages, NearLimitFraction, MaxPages);
+        }
 
         error = null;
         return true;

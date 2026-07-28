@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using AgenticRagApp.Indexing.Csv.Models;
 using AgenticRagApp.Indexing.Csv.Services;
+using AgenticRagApp.Common.Models;
 
 namespace RagApp.UnitTests.CsvExtraction;
 
@@ -38,6 +39,10 @@ public class PipelineValidatorTests
 
     private static Stream ToStream(string csv) => new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
 
+    // Empty extraction results still need Records/Errors/Warnings set — ExtractionResult<T>
+    // has required init-only members, so a parameterless `new()` no longer compiles.
+    private static ExtractionResult<T> Empty<T>() => new() { Records = [], Errors = [], Warnings = [] };
+
     // JoinedPageRecord builder for PipelineValidator tests that skip the join step -
     // LastModifiedRaw must be a valid "yyyyMMddHHmmss" value or DataCleaner rejects the
     // whole record with a CleaningError before PipelineValidator ever sees it.
@@ -66,8 +71,8 @@ public class PipelineValidatorTests
     [TestMethod]
     public void NoInputAtAll_FailsRatherThanPassingVacuously()
     {
-        var pages = new ExtractionResult<PageRecord>();
-        var index = new ExtractionResult<IndexRecord>();
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
         var join  = BuildJoiner().Join(pages.Records, index.Records);
         var clean = BuildCleaner().Clean(join.Joined);
 
@@ -83,7 +88,7 @@ public class PipelineValidatorTests
         var pages = BuildExtractor().ExtractPages(ToStream(
             PagesHeader + "\n" +
             "doc1,Title,QC,Folder,20240101120000,0,Content,rel,nl-NL\n"));
-        var index = new ExtractionResult<IndexRecord>(); // no matching index record for doc1
+        var index = Empty<IndexRecord>(); // no matching index record for doc1
         var join  = BuildJoiner().Join(pages.Records, index.Records);
         var clean = BuildCleaner().Clean(join.Joined);
 
@@ -95,7 +100,7 @@ public class PipelineValidatorTests
     [TestMethod]
     public void SkippedIndexRecord_ProducesWarningAndRedFlag()
     {
-        var pages = new ExtractionResult<PageRecord>();
+        var pages = Empty<PageRecord>();
         var index = BuildExtractor().ExtractIndex(ToStream(
             IndexHeader + "\n" +
             "doc1,Protocol,Summary,7,0,,[]\n"));
@@ -117,8 +122,8 @@ public class PipelineValidatorTests
         };
         var clean = BuildCleaner().Clean(flaggedJoin);
 
-        var pages = new ExtractionResult<PageRecord>();
-        var index = new ExtractionResult<IndexRecord>();
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
         var join  = new JoinResult();
 
         var report = BuildValidator().Validate(pages, index, join, clean);
@@ -132,8 +137,8 @@ public class PipelineValidatorTests
     {
         var joined = new List<JoinedPageRecord> { JoinedPage("doc1", "Plain text, no headings at all.") };
         var clean = BuildCleaner().Clean(joined);
-        var pages = new ExtractionResult<PageRecord>();
-        var index = new ExtractionResult<IndexRecord>();
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
         var join  = new JoinResult();
 
         var report = BuildValidator().Validate(pages, index, join, clean);
@@ -146,8 +151,8 @@ public class PipelineValidatorTests
     {
         var joined = new List<JoinedPageRecord> { JoinedPage("doc1", "# Heading\nSome content under it.") };
         var clean = BuildCleaner().Clean(joined);
-        var pages = new ExtractionResult<PageRecord>();
-        var index = new ExtractionResult<IndexRecord>();
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
         var join  = new JoinResult();
 
         var report = BuildValidator().Validate(pages, index, join, clean);
@@ -160,8 +165,8 @@ public class PipelineValidatorTests
     {
         var joined = new List<JoinedPageRecord> { JoinedPage("doc1", "Corrupted � text") };
         var clean = BuildCleaner().Clean(joined);
-        var pages = new ExtractionResult<PageRecord>();
-        var index = new ExtractionResult<IndexRecord>();
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
         var join  = new JoinResult();
 
         var report = BuildValidator().Validate(pages, index, join, clean);
@@ -175,13 +180,76 @@ public class PipelineValidatorTests
     {
         var joined = new List<JoinedPageRecord> { JoinedPage("doc1", "Some content", language: "en-US") };
         var clean = BuildCleaner().Clean(joined);
-        var pages = new ExtractionResult<PageRecord>();
-        var index = new ExtractionResult<IndexRecord>();
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
         var join  = new JoinResult();
 
         var report = BuildValidator().Validate(pages, index, join, clean);
 
         Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Warning" && i.Message.Contains("en-US")));
+    }
+
+    [TestMethod]
+    public void ControlCharacterInContent_IsTextQualityError()
+    {
+        var joined = new List<JoinedPageRecord> { JoinedPage("doc1", "Corrupted  text") };
+        var clean = BuildCleaner().Clean(joined);
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
+        var join  = new JoinResult();
+
+        var report = BuildValidator().Validate(pages, index, join, clean);
+
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Error" && i.Message.Contains("control/unassigned")));
+        Assert.IsFalse(report.Passed);
+    }
+
+    [TestMethod]
+    public void WhitespaceControlCharacters_AreNotFlaggedAsCorruption()
+    {
+        // \n, \r, \t are explicitly excluded from the control-character check - only
+        // non-whitespace control/unassigned characters indicate corruption.
+        var joined = new List<JoinedPageRecord> { JoinedPage("doc1", "Line one\nLine two\r\n\tIndented") };
+        var clean = BuildCleaner().Clean(joined);
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
+        var join  = new JoinResult();
+
+        var report = BuildValidator().Validate(pages, index, join, clean);
+
+        Assert.IsFalse(report.Issues.Any(i => i.Message.Contains("control/unassigned")));
+    }
+
+    [TestMethod]
+    public void MarkdownTableWithInconsistentColumnCounts_ProducesWarningAndCountsAsDetectedTable()
+    {
+        var joined = new List<JoinedPageRecord> { JoinedPage("doc1",
+            "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |\n") };
+        var clean = BuildCleaner().Clean(joined);
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
+        var join  = new JoinResult();
+
+        var report = BuildValidator().Validate(pages, index, join, clean);
+
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Warning" && i.Message.Contains("inconsistent column counts")));
+        Assert.AreEqual(1, report.DetectedTableCount);
+    }
+
+    [TestMethod]
+    public void MarkdownTableWithConsistentColumnCounts_NoInconsistencyWarning()
+    {
+        var joined = new List<JoinedPageRecord> { JoinedPage("doc1",
+            "| A | B |\n| --- | --- |\n| 1 | 2 |\n") };
+        var clean = BuildCleaner().Clean(joined);
+        var pages = Empty<PageRecord>();
+        var index = Empty<IndexRecord>();
+        var join  = new JoinResult();
+
+        var report = BuildValidator().Validate(pages, index, join, clean);
+
+        Assert.IsFalse(report.Issues.Any(i => i.Message.Contains("inconsistent column counts")));
+        Assert.AreEqual(1, report.DetectedTableCount);
     }
 
     [TestMethod]

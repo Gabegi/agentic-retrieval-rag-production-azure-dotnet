@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using AgenticRagApp.Indexing.Csv.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Csv.Services;
 
@@ -130,39 +131,37 @@ public class PipelineValidator : IPipelineValidator
         var issues = new List<ValidationIssue>();
 
         //     pagesExtraction.Errors                    (Error,   Stage=Parse:Pages)
-        issues.AddRange(pagesExtraction.Errors.Select(e => new ValidationIssue
-            { Stage = "Parse:Pages", Severity = "Error", DocumentId = e.DocumentId ?? "", Message = $"Row {e.RowNumber}: {e.Message}" }));
+        issues.AddRange(pagesExtraction.Errors.Select(e => new ValidationIssue(
+            Stage: "Parse:Pages", Severity: "Error", DocumentId: e.DocumentId ?? "", Message: $"Row {e.RowNumber}: {e.Message}")));
 
         //   + indexExtraction.Errors                    (Error,   Stage=Parse:Index)
-        issues.AddRange(indexExtraction.Errors.Select(e => new ValidationIssue
-            { Stage = "Parse:Index", Severity = "Error", DocumentId = e.DocumentId ?? "", Message = $"Row {e.RowNumber}: {e.Message}" }));
+        issues.AddRange(indexExtraction.Errors.Select(e => new ValidationIssue(
+            Stage: "Parse:Index", Severity: "Error", DocumentId: e.DocumentId ?? "", Message: $"Row {e.RowNumber}: {e.Message}")));
 
         //   + joinResult.Errors                         (Error,   Stage=Join)
-        issues.AddRange(joinResult.Errors.Select(e => new ValidationIssue
-            { Stage = "Join", Severity = "Error", DocumentId = e.DocumentId, Message = e.Message }));
+        issues.AddRange(joinResult.Errors.Select(e => new ValidationIssue(
+            Stage: "Join", Severity: "Error", DocumentId: e.DocumentId, Message: e.Message)));
 
         //   + joinResult.DataQualityWarnings            (Warning, Stage=Join)
-        issues.AddRange(joinResult.DataQualityWarnings.Select(w => new ValidationIssue
-            { Stage = "Join", Severity = "Warning", DocumentId = w.DocumentId, Message = w.Message }));
+        issues.AddRange(joinResult.DataQualityWarnings.Select(w => new ValidationIssue(
+            Stage: "Join", Severity: "Warning", DocumentId: w.DocumentId, Message: w.Message)));
 
         //   + cleanResult.Errors                        (Error,   Stage=Clean)
-        issues.AddRange(cleanResult.Errors.Select(e => new ValidationIssue
-            { Stage = "Clean", Severity = "Error", DocumentId = e.DocumentId, Message = e.Message }));
+        issues.AddRange(cleanResult.Errors.Select(e => new ValidationIssue(
+            Stage: "Clean", Severity: "Error", DocumentId: e.DocumentId ?? "", Message: e.Message)));
 
         //   + cleanResult.Warnings                      (Warning, Stage=Clean)
-        issues.AddRange(cleanResult.Warnings.Select(w => new ValidationIssue
-            { Stage = "Clean", Severity = "Warning", DocumentId = w.DocumentId, Message = w.Message }));
+        issues.AddRange(cleanResult.Warnings.Select(w => new ValidationIssue(
+            Stage: "Clean", Severity: "Warning", DocumentId: w.DocumentId ?? "", Message: w.Message)));
 
         // 1b. Index documents with no pages never reach the search index — make that visible
 
         //   + joinResult.SkippedIndexRecords            (Warning, Stage=Join — "no pages" docs)
-        issues.AddRange(joinResult.SkippedIndexRecords.Select(r => new ValidationIssue
-        {
-            Stage      = "Join",
-            Severity   = "Warning",
-            DocumentId = r.DocumentId,
-            Message    = "Index record has no pages — document will not be indexed.",
-        }));
+        issues.AddRange(joinResult.SkippedIndexRecords.Select(r => new ValidationIssue(
+            Stage:      "Join",
+            Severity:   "Warning",
+            DocumentId: r.DocumentId,
+            Message:    "Index record has no pages — document will not be indexed.")));
         if (joinResult.SkippedIndexRecords.Count > 0)
             redFlags.Add($"{joinResult.SkippedIndexRecords.Count} index document(s) have no pages and will not be indexed.");
 
@@ -268,9 +267,9 @@ public class PipelineValidator : IPipelineValidator
             // Its presence means actual source text was lost during encoding/decoding somewhere upstream
             var replacementCount = record.PageContent.Count(c => c == ReplacementChar);
             if (replacementCount > 0)
-                issues.Add(new ValidationIssue { Stage = "TextQuality", Severity = "Error",
-                    DocumentId = record.DocumentId,
-                    Message    = $"Page {record.PageIndex}: {replacementCount} U+FFFD char(s) — source text is corrupted." });
+                issues.Add(new ValidationIssue(Stage: "TextQuality", Severity: "Error",
+                    DocumentId: record.DocumentId,
+                    Message:    $"Page {record.PageIndex}: {replacementCount} U+FFFD char(s) — source text is corrupted."));
 
             // Control characters (outside normal whitespace) and unassigned code points — corruption
             // U+FFFD doesn't catch, because the decoder didn't fail outright, it just produced a
@@ -279,16 +278,16 @@ public class PipelineValidator : IPipelineValidator
                 c is not ('\n' or '\r' or '\t')
                 && CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.OtherNotAssigned);
             if (corruptCharCount > 0)
-                issues.Add(new ValidationIssue { Stage = "TextQuality", Severity = "Error",
-                    DocumentId = record.DocumentId,
-                    Message    = $"Page {record.PageIndex}: {corruptCharCount} control/unassigned character(s) — likely encoding corruption." });
+                issues.Add(new ValidationIssue(Stage: "TextQuality", Severity: "Error",
+                    DocumentId: record.DocumentId,
+                    Message:    $"Page {record.PageIndex}: {corruptCharCount} control/unassigned character(s) — likely encoding corruption."));
 
             // Flags any page whose Language field isn't Dutch
             if (!string.IsNullOrEmpty(record.Language) &&
                 !record.Language.StartsWith("nl", StringComparison.OrdinalIgnoreCase))
-                issues.Add(new ValidationIssue { Stage = "TextQuality", Severity = "Warning",
-                    DocumentId = record.DocumentId,
-                    Message    = $"Page {record.PageIndex}: language '{record.Language}' — nl.microsoft analyzer will tokenize this poorly." });
+                issues.Add(new ValidationIssue(Stage: "TextQuality", Severity: "Warning",
+                    DocumentId: record.DocumentId,
+                    Message:    $"Page {record.PageIndex}: language '{record.Language}' — nl.microsoft analyzer will tokenize this poorly."));
 
             //  any table whose rows have inconsistent column count?
             // a well-formed markdown table has the same number of | delimiters on every row
@@ -304,9 +303,9 @@ public class PipelineValidator : IPipelineValidator
                     .ToList();
                 if (pipeCounts.Count > 1 && pipeCounts.Distinct().Count() > 1)
                 {
-                    issues.Add(new ValidationIssue { Stage = "TextQuality", Severity = "Warning",
-                        DocumentId = record.DocumentId,
-                        Message    = $"Page {record.PageIndex}: markdown table has inconsistent column counts across rows." });
+                    issues.Add(new ValidationIssue(Stage: "TextQuality", Severity: "Warning",
+                        DocumentId: record.DocumentId,
+                        Message:    $"Page {record.PageIndex}: markdown table has inconsistent column counts across rows."));
                     break; // one warning per page is enough
                 }
             }

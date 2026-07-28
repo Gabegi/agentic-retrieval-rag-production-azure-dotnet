@@ -1,3 +1,5 @@
+using AgenticRagApp.Common.Models;
+
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // One PDF file's complete extraction outcome - everything every step of the pipeline
@@ -82,7 +84,7 @@ public record PDFExtractionResult
     // that step.
     public PdfStepDiagnostics ValidationDiagnostics { get; init; } = PdfStepDiagnostics.Empty;
     public PdfStepDiagnostics MetadataDiagnostics    { get; init; } = PdfStepDiagnostics.Empty;
-    public PdfStepDiagnostics AnalysisDiagnostics    { get; init; } = PdfStepDiagnostics.Empty;
+    public PdfStepDiagnostics DocumentIntelligenceDiagnostics    { get; init; } = PdfStepDiagnostics.Empty;
     public PdfStepDiagnostics BreadcrumbDiagnostics  { get; init; } = PdfStepDiagnostics.Empty;
 
     // Per-step diagnostic snapshot (see PdfExtractionDiagnostics) - currently always null;

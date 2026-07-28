@@ -29,7 +29,7 @@ public class UploadService : IUploadService
     }
 
     public async Task<UploadResult> UploadDocumentsAsync(
-        IEnumerable<AgenticRagApp.Common.Models.ProtocolDocument> documents, IReadOnlyList<string> staleDocumentIds, CancellationToken ct = default)
+        IEnumerable<AgenticRagApp.Common.Models.ChunkStatsSource> documents, IReadOnlyList<string> staleDocumentIds, CancellationToken ct = default)
     {
         var docList = documents.ToList();
         var (succeeded, failed) = await _indexDocumentService.UpsertDocumentsAsync(docList, ct);

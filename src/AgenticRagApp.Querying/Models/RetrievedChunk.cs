@@ -1,3 +1,5 @@
+using AgenticRagApp.Common.Models;
+
 namespace AgenticRagApp.Querying.Models;
 
 public sealed record RetrievedChunk(
@@ -10,6 +12,7 @@ public sealed record RetrievedChunk(
     // neighbor-expanded chunks (ChunkNeighborExpander doesn't select these, since only
     // the original matched chunk per document feeds a Citation - see AgenticRagQueryService).
     int? PageCount = null, DateTimeOffset? CreatedAt = null, DateTimeOffset? ModDate = null)
+    : DocumentReferenceBase(DocumentId, Title, QuickCode, RelativePath, ZenyaDocumentId, ZenyaVersion, ZenyaStatus, ZenyaUrl, PageCount, CreatedAt, ModDate)
 {
     public string ToContextText()
     {

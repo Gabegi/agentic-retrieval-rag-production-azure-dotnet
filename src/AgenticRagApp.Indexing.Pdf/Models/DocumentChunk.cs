@@ -84,9 +84,13 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     [JsonPropertyName("has_table")]
     public bool HasTable => Tables.Count > 0;
 
-    [JsonPropertyName("page_quality")]
-    public double? PageQuality => AverageWordConfidence;
-
+    // Sourced only from DI's own structured Figure.Caption (PDFDocumentAnalyzer.GetFigures) -
+    // expect this to be empty on most current documents, since none of them contain figures
+    // yet and DI's own caption detection is inconsistent even when they do (see the
+    // FiguresWithoutCaption warning in PdfDocumentAnalyzer.StructureWarnings). PdfCleaner
+    // separately extracts a figure's figcaption/alt text into the page's Content text (see
+    // ConvertFigures) - that's deliberately not threaded back into this structured field
+    // today; revisit once real figure-bearing documents exist to validate against.
     [JsonPropertyName("figure_captions")]
     public IReadOnlyList<string> FigureCaptions => Figures
         .Where(f => !string.IsNullOrWhiteSpace(f.Caption))
@@ -118,7 +122,6 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     public IReadOnlyList<SelectionMarkInfo> SelectionMarks { get; set; } = [];
     public IReadOnlyList<FigureInfo>        Figures        { get; set; } = [];
     public IReadOnlyList<LineInfo>          Lines          { get; set; } = [];
-    public double?                          AverageWordConfidence { get; set; }
 
     [JsonIgnore] public int  TokenEstimate => Content.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     [JsonIgnore] public bool IsEmpty       => string.IsNullOrWhiteSpace(Content);

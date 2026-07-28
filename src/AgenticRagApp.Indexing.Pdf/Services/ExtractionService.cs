@@ -38,7 +38,7 @@ public class ExtractionService : IExtractionService
     // Orchestrates the whole step: cheaply list what's available, diff against the current
     // index state BEFORE paying for extraction, extract only what's new/changed, emit
     // telemetry, and assemble the stats returned to the caller.
-    public async Task<(IReadOnlyList<ExtractionDocument> Docs, ExtractionResults Stats)> ExtractAsync(
+    public async Task<(IReadOnlyList<PdfExtractionDocument> Docs, ExtractionResults Stats)> ExtractAsync(
         bool forceReindex, CancellationToken ct = default)
     {
         // What documents exist in blob storage right now - id + LastModified only, no
@@ -64,8 +64,12 @@ public class ExtractionService : IExtractionService
             "Extraction diff — source '{Source}': {New} new, {Updated} updated, {Removed} removed, {Skipped} skipped, {Inactive} inactive (of {Total} available)",
             _extractor.Source, newCount, updated, removedSourceIds.Count, skipped, inactive, sourceListing.Count);
 
-        // Only pays for extraction (Document Intelligence, etc.) on what's actually new/updated.
-        var extractionOutput = await _extractor.ExtractDocumentsAsync(sourceIdsToProcess, ct);
+        // Only pays for extraction (Document Intelligence, etc.) on what's actually new/updated -
+        // and hands over the LastModified/ContentLength/Zenya facts already gathered above, so
+        // the orchestrator never has to list the container a second time.
+        var entriesToProcess = sourceIdsToProcess.ToDictionary(
+            id => id, id => sourceListing[id], StringComparer.OrdinalIgnoreCase);
+        var extractionOutput = await _extractor.ExtractDocumentsAsync(entriesToProcess, ct);
 
         var diff = new DiffResult(
             _extractor.Source, extractionOutput, extractionOutput.Docs.ToList(), removedSourceIds, toDeleteChunks, newCount, updated, skipped);
@@ -75,22 +79,27 @@ public class ExtractionService : IExtractionService
         return (diff.ToProcess, BuildStats(diff));
     }
 
-    private sealed record BlobListingEntry(DateTimeOffset LastModified, ZenyaMetadata Zenya);
-
-    // Cheap listing of every PDF blob's name + LastModified + Zenya metadata only — no
-    // download, no Document Intelligence call. This is the "source" side of the diff in
-    // ExtractAsync; PdfExtractionOrchestrator's ExtractDocumentsAsync does the expensive
-    // download + extraction, only for whatever CompareSourceListingToIndex decides is
-    // actually needed.
-    private async Task<Dictionary<string, BlobListingEntry>> ListDocumentsInBlobAsync(CancellationToken ct)
+    // Cheap listing of every PDF blob's name + LastModified + ContentLength + Zenya metadata
+    // only — no download, no Document Intelligence call. This is the "source" side of the
+    // diff in ExtractAsync; PdfExtractionOrchestrator's ExtractDocumentsAsync does the
+    // expensive download + extraction, only for whatever CompareSourceListingToIndex decides
+    // is actually needed, using this same data (see entriesToProcess above) instead of
+    // listing the container a second time.
+    private async Task<Dictionary<string, PdfBlobInfo>> ListDocumentsInBlobAsync(CancellationToken ct)
     {
-        var result = new Dictionary<string, BlobListingEntry>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, PdfBlobInfo>(StringComparer.OrdinalIgnoreCase);
         var blobs  = await _blobStore.ListBlobsAsync(_container, ct: ct);
 
-        foreach (var (name, lastModified, _, metadata) in blobs)
+        foreach (var (name, lastModified, contentLength, metadata) in blobs)
         {
             if (!name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) continue;
-            result[name] = new BlobListingEntry(lastModified ?? DateTimeOffset.MinValue, ZenyaMetadata.FromBlobMetadata(metadata));
+
+            if (lastModified is null)
+                _logger.LogWarning(
+                    "'{Blob}' has no LastModified from blob storage — treating as never-modified so it isn't reprocessed every run.",
+                    name);
+
+            result[name] = new PdfBlobInfo(lastModified ?? DateTimeOffset.MinValue, contentLength, ZenyaMetadata.FromBlobMetadata(metadata));
         }
 
         return result;
@@ -110,9 +119,9 @@ public class ExtractionService : IExtractionService
     // mistaken for one withdrawn from the source.
     private static (HashSet<string> SourceIdsToProcess, List<string> RemovedSourceIds, List<string> ToDeleteChunks,
         int NewCount, int Updated, int Skipped, int Inactive) CompareSourceListingToIndex(
-            IReadOnlyDictionary<string, BlobListingEntry> sourceListing,
-            Dictionary<string, DateTimeOffset>            indexedDates,
-            bool                                          forceReindex)
+            IReadOnlyDictionary<string, PdfBlobInfo> sourceListing,
+            Dictionary<string, DateTimeOffset>       indexedDates,
+            bool                                     forceReindex)
     {
         var sourceIdsToProcess = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var removedSourceIds   = new List<string>();
@@ -177,7 +186,7 @@ public class ExtractionService : IExtractionService
     }
 
     // Emit instrumentation metrics from the diff result, and (dev-only) write a
-    // diagnostic report blob - source IDs only, never the full ExtractionDocument
+    // diagnostic report blob - source IDs only, never the full PdfExtractionDocument
     // content, so this stays small regardless of corpus size.
     private async Task EmitMetricsAndBuildReport(DiffResult diff, CancellationToken ct)
     {
@@ -231,8 +240,8 @@ public class ExtractionService : IExtractionService
 
     private record DiffResult(
         string                   Source,
-        ExtractionOutput         Output,
-        List<ExtractionDocument> ToProcess,
+        PdfExtractionOutput         Output,
+        List<PdfExtractionDocument> ToProcess,
         List<string>             RemovedSourceIds,
         List<string>             StaleDocumentIds,
         int                      NewCount,

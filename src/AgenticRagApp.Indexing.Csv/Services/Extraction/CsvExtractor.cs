@@ -4,6 +4,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Indexing.Csv.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Csv.Services;
 
@@ -88,31 +89,30 @@ public class CsvExtractor : ICsvExtractor
     //      - fails    -> log it as an ExtractionError, with DocumentId if we could read one
     private ExtractionResult<T> Extract<T>(Stream stream, string[] requiredHeaders, Func<CsvReader, T> build)
     {
-        var result = new ExtractionResult<T>();
+        var records = new List<T>();
+        var errors  = new List<ExtractionError>();
         using var csv = EnsureHeadersAreCorrect(stream, requiredHeaders);
 
         var rowNumber = 1;
         while (true)
         {
-            if (!EnsureRowIsReadable(csv, result, ref rowNumber)) break;
+            if (!EnsureRowIsReadable(csv, errors, ref rowNumber)) break;
 
             rowNumber++;
             try
             {
-                result.AddRecord(build(csv));
+                records.Add(build(csv));
             }
             catch (Exception ex)
             {
-                result.AddError(new ExtractionError
-                {
-                    RowNumber  = rowNumber,
-                    DocumentId = csv.TryGetField<string>("DOCUMENT_ID", out var id) ? id : null,
-                    Message    = ex.Message,
-                });
+                errors.Add(new ExtractionError(
+                    RowNumber:  rowNumber,
+                    DocumentId: csv.TryGetField<string>("DOCUMENT_ID", out var id) ? id : null,
+                    Message:    ex.Message));
             }
         }
 
-        return result;
+        return new ExtractionResult<T> { Records = records, Errors = errors, Warnings = [] };
     }
 
     // Repeatedly calls csv.Read() until it gets a definitive answer: true (there's a
@@ -120,7 +120,7 @@ public class CsvExtractor : ICsvExtractor
 // 1. Call csv.Read() — this performs the real read/tokenize work.
 // 2. If it returns (either true = got a row, or false = EOF) → pass that straight back to the caller, done.
 // 3. If it instead throws — meaning the row was too broken to even tokenize — catch it, log an ExtractionError, and loop back to step 1 to try the next row instead of giving up.
-    private static bool EnsureRowIsReadable<T>(CsvReader csv, ExtractionResult<T> result, ref int rowNumber)
+    private static bool EnsureRowIsReadable(CsvReader csv, List<ExtractionError> errors, ref int rowNumber)
     {
         var failureStreak = 0;
         while (true)
@@ -132,7 +132,7 @@ public class CsvExtractor : ICsvExtractor
             catch (Exception ex)
             {
                 rowNumber++;
-                result.AddError(new ExtractionError { RowNumber = rowNumber, Message = $"Unreadable CSV row: {ex.Message}" });
+                errors.Add(new ExtractionError(RowNumber: rowNumber, DocumentId: null, Message: $"Unreadable CSV row: {ex.Message}"));
                 if (++failureStreak >= MaxConsecutiveReadFailures)
                     throw new InvalidOperationException(
                         $"{MaxConsecutiveReadFailures} consecutive unreadable rows around row {rowNumber} — input is not parseable CSV.", ex);

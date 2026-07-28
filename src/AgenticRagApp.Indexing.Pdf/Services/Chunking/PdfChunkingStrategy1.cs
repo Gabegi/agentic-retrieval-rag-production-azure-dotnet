@@ -1,5 +1,5 @@
 using System.Text;
-using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 

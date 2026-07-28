@@ -88,6 +88,35 @@ public class PdfIndexingFunction
         return client.CreateCheckStatusResponse(req, instanceId);
     }
 
+    // Manual-upload path (Zenya source connection isn't live yet) - the timer provides the
+    // cadence, ExtractAsync's own new/updated diff is the "check for changes" step, so no
+    // separate polling logic is needed here. Fixed instance ID makes this a singleton: a run
+    // longer than the timer interval just causes the next tick(s) to skip rather than overlap,
+    // which is what keeps SnapshotService's read-merge-write safe - runs never race each other.
+    //
+    // Commented out until Document Intelligence's private link is in place - without it every
+    // tick fails immediately (PdfExtractionPipeline can't resolve IPdfExtractor), spamming
+    // failed orchestration instances every 15 minutes for no benefit. Uncomment once DI is
+    // reachable.
+    // [Function("ScheduledIndexing")]
+    // public async Task RunScheduled(
+    //     [TimerTrigger("0 */15 * * * *")] TimerInfo timer,
+    //     [DurableClient] DurableTaskClient client)
+    // {
+    //     const string instanceId = "PdfIndexing";
+    //
+    //     var existing = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
+    //     if (existing is null
+    //         || existing.RuntimeStatus is OrchestrationRuntimeStatus.Completed
+    //             or OrchestrationRuntimeStatus.Failed
+    //             or OrchestrationRuntimeStatus.Terminated)
+    //     {
+    //         await client.ScheduleNewOrchestrationInstanceAsync(
+    //             "IndexingOrchestrator", new IndexRequest(false),
+    //             new StartOrchestrationOptions { InstanceId = instanceId });
+    //     }
+    // }
+
     [Function("IndexingOrchestrator")]
     public async Task RunOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)
     {
@@ -104,9 +133,9 @@ public class PdfIndexingFunction
 
         try
         {
-            extractResults = await context.CallActivityAsync<ExtractionResults>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, context.InstanceId));
-            chunkResults   = await context.CallActivityAsync<ChunkingResults>("ChunkActivity",               new ChunkRequest(docsBlob, chunksBlob, context.InstanceId));
-            embedResults   = await context.CallActivityAsync<EmbedUploadingResults>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, extractResults.StaleDocumentIds, context.InstanceId));
+            extractResults = await context.CallActivityAsync<ExtractionResults>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, context.InstanceId, startedAt));
+            chunkResults   = await context.CallActivityAsync<ChunkingResults>("ChunkActivity",               new ChunkRequest(docsBlob, chunksBlob, context.InstanceId, startedAt));
+            embedResults   = await context.CallActivityAsync<EmbedUploadingResults>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, extractResults.StaleDocumentIds, context.InstanceId, startedAt));
             success      = true;
         }
         catch (Exception ex)
@@ -118,7 +147,9 @@ public class PdfIndexingFunction
         // injected-dependency read inside orchestrator code, which Durable Functions'
         // determinism rules warn against. The activity itself is the right place to check.
         await context.CallActivityAsync("SaveIndexReportActivity",
-            BuildReport(context, startedAt, input, extractResults, chunkResults, embedResults, success, error));
+            PdfIndexRunReport.FromResults(
+                context.InstanceId, startedAt, context.CurrentUtcDateTime, input.ForceReindex,
+                extractResults, chunkResults, embedResults, success, error));
 
         if (!success)
             throw new InvalidOperationException(error ?? "Indexing pipeline failed");
@@ -136,7 +167,7 @@ public class PdfIndexingFunction
             await WriteBlobAsync(req.OutputBlob, docs, context.CancellationToken);
 
             await _artifactWriter.WriteArtifactAsync(
-                $"{req.InstanceId}/extraction.json", new { Docs = docs, Stats = stats }, context.CancellationToken);
+                $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/extraction.json", new { Docs = docs, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Extracted {Count} docs → {Blob}", docs.Count, req.OutputBlob);
             return stats;
@@ -145,7 +176,7 @@ public class PdfIndexingFunction
         {
             Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "extract"));
             _logger.LogError(ex, "ExtractActivity failed");
-            throw new InvalidOperationException($"ExtractActivity failed: {ex.Message}");
+            throw new InvalidOperationException($"ExtractActivity failed: {ex}");
         }
     }
 
@@ -155,13 +186,13 @@ public class PdfIndexingFunction
     {
         try
         {
-            var docs           = await ReadBlobAsync<List<ExtractionDocument>>(req.InputBlob, context.CancellationToken);
+            var docs           = await ReadBlobAsync<List<PdfExtractionDocument>>(req.InputBlob, context.CancellationToken);
             var (chunks, stats) = _chunkingService.ChunkDocuments(docs);
             await DeleteBlobAsync(req.InputBlob, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, chunks, context.CancellationToken);
 
             await _artifactWriter.WriteArtifactAsync(
-                $"{req.InstanceId}/chunking.json", new { Chunks = chunks, Stats = stats }, context.CancellationToken);
+                $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/chunking.json", new { Chunks = chunks, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks → {Blob}", docs.Count, chunks.Count, req.OutputBlob);
             return stats;
@@ -170,7 +201,7 @@ public class PdfIndexingFunction
         {
             Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "chunk"));
             _logger.LogError(ex, "ChunkActivity failed for '{InputBlob}'", req.InputBlob);
-            throw new InvalidOperationException($"ChunkActivity failed: {ex.Message}");
+            throw new InvalidOperationException($"ChunkActivity failed: {ex}");
         }
     }
 
@@ -198,7 +229,7 @@ public class PdfIndexingFunction
             var chunkSummaries = embeddedDocs
                 .Select(d => new { d.Id, d.DocumentId, d.ContentHash, Dims = d.ContentVector?.Length });
             await _artifactWriter.WriteArtifactAsync(
-                $"{req.InstanceId}/embedding.json",
+                $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/embedding.json",
                 new
                 {
                     Chunks = chunkSummaries,
@@ -246,7 +277,7 @@ public class PdfIndexingFunction
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "EmbedAndUploadActivity failed for '{ChunksBlob}'", req.ChunksBlob);
-            throw new InvalidOperationException($"EmbedAndUploadActivity failed: {ex.Message}");
+            throw new InvalidOperationException($"EmbedAndUploadActivity failed: {ex}");
         }
     }
 
@@ -256,7 +287,7 @@ public class PdfIndexingFunction
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"indexing/{report.StartedAt:yyyy/MM/dd}/{report.InstanceId}.json", report, context.CancellationToken);
+            $"indexing/{report.StartedAt:yyyy/MM/dd}/{report.StartedAt:HH-mm-ss}.json", report, context.CancellationToken);
         _logger.LogInformation(
             "Index run report saved — instance={InstanceId}, docs={Docs}, chunks={Chunks}, success={Success}",
             report.InstanceId, report.DocsToProcess, report.ChunksProduced, report.Success);
@@ -314,7 +345,7 @@ public class PdfIndexingFunction
         {
             Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "restore-recreate-index"));
             _logger.LogError(ex, "RecreateIndexActivity failed");
-            throw new InvalidOperationException($"RecreateIndexActivity failed: {ex.Message}");
+            throw new InvalidOperationException($"RecreateIndexActivity failed: {ex}");
         }
     }
 
@@ -329,7 +360,7 @@ public class PdfIndexingFunction
         {
             Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "restore-upload"));
             _logger.LogError(ex, "RestoreFromSnapshotActivity failed");
-            throw new InvalidOperationException($"RestoreFromSnapshotActivity failed: {ex.Message}");
+            throw new InvalidOperationException($"RestoreFromSnapshotActivity failed: {ex}");
         }
     }
 
@@ -339,7 +370,7 @@ public class PdfIndexingFunction
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"restore/{report.StartedAt:yyyy/MM/dd}/{report.InstanceId}.json", report, context.CancellationToken);
+            $"restore/{report.StartedAt:yyyy/MM/dd}/{report.StartedAt:HH-mm-ss}.json", report, context.CancellationToken);
         _logger.LogInformation(
             "Index restore report saved — instance={InstanceId}, restored={Restored}, success={Success}",
             report.InstanceId, report.ChunksRestored, report.Success);
@@ -378,61 +409,6 @@ public class PdfIndexingFunction
         return response;
     }
 
-    private static PdfIndexRunReport BuildReport(
-        TaskOrchestrationContext context,
-        DateTimeOffset           startedAt,
-        IndexRequest             input,
-        ExtractionResults?         ext,
-        ChunkingResults?              chunk,
-        EmbedUploadingResults?        embed,
-        bool                     success,
-        string?                  error) => new(
-            InstanceId:              context.InstanceId,
-            StartedAt:               startedAt,
-            FinishedAt:              context.CurrentUtcDateTime,
-            ForceReindex:            input.ForceReindex,
-            Success:                 success,
-            ErrorMessage:            error,
-            DocsToProcess:           ext?.DocsToProcess          ?? 0,
-            DocsSkipped:             ext?.DocsSkipped             ?? 0,
-            DocsNew:                 ext?.DocsNew                 ?? 0,
-            DocsUpdated:             ext?.DocsUpdated             ?? 0,
-            DocsDeleted:             ext?.DocsDeleted             ?? 0,
-            ChunksRemoved:           embed?.ChunksRemoved         ?? 0,
-            ValidationErrors:        ext?.ValidationErrors        ?? 0,
-            ValidationWarnings:      ext?.ValidationWarnings      ?? 0,
-            ReconciliationProblems:  ext?.ReconciliationProblems  ?? 0,
-            MojibakeRepairedPages:   ext?.MojibakeRepairedPages   ?? 0,
-            DetectedTableCount:      ext?.DetectedTableCount      ?? 0,
-            DocsWithoutHeadings:     ext?.DocsWithoutHeadings     ?? 0,
-            MissingTitleCount:       ext?.MissingTitleCount       ?? 0,
-            TraceabilityGapCount:    ext?.TraceabilityGapCount    ?? 0,
-            ChunksProduced:          chunk?.ChunksProduced        ?? 0,
-            DocsWithZeroChunks:      chunk?.DocsWithZeroChunks    ?? 0,
-            DuplicateChunks:         chunk?.DuplicateChunks       ?? 0,
-            MinChunkSizeChars:       chunk?.MinChunkSizeChars     ?? 0,
-            MaxChunkSizeChars:       chunk?.MaxChunkSizeChars     ?? 0,
-            AvgChunkSizeChars:       chunk?.AvgChunkSizeChars     ?? 0,
-            P95ChunkSizeChars:       chunk?.P95ChunkSizeChars     ?? 0,
-            BandUnder100:            chunk?.BandUnder100          ?? 0,
-            Band100To500:            chunk?.Band100To500          ?? 0,
-            Band500To1500:           chunk?.Band500To1500         ?? 0,
-            Band1500Plus:            chunk?.Band1500Plus          ?? 0,
-            CoherentChunks:          chunk?.CoherentChunks        ?? 0,
-            HeadingsDetected:        chunk?.HeadingsDetected      ?? 0,
-            ChunksTruncated:         embed?.ChunksTruncated       ?? 0,
-            VectorCacheHits:         embed?.VectorCacheHits       ?? 0,
-            EmbeddingRetries:        embed?.EmbeddingRetries      ?? 0,
-            VectorDimErrors:         embed?.VectorDimErrors       ?? 0,
-            TotalEmbeddingDurationMs: embed?.TotalEmbeddingDurationMs ?? 0,
-            DocsUploaded:                    embed?.DocsUploaded                  ?? 0,
-            DocsFailed:                      embed?.DocsFailed                    ?? 0,
-            IndexDocumentCountSnapshot:      embed?.IndexDocumentCountSnapshot,
-            IndexStorageSizeBytesSnapshot:   embed?.IndexStorageSizeBytesSnapshot,
-            Issues:                  ext?.Issues         ?? [],
-            RedFlags:                [.. ext?.RedFlags ?? [], .. embed?.RedFlags ?? []],
-            SpotCheckSample:         ext?.SpotCheckSample ?? []);
-
     private async Task WriteBlobAsync<T>(string blobPath, T data, CancellationToken ct)
     {
         await _blobStore.EnsureContainerExistsAsync(_pipelineContainer, ct);
@@ -457,6 +433,6 @@ public class PdfIndexingFunction
 }
 
 public record IndexRequest(bool ForceReindex);
-public record ExtractRequest(bool ForceReindex, string OutputBlob, string InstanceId);
-public record ChunkRequest(string InputBlob, string OutputBlob, string InstanceId);
-public record EmbedUploadRequest(string ChunksBlob, IReadOnlyList<string> StaleDocumentIds, string InstanceId);
+public record ExtractRequest(bool ForceReindex, string OutputBlob, string InstanceId, DateTimeOffset StartedAt);
+public record ChunkRequest(string InputBlob, string OutputBlob, string InstanceId, DateTimeOffset StartedAt);
+public record EmbedUploadRequest(string ChunksBlob, IReadOnlyList<string> StaleDocumentIds, string InstanceId, DateTimeOffset StartedAt);

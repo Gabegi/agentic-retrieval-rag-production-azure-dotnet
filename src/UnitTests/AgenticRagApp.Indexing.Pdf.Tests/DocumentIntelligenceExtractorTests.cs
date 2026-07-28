@@ -6,6 +6,7 @@ using Moq;
 using AgenticRagApp.Infrastructure.Clients.DocumentIntelligence;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Common.Models;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -46,8 +47,8 @@ public class DocumentIntelligenceExtractorTests
         return Encoding.ASCII.GetBytes(sb.ToString());
     }
 
-    private static DocumentIntelligenceExtractor BuildExtractor(IDocumentAnalysisClient diClient) =>
-        new(new PdfDocumentAnalyzer(diClient, NullLogger<PdfDocumentAnalyzer>.Instance));
+    private static PDFExtractor BuildExtractor(IDocumentAnalysisClient diClient) =>
+        new(new PdfDocumentIntelligenceAnalyzer(diClient, NullLogger<PdfDocumentIntelligenceAnalyzer>.Instance));
 
     [TestMethod]
     public async Task InvalidPdf_FailsAtPreflight_NeverCallsDocumentIntelligence()
@@ -80,7 +81,7 @@ public class DocumentIntelligenceExtractorTests
         // Native metadata (PdfPig-derived) is still captured before the DI call fails -
         // it doesn't depend on DI succeeding.
         Assert.IsNotNull(result.NativeMetadata);
-        Assert.AreEqual(1, result.AnalysisDiagnostics.Errors.Count);
+        Assert.AreEqual(1, result.DocumentIntelligenceDiagnostics.Errors.Count);
     }
 
     [TestMethod]

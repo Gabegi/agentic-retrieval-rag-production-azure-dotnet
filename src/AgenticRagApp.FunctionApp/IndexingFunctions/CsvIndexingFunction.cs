@@ -72,9 +72,9 @@ public class CsvIndexingFunction
 
         try
         {
-            extractResults = await context.CallActivityAsync<ExtractionResults>("CsvExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, context.InstanceId));
-            chunkResults   = await context.CallActivityAsync<ChunkingResults>("CsvChunkActivity",               new ChunkRequest(docsBlob, chunksBlob, context.InstanceId));
-            embedResults   = await context.CallActivityAsync<EmbedUploadingResults>("CsvEmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, extractResults.StaleDocumentIds, context.InstanceId));
+            extractResults = await context.CallActivityAsync<ExtractionResults>("CsvExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, context.InstanceId, startedAt));
+            chunkResults   = await context.CallActivityAsync<ChunkingResults>("CsvChunkActivity",               new ChunkRequest(docsBlob, chunksBlob, context.InstanceId, startedAt));
+            embedResults   = await context.CallActivityAsync<EmbedUploadingResults>("CsvEmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, extractResults.StaleDocumentIds, context.InstanceId, startedAt));
             success      = true;
         }
         catch (Exception ex)
@@ -95,7 +95,7 @@ public class CsvIndexingFunction
         await WriteBlobAsync(req.OutputBlob, docs, context.CancellationToken);
 
         await _artifactWriter.WriteArtifactAsync(
-            $"{req.InstanceId}/extraction.json", new { Docs = docs, Stats = stats }, context.CancellationToken);
+            $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/extraction.json", new { Docs = docs, Stats = stats }, context.CancellationToken);
 
         _logger.LogInformation("Extracted {Count} docs → {Blob}", docs.Count, req.OutputBlob);
         return stats;
@@ -109,7 +109,7 @@ public class CsvIndexingFunction
         await WriteBlobAsync(req.OutputBlob, chunks, context.CancellationToken);
 
         await _artifactWriter.WriteArtifactAsync(
-            $"{req.InstanceId}/chunking.json", new { Chunks = chunks, Stats = stats }, context.CancellationToken);
+            $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/chunking.json", new { Chunks = chunks, Stats = stats }, context.CancellationToken);
 
         _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks → {Blob}", docs.Count, chunks.Count, req.OutputBlob);
         return stats;
@@ -151,7 +151,7 @@ public class CsvIndexingFunction
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"indexing/{report.StartedAt:yyyy/MM/dd}/{report.InstanceId}.json", report, context.CancellationToken);
+            $"indexing/{report.StartedAt:yyyy/MM/dd}/{report.StartedAt:HH-mm-ss}.json", report, context.CancellationToken);
     }
 
     // TODO before activating: fill in the field mapping once CSV's ExtractionResults/
@@ -165,54 +165,56 @@ public class CsvIndexingFunction
         ChunkingResults?         chunk,
         EmbedUploadingResults?   embed,
         bool                     success,
-        string?                  error) => new(
-            InstanceId:              context.InstanceId,
-            StartedAt:               startedAt,
-            FinishedAt:              context.CurrentUtcDateTime,
-            ForceReindex:            input.ForceReindex,
-            Success:                 success,
-            ErrorMessage:            error,
-            DocsToProcess:           ext?.DocsToProcess          ?? 0,
-            DocsSkipped:             ext?.DocsSkipped             ?? 0,
-            DocsNew:                 ext?.DocsNew                 ?? 0,
-            DocsUpdated:             ext?.DocsUpdated             ?? 0,
-            DocsDeleted:             ext?.DocsDeleted             ?? 0,
-            ChunksRemoved:           embed?.ChunksRemoved         ?? 0,
-            ValidationErrors:        ext?.ValidationErrors        ?? 0,
-            ValidationWarnings:      ext?.ValidationWarnings      ?? 0,
-            ReconciliationProblems:  ext?.ReconciliationProblems  ?? 0,
-            StaleDocCount:           ext?.StaleDocCount           ?? 0,
-            MojibakeRepairedPages:   ext?.MojibakeRepairedPages   ?? 0,
-            DetectedTableCount:      ext?.DetectedTableCount      ?? 0,
-            DocsWithoutHeadings:     ext?.DocsWithoutHeadings     ?? 0,
-            MissingTitleCount:       ext?.MissingTitleCount       ?? 0,
-            MissingVersionCount:     ext?.MissingVersionCount     ?? 0,
-            MissingDepartmentCount:  ext?.MissingDepartmentCount  ?? 0,
-            ChunksProduced:          chunk?.ChunksProduced        ?? 0,
-            DocsWithZeroChunks:      chunk?.DocsWithZeroChunks    ?? 0,
-            DuplicateChunks:         chunk?.DuplicateChunks       ?? 0,
-            MinChunkSizeChars:       chunk?.MinChunkSizeChars     ?? 0,
-            MaxChunkSizeChars:       chunk?.MaxChunkSizeChars     ?? 0,
-            AvgChunkSizeChars:       chunk?.AvgChunkSizeChars     ?? 0,
-            P95ChunkSizeChars:       chunk?.P95ChunkSizeChars     ?? 0,
-            BandUnder100:            chunk?.BandUnder100          ?? 0,
-            Band100To500:            chunk?.Band100To500          ?? 0,
-            Band500To1500:           chunk?.Band500To1500         ?? 0,
-            Band1500Plus:            chunk?.Band1500Plus          ?? 0,
-            CoherentChunks:          chunk?.CoherentChunks        ?? 0,
-            HeadingsDetected:        chunk?.HeadingsDetected      ?? 0,
-            ChunksTruncated:         embed?.ChunksTruncated       ?? 0,
-            VectorCacheHits:         embed?.VectorCacheHits       ?? 0,
-            EmbeddingRetries:        embed?.EmbeddingRetries      ?? 0,
-            VectorDimErrors:         embed?.VectorDimErrors       ?? 0,
-            TotalEmbeddingDurationMs: embed?.TotalEmbeddingDurationMs ?? 0,
-            DocsUploaded:                  embed?.DocsUploaded                  ?? 0,
-            DocsFailed:                    embed?.DocsFailed                    ?? 0,
-            IndexDocumentCountSnapshot:    embed?.IndexDocumentCountSnapshot,
-            IndexStorageSizeBytesSnapshot: embed?.IndexStorageSizeBytesSnapshot,
-            Issues:                  ext?.Issues         ?? [],
-            RedFlags:                [.. ext?.RedFlags ?? [], .. embed?.RedFlags ?? []],
-            SpotCheckSample:         ext?.SpotCheckSample ?? []);
+        string?                  error) => new()
+        {
+            InstanceId              = context.InstanceId,
+            StartedAt               = startedAt,
+            FinishedAt              = context.CurrentUtcDateTime,
+            ForceReindex            = input.ForceReindex,
+            Success                 = success,
+            ErrorMessage            = error,
+            DocsToProcess           = ext?.DocsToProcess          ?? 0,
+            DocsSkipped             = ext?.DocsSkipped             ?? 0,
+            DocsNew                 = ext?.DocsNew                 ?? 0,
+            DocsUpdated             = ext?.DocsUpdated             ?? 0,
+            DocsDeleted             = ext?.DocsDeleted             ?? 0,
+            ChunksRemoved           = embed?.ChunksRemoved         ?? 0,
+            ValidationErrors        = ext?.ValidationErrors        ?? 0,
+            ValidationWarnings      = ext?.ValidationWarnings      ?? 0,
+            ReconciliationProblems  = ext?.ReconciliationProblems  ?? 0,
+            StaleDocCount           = ext?.StaleDocCount           ?? 0,
+            MojibakeRepairedPages   = ext?.MojibakeRepairedPages   ?? 0,
+            DetectedTableCount      = ext?.DetectedTableCount      ?? 0,
+            DocsWithoutHeadings     = ext?.DocsWithoutHeadings     ?? 0,
+            MissingTitleCount       = ext?.MissingTitleCount       ?? 0,
+            MissingVersionCount     = ext?.MissingVersionCount     ?? 0,
+            MissingDepartmentCount  = ext?.MissingDepartmentCount  ?? 0,
+            ChunksProduced          = chunk?.ChunksProduced        ?? 0,
+            DocsWithZeroChunks      = chunk?.DocsWithZeroChunks    ?? 0,
+            DuplicateChunks         = chunk?.DuplicateChunks       ?? 0,
+            MinChunkSizeChars       = chunk?.MinChunkSizeChars     ?? 0,
+            MaxChunkSizeChars       = chunk?.MaxChunkSizeChars     ?? 0,
+            AvgChunkSizeChars       = chunk?.AvgChunkSizeChars     ?? 0,
+            P95ChunkSizeChars       = chunk?.P95ChunkSizeChars     ?? 0,
+            BandUnder100            = chunk?.BandUnder100          ?? 0,
+            Band100To500            = chunk?.Band100To500          ?? 0,
+            Band500To1500           = chunk?.Band500To1500         ?? 0,
+            Band1500Plus            = chunk?.Band1500Plus          ?? 0,
+            CoherentChunks          = chunk?.CoherentChunks        ?? 0,
+            HeadingsDetected        = chunk?.HeadingsDetected      ?? 0,
+            ChunksTruncated         = embed?.ChunksTruncated       ?? 0,
+            VectorCacheHits         = embed?.VectorCacheHits       ?? 0,
+            EmbeddingRetries        = embed?.EmbeddingRetries      ?? 0,
+            VectorDimErrors         = embed?.VectorDimErrors       ?? 0,
+            TotalEmbeddingDurationMs = embed?.TotalEmbeddingDurationMs ?? 0,
+            DocsUploaded                  = embed?.DocsUploaded                  ?? 0,
+            DocsFailed                    = embed?.DocsFailed                    ?? 0,
+            IndexDocumentCountSnapshot    = embed?.IndexDocumentCountSnapshot,
+            IndexStorageSizeBytesSnapshot = embed?.IndexStorageSizeBytesSnapshot,
+            Issues                  = ext?.Issues         ?? [],
+            RedFlags                = [.. ext?.RedFlags ?? [], .. embed?.RedFlags ?? []],
+            SpotCheckSample         = ext?.SpotCheckSample ?? [],
+        };
 
     private async Task WriteBlobAsync<T>(string blobPath, T data, CancellationToken ct)
     {

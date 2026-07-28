@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 
@@ -43,7 +44,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // Durable's row-size limit).
     private const int MaxLoggedIssues = 100;
 
-    // Cap on ExtractionOutput.Issues to stay safely under Durable Table Storage's 64KB
+    // Cap on PdfExtractionOutput.Issues to stay safely under Durable Table Storage's 64KB
     // row-size limit — a different constraint from MaxLoggedIssues above, which just caps
     // log volume/cost. Coincidentally the same number today; not the same knob.
     private const int MaxReturnedIssues = 100;
@@ -76,8 +77,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         _logger         = logger;
     }
 
-    public async Task<ExtractionOutput> ExtractDocumentsAsync(
-        IReadOnlySet<string> sourceIdsToProcess, CancellationToken ct = default)
+    public async Task<PdfExtractionOutput> ExtractDocumentsAsync(
+        IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken ct = default)
     {
         var runAt = DateTimeOffset.UtcNow;
 
@@ -89,12 +90,15 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         List<PdfExtractionDiagnostics> diagnostics = new();
         PdfValidationReport?           validation  = null;
         PdfCleanResult?                cleanResult = null;
+        List<PDFExtractionResult>?     fileResults = null;
         Exception?                     failure     = null;
 
         try
         {
             // 1/ Extract Data from PDFs
-            var (fileResults, lastModifiedByBlob, zenyaByBlob) = await ExtractPdfsFromBlobAsync(sourceIdsToProcess, ct);
+            Dictionary<string, DateTimeOffset> lastModifiedByBlob;
+            Dictionary<string, ZenyaMetadata>  zenyaByBlob;
+            (fileResults, lastModifiedByBlob, zenyaByBlob) = await ExtractPdfsFromBlobAsync(sourceIdsToProcess, ct);
 
 
             // 2/ Clean pages
@@ -163,8 +167,9 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
                 try
                 {
-                    // must always run
-                    await WriteReportsAsync(runAt, validation, diagnostics, CancellationToken.None);
+                    // must always run - fileResults is never null here: it's assigned in
+                    // step 1, before validation (step 4) can be assigned at all.
+                    await WriteReportsAsync(runAt, validation, diagnostics, fileResults!, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -189,15 +194,15 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         }
     }
 
-    // Downloads and extracts every PDF blob in the container that's in sourceIdsToProcess,
-    // up to MaxExtractionParallelism at a time. One file's exception (network blip, an
-    // unexpected extractor bug) shouldn't abort the whole run — it becomes a file-level
-    // ExtractionError instead, same treatment TryOpenAndValidate already gives a corrupt
-    // PDF. Also captures each blob's storage LastModified — that's what downstream
-    // diffing in ExtractionService needs to detect new/updated/removed documents, not
-    // anything parsed out of the PDF's own text.
+    // Downloads and extracts every blob in sourceIdsToProcess, up to MaxExtractionParallelism at a
+    // time. One file's exception (network blip, an unexpected extractor bug) shouldn't abort
+    // the whole run — it becomes a file-level ExtractionError instead, same treatment
+    // TryOpenAndValidate already gives a corrupt PDF. sourceIdsToProcess already carries each
+    // blob's LastModified/ContentLength/Zenya metadata from ExtractionService's own
+    // pre-extraction listing/diff, so there's no need to list the container again here —
+    // just download and extract whatever's in the set.
     private async Task<(List<PDFExtractionResult> Results, Dictionary<string, DateTimeOffset> LastModified, Dictionary<string, ZenyaMetadata> Zenya)> ExtractPdfsFromBlobAsync(
-        IReadOnlySet<string> sourceIdsToProcess, CancellationToken ct)
+        IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken ct)
     {
         // Declares thread-safe collections:
         // One to accumulate per-blob extraction results => ConcurrentBag<T> is a thread-safe, unordered collection, multiple threads can call .Add() on it at once without locking
@@ -205,43 +210,16 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         var lastModified = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         var zenya        = new ConcurrentDictionary<string, ZenyaMetadata>(StringComparer.OrdinalIgnoreCase);
 
-
-        var blobs = await _blobStore.ListBlobsAsync(_container, ct: ct);
-
-        // Iterates through items in the container, for each one runs the download-and-extract
+        // Iterates through the entries to process, for each one runs the download-and-extract
         await Parallel.ForEachAsync(
-            blobs,
+            sourceIdsToProcess,
             new ParallelOptions { MaxDegreeOfParallelism = MaxExtractionParallelism, CancellationToken = ct },
-            async (blob, cancellationToken) =>
+            async (pair, cancellationToken) =>
             {
-                var (name, lastModifiedProp, contentLength, metadata) = blob;
+                var (name, entry) = pair;
 
-                // Skips any blob item whose name doesn't end in .pdf (case-insensitive), so non-PDF files in the container are ignored.
-                if (!name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) return;
-
-                // Already up to date in the index (per ExtractionService's own pre-extraction
-                // blob listing/diff) - skip the paid download + Document Intelligence call entirely.
-                if (!sourceIdsToProcess.Contains(name)) return;
-
-                zenya[name] = ZenyaMetadata.FromBlobMetadata(metadata);
-
-                // we need a lastmodified date to tell new/updated docs apart from unchanged ones.
-                // Recorded here, before the try block below, so failed downloads/extractions
-                // still get an entry. This dictionary only covers sourceIdsToProcess (the
-                // pre-extraction skip already happened above, in ExtractionService), so a
-                // failed file here simply produces no cleaned record and gets retried next
-                // run - its index last_modified_date never advances.
-                if (lastModifiedProp is { } modified)
-                {
-                    lastModified[name] = modified;
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "'{Blob}' has no LastModified from blob storage — treating as never-modified so it isn't reprocessed every run.",
-                        name);
-                    lastModified[name] = DateTimeOffset.MinValue;
-                }
+                lastModified[name] = entry.LastModified;
+                zenya[name]        = entry.Zenya;
 
                 // Try block covers the download too: a failed download for one blob must not
                 // abort the run - and under Parallel.ForEachAsync an uncaught exception would
@@ -269,8 +247,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Download or extraction failed for '{Blob}'; recording as a file-level error.", name);
-                    results.Add(new PDFExtractionResult(false, name, contentLength ?? 0, null, null, null, null, null, null,
-                        new ExtractionError { DocumentId = name, Message = ex.Message, Reason = PdfOpenFailureReason.Unknown }));
+                    results.Add(new PDFExtractionResult(false, name, entry.ContentLength ?? 0, null, null, null, null, null, null,
+                        new ExtractionError(RowNumber: 0, DocumentId: name, Message: ex.Message, Reason: PdfOpenFailureReason.Unknown)));
                 }
             });
 
@@ -285,7 +263,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // is only ever populated by the PdfPig backend, which has been removed; left in place
     // as a report slot for whichever backend picks that reporting back up.
     private async Task WriteReportsAsync(
-        DateTimeOffset runAt, PdfValidationReport report, List<PdfExtractionDiagnostics> diagnostics, CancellationToken ct)
+        DateTimeOffset runAt, PdfValidationReport report, List<PdfExtractionDiagnostics> diagnostics,
+        IReadOnlyList<PDFExtractionResult> fileResults, CancellationToken ct)
     {
         if (!_reportWriter.IsEnabled) return;
 
@@ -295,6 +274,25 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         if (diagnostics.Count > 0)
             await _reportWriter.WriteReportAsync(
                 $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-diagnostics.json", diagnostics, ct);
+
+        // PdfPig facts already read off each file's PdfDocument before it was disposed
+        // (FileSizeBytes/PdfSpecVersion from PdfDocumentValidator, NativeMetadata from
+        // PdfNativeMetadataExtractor) - none of it recomputed here, just the fields that
+        // otherwise get silently dropped (PdfExtractionDocument only carries a subset of
+        // NativeMetadata onward; Producer/Creator/Subject/Keywords never reach any report
+        // today). Useful for corpus-level QA: spec-version/size distribution across a run,
+        // and flagging docs with no Producer/Creator as a non-standard export path.
+        var fileFacts = fileResults.Select(f => new
+        {
+            f.BlobName,
+            f.Ok,
+            f.FileSizeBytes,
+            f.PdfSpecVersion,
+            f.NativeMetadata,
+        }).ToList();
+
+        await _reportWriter.WriteReportAsync(
+            $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-file-facts.json", fileFacts, ct);
     }
 
     private sealed record PdfExtractionFailureReport(
@@ -314,19 +312,19 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             ct);
     }
 
-    // Maps the validated, cleaned records into the source-agnostic ExtractionOutput
-    // returned to the caller. Several ExtractionOutput fields have no PDF equivalent and
+    // Maps the validated, cleaned records into the source-agnostic PdfExtractionOutput
+    // returned to the caller. Several PdfExtractionOutput fields have no PDF equivalent and
     // are always null here (not "verified zero") — see PdfValidationReport's own comment:
     // no Zenya attention-flag (StaleDocCount), no version data (MissingVersionCount -
     // nothing parses/populates Version for PDFs), and no folder/department concept
     // (MissingDepartmentCount).
     //
     // fileResults (chunking-rewrite-plan.md item #1) feeds the lookups below (items #2/#3)
-    // so real section breadcrumbs / DI structure / native metadata reach ExtractionDocument
+    // so real section breadcrumbs / DI structure / native metadata reach PdfExtractionDocument
     // as typed fields, instead of being discarded after validation reads Structure for its
     // own checks. FileSizeBytes/PdfSpecVersion/EstimatedCostUsd and PageErrors/Warnings are
-    // deliberately not threaded through - see ExtractionDocument's own comment for why.
-    private static ExtractionOutput BuildExtractionOutput(
+    // deliberately not threaded through - see PdfExtractionDocument's own comment for why.
+    private static PdfExtractionOutput BuildExtractionOutput(
         IReadOnlyList<PDFExtractionResult> fileResults,
         PdfValidationReport                report,
         PdfCleanResult                      cleanResult,
@@ -347,7 +345,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 var pageContext    = pageContextByKey.GetValueOrDefault((r.BlobName, r.PageNumber)) ?? PdfPageContext.Empty;
                 var zenya          = zenyaByBlob.GetValueOrDefault(r.BlobName) ?? ZenyaMetadata.Empty;
 
-                return new ExtractionDocument(
+                return new PdfExtractionDocument(
                     SourceId:              r.BlobName,
                     Ordinal:               r.PageNumber,
                     Content:               r.PageContent,
@@ -370,8 +368,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                     Dimensions:            pageContext.Dimensions,
                     SelectionMarks:        pageContext.SelectionMarks,
                     Figures:               pageContext.Figures,
-                    Lines:                 pageContext.Lines,
-                    AverageWordConfidence: pageContext.AverageWordConfidence);
+                    Lines:                 pageContext.Lines);
             })
             .ToList();
 
@@ -401,22 +398,23 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 $"{traceabilityGapCount} document(s) have no zenya_document_id blob metadata set — " +
                 "citations built from these will show a traceability gap (Citation.TraceabilityGap).");
 
-        return new ExtractionOutput(
-            Docs:                   extractionDocs,
-            ValidationErrors:       errors,
-            ValidationWarnings:     warnings,
-            ReconciliationProblems: report.ReconciliationProblems.Count,
-            StaleDocCount:          null,  // no Zenya attention-flag equivalent for PDFs
-            MojibakeRepairedPages:  report.MojibakeRepairedPages,
-            DetectedTableCount:     report.DetectedTableCount,
-            DocsWithoutHeadings:    report.DocumentsNeedingFallbackChunking.Count,
-            MissingTitleCount:      missingTitle,
-            MissingVersionCount:    missingVersionCount,
-            MissingDepartmentCount: null,  // no folder/department concept for PDFs
-            TraceabilityGapCount:   traceabilityGapCount,
-            Issues:                 issues,
-            RedFlags:               redFlags,
-            SpotCheckSample:        spotCheck);
+        return new PdfExtractionOutput(extractionDocs)
+        {
+            ValidationErrors       = errors,
+            ValidationWarnings     = warnings,
+            ReconciliationProblems = report.ReconciliationProblems.Count,
+            StaleDocCount          = null,  // no Zenya attention-flag equivalent for PDFs
+            MojibakeRepairedPages  = report.MojibakeRepairedPages,
+            DetectedTableCount     = report.DetectedTableCount,
+            DocsWithoutHeadings    = report.DocumentsNeedingFallbackChunking.Count,
+            MissingTitleCount      = missingTitle,
+            MissingVersionCount    = missingVersionCount,
+            MissingDepartmentCount = null,  // no folder/department concept for PDFs
+            TraceabilityGapCount   = traceabilityGapCount,
+            Issues                 = issues,
+            RedFlags               = redFlags,
+            SpotCheckSample        = spotCheck,
+        };
     }
 
     // File-level native PDF facts (Author, CreatedAt, PageCount, Bookmarks) - same value
@@ -430,7 +428,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
     // DI's semantic sections aren't page-scoped (a section's Elements can span pages), so
     // - like NativeMetadata above - this is file-level, duplicated across every page's
-    // ExtractionDocument rather than filtered per page.
+    // PdfExtractionDocument rather than filtered per page.
     private static Dictionary<string, IReadOnlyList<SectionInfo>> BuildSectionsLookup(
         IReadOnlyList<PDFExtractionResult> fileResults) =>
         fileResults
@@ -443,7 +441,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // Dosage"); Headings from Document Intelligence's own title/sectionHeading-role
     // paragraph detection, which works even when the PDF has no outline at all. List fields
     // default to real empty (DI looked and found none), not "unknown" - only
-    // Breadcrumb/Dimensions/AverageWordConfidence are genuinely nullable "no data" cases.
+    // Breadcrumb/Dimensions are genuinely nullable "no data" cases.
     private sealed record PdfPageContext(
         string?                          Breadcrumb,
         IReadOnlyList<Heading>           Headings,
@@ -452,10 +450,9 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         PageDimensions?                  Dimensions,
         IReadOnlyList<SelectionMarkInfo> SelectionMarks,
         IReadOnlyList<FigureInfo>        Figures,
-        IReadOnlyList<LineInfo>          Lines,
-        double?                          AverageWordConfidence)
+        IReadOnlyList<LineInfo>          Lines)
     {
-        public static readonly PdfPageContext Empty = new(null, [], [], [], null, [], [], [], null);
+        public static readonly PdfPageContext Empty = new(null, [], [], [], null, [], [], []);
     }
 
     // Sparse by design: only pages with at least one of these signals get an entry. A page
@@ -496,9 +493,6 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 .GroupBy(l => l.PageNumber)
                 .ToDictionary(g => g.Key, IReadOnlyList<LineInfo> (g) => g.ToList());
 
-            var qualityByPage = (file.Structure?.PageQuality ?? [])
-                .ToDictionary(q => q.PageNumber, q => q.AverageWordConfidence);
-
             var pageNumbers = file.SectionBreadcrumbs.Keys
                 .Concat(headingsByPage.Keys)
                 .Concat(boilerplateByPage.Keys)
@@ -507,20 +501,18 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 .Concat(selectionMarksByPage.Keys)
                 .Concat(figuresByPage.Keys)
                 .Concat(linesByPage.Keys)
-                .Concat(qualityByPage.Keys)
                 .Distinct();
 
             foreach (var pageNumber in pageNumbers)
                 lookup[(file.BlobName, pageNumber)] = new PdfPageContext(
-                    Breadcrumb:            file.SectionBreadcrumbs.GetValueOrDefault(pageNumber),
-                    Headings:              headingsByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Boilerplate:           boilerplateByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Tables:                tablesByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Dimensions:            dimensionsByPage.GetValueOrDefault(pageNumber),
-                    SelectionMarks:        selectionMarksByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Figures:               figuresByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Lines:                 linesByPage.GetValueOrDefault(pageNumber) ?? [],
-                    AverageWordConfidence: qualityByPage.TryGetValue(pageNumber, out var q) ? q : null);
+                    Breadcrumb:     file.SectionBreadcrumbs.GetValueOrDefault(pageNumber),
+                    Headings:       headingsByPage.GetValueOrDefault(pageNumber) ?? [],
+                    Boilerplate:    boilerplateByPage.GetValueOrDefault(pageNumber) ?? [],
+                    Tables:         tablesByPage.GetValueOrDefault(pageNumber) ?? [],
+                    Dimensions:     dimensionsByPage.GetValueOrDefault(pageNumber),
+                    SelectionMarks: selectionMarksByPage.GetValueOrDefault(pageNumber) ?? [],
+                    Figures:        figuresByPage.GetValueOrDefault(pageNumber) ?? [],
+                    Lines:          linesByPage.GetValueOrDefault(pageNumber) ?? []);
         }
 
         return lookup;

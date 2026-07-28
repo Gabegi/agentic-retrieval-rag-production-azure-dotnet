@@ -8,7 +8,7 @@ built a careful, well-engineered PdfPig pipeline, and the artifact of that effor
 trail of eight deferred, rejected, or placeholder features — five of which Document
 Intelligence solves natively, out of the box, in code you've already written. The one
 thing I'd still do before flipping the switch is a single `PdfBackendComparisonRunner`
-run over real Contoso samples (weighted toward table-heavy docs) as a confirmation
+run over real Cordaan samples (weighted toward table-heavy docs) as a confirmation
 gate, not a decision input.
 
 **Confidence: high.** The one finding that could reverse it: if the comparison run
@@ -128,7 +128,7 @@ wide margin.
 
 ## Recommended follow-ups (in order, none executed — nothing was committed)
 
-1. **Confirmation run:** point `PdfBackendComparisonRunner` at a real Contoso sample
+1. **Confirmation run:** point `PdfBackendComparisonRunner` at a real Cordaan sample
    batch weighted toward table-heavy and 1–2-page docs; expect table-flattening
    warnings and missing-title counts to separate the backends decisively.
 2. **Fix `CostPerPage` to `0.01m`** so all future cost telemetry is honest.

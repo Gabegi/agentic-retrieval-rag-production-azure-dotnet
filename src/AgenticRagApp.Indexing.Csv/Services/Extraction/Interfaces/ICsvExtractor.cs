@@ -1,4 +1,5 @@
 using AgenticRagApp.Indexing.Csv.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Csv.Services;
 

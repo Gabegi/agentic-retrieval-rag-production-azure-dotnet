@@ -15,8 +15,8 @@ public class PdfDocumentAnalyzerTests
 {
     // PdfDocumentAnalyzer.GetPages/GetPageQuality are instance methods (marked internal for
     // this test's benefit) but never touch _diClient - a Moq stub is enough, it's never invoked.
-    private static PdfDocumentAnalyzer BuildAnalyzer() =>
-        new(new Mock<IDocumentAnalysisClient>().Object, NullLogger<PdfDocumentAnalyzer>.Instance);
+    private static PdfDocumentIntelligenceAnalyzer BuildAnalyzer() =>
+        new(new Mock<IDocumentAnalysisClient>().Object, NullLogger<PdfDocumentIntelligenceAnalyzer>.Instance);
 
     // Builds a real, single-page Azure.AI.DocumentIntelligence.AnalyzeResult from hand-written
     // JSON via ModelReaderWriter - the SDK's own supported construction path for exactly this
@@ -49,7 +49,7 @@ public class PdfDocumentAnalyzerTests
     {
         var result = SinglePageResult("");
 
-        var (pages, warnings) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
+        var (pages, warnings, _) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
 
         Assert.AreEqual(1, pages.Count);
         Assert.AreEqual("", pages[0].PageContent);
@@ -61,7 +61,7 @@ public class PdfDocumentAnalyzerTests
     {
         var result = SinglePageResult("Some real page text.");
 
-        var (_, warnings) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
+        var (_, warnings, _) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
 
         Assert.IsFalse(warnings.Any(w => w.Code == "EmptyPageContent"));
     }
@@ -71,7 +71,7 @@ public class PdfDocumentAnalyzerTests
     {
         var result = SinglePageResult("<table><tr><td>a</td></tr>");
 
-        var (_, warnings) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
+        var (_, warnings, _) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
 
         Assert.IsTrue(warnings.Any(w => w.Code == "UnbalancedTableTags"));
     }
@@ -81,7 +81,7 @@ public class PdfDocumentAnalyzerTests
     {
         var result = SinglePageResult("<table><tr><td>a</td></tr></table>");
 
-        var (_, warnings) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
+        var (_, warnings, _) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
 
         Assert.IsFalse(warnings.Any(w => w.Code == "UnbalancedTableTags"));
     }
@@ -91,10 +91,10 @@ public class PdfDocumentAnalyzerTests
     {
         var result = SinglePageResult("My Title\n===\nBody text.");
 
-        var (pages, warnings) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
+        var (pages, _, infos) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
 
         StringAssert.StartsWith(pages[0].PageContent, "# My Title");
-        Assert.IsTrue(warnings.Any(w => w.Code == "SetextTitleNormalized" && w.Message!.Contains("1 page")));
+        Assert.IsTrue(infos.Any(w => w.Code == "SetextTitleNormalized" && w.Message!.Contains("1 page")));
     }
 
     [TestMethod]
@@ -103,43 +103,30 @@ public class PdfDocumentAnalyzerTests
         var content = "<!-- PageHeader=\"Confidential\" -->\nReal content.";
         var result  = SinglePageResult(content);
 
-        var (pages, warnings) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
+        var (pages, _, infos) = BuildAnalyzer().GetPages(result, "doc.pdf", "Title");
 
         Assert.AreEqual("Real content.", pages[0].PageContent);
-        Assert.IsTrue(warnings.Any(w => w.Code == "NoiseCommentsStripped"));
+        Assert.IsTrue(infos.Any(w => w.Code == "NoiseCommentsStripped"));
     }
 
     [TestMethod]
-    public void LowConfidencePage_ProducesWarning()
-    {
-        var result = SinglePageResult("garbled text", [(0.4, "garbled"), (0.5, "text")]);
-
-        var (quality, warnings) = BuildAnalyzer().GetPageQuality(result, "doc.pdf");
-
-        Assert.AreEqual(1, quality.Count);
-        Assert.IsTrue(warnings.Any(w => w.Code == "LowPageConfidence"));
-    }
-
-    [TestMethod]
-    public void HighConfidencePage_NoWarning()
-    {
-        var result = SinglePageResult("clean text", [(0.98, "clean"), (0.97, "text")]);
-
-        var (quality, warnings) = BuildAnalyzer().GetPageQuality(result, "doc.pdf");
-
-        Assert.AreEqual(1, quality.Count);
-        Assert.IsFalse(warnings.Any(w => w.Code == "LowPageConfidence"));
-    }
-
-    [TestMethod]
-    public void ZeroWordsOnPage_ProducesWarning_AndOmittedFromQuality()
+    public void ZeroWordsOnPage_ProducesWarning()
     {
         var result = SinglePageResult("");
 
-        var (quality, warnings) = BuildAnalyzer().GetPageQuality(result, "doc.pdf");
+        var warnings = PdfDocumentIntelligenceAnalyzer.GetZeroWordWarnings(result, "doc.pdf");
 
-        Assert.AreEqual(0, quality.Count);
         Assert.IsTrue(warnings.Any(w => w.Code == "ZeroWordsOnPage"));
+    }
+
+    [TestMethod]
+    public void PageWithWords_NoZeroWordsWarning()
+    {
+        var result = SinglePageResult("clean text", [(0.98, "clean"), (0.97, "text")]);
+
+        var warnings = PdfDocumentIntelligenceAnalyzer.GetZeroWordWarnings(result, "doc.pdf");
+
+        Assert.IsFalse(warnings.Any(w => w.Code == "ZeroWordsOnPage"));
     }
 
     [TestMethod]
@@ -147,7 +134,7 @@ public class PdfDocumentAnalyzerTests
     {
         var figures = new[] { new FigureInfo(null, 0, 1, "fig1", []) };
 
-        var warnings = PdfDocumentAnalyzer.StructureWarnings([], figures, pageCount: 1, blobName: "doc.pdf");
+        var warnings = PdfDocumentIntelligenceAnalyzer.StructureWarnings([], figures, blobName: "doc.pdf");
 
         Assert.IsTrue(warnings.Any(w => w.Code == "FiguresWithoutCaption"));
     }
@@ -157,7 +144,7 @@ public class PdfDocumentAnalyzerTests
     {
         var figures = new[] { new FigureInfo("A caption", 0, 1, "fig1", []) };
 
-        var warnings = PdfDocumentAnalyzer.StructureWarnings([], figures, pageCount: 1, blobName: "doc.pdf");
+        var warnings = PdfDocumentIntelligenceAnalyzer.StructureWarnings([], figures, blobName: "doc.pdf");
 
         Assert.IsFalse(warnings.Any(w => w.Code == "FiguresWithoutCaption"));
     }
@@ -165,9 +152,9 @@ public class PdfDocumentAnalyzerTests
     [TestMethod]
     public void MalformedTable_ProducesWarning()
     {
-        var tables = new[] { new TableInfo(RowCount: 0, ColumnCount: 0, Cells: [], Offset: 0, PageNumber: 1) };
+        var tables = new[] { new TableInfo(RowCount: 0, ColumnCount: 0, Cells: [], Offset: 0, PageNumber: 1, Caption: null, Footnotes: [], Regions: []) };
 
-        var warnings = PdfDocumentAnalyzer.StructureWarnings(tables, [], pageCount: 1, blobName: "doc.pdf");
+        var warnings = PdfDocumentIntelligenceAnalyzer.StructureWarnings(tables, [], blobName: "doc.pdf");
 
         Assert.IsTrue(warnings.Any(w => w.Code == "MalformedTable"));
     }
@@ -176,18 +163,23 @@ public class PdfDocumentAnalyzerTests
     public void WellFormedTable_NoMalformedWarning()
     {
         var cells  = new[] { new TableCellInfo(0, 0, "content", "a", null, null) };
-        var tables = new[] { new TableInfo(RowCount: 1, ColumnCount: 1, Cells: cells, Offset: 0, PageNumber: 1) };
+        var tables = new[] { new TableInfo(RowCount: 1, ColumnCount: 1, Cells: cells, Offset: 0, PageNumber: 1, Caption: null, Footnotes: [], Regions: []) };
 
-        var warnings = PdfDocumentAnalyzer.StructureWarnings(tables, [], pageCount: 1, blobName: "doc.pdf");
+        var warnings = PdfDocumentIntelligenceAnalyzer.StructureWarnings(tables, [], blobName: "doc.pdf");
 
         Assert.IsFalse(warnings.Any(w => w.Code == "MalformedTable"));
     }
 
     [TestMethod]
-    public void EstimatedCost_IsAlwaysEchoed()
+    [DataRow(0, 0.00, "0 page(s)")]
+    [DataRow(1, 0.01, "1 page(s)")]
+    [DataRow(10, 0.10, "10 page(s)")]
+    public void CostInfo_EchoesGivenCostAndPageCount(int pageCount, double estimatedCost, string expectedPageCount)
     {
-        var warnings = PdfDocumentAnalyzer.StructureWarnings([], [], pageCount: 10, blobName: "doc.pdf");
+        var info = PdfDocumentIntelligenceAnalyzer.CostInfo((decimal)estimatedCost, pageCount, "doc.pdf");
 
-        Assert.IsTrue(warnings.Any(w => w.Code == "EstimatedCost" && w.Message!.Contains("10 page(s)")));
+        Assert.AreEqual("EstimatedCost", info.Code);
+        StringAssert.Contains(info.Message, $"${estimatedCost:F2}");
+        StringAssert.Contains(info.Message, expectedPageCount);
     }
 }

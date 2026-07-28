@@ -11,7 +11,7 @@ namespace RagApp.UnitTests.CsvExtraction;
 [TestClass]
 public class UploadServiceTests
 {
-    private static ProtocolDocument Document(string id) => new() { Id = id, Content = "content" };
+    private static ChunkStatsSource Document(string id) => new() { Id = id, Content = "content" };
 
     private static Mock<IIndexDocumentService> MockIndexDocumentService(
         int succeeded, int failed,
@@ -21,7 +21,7 @@ public class UploadServiceTests
         Exception? statsException = null)
     {
         var mock = new Mock<IIndexDocumentService>();
-        mock.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<ProtocolDocument>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<ChunkStatsSource>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((succeeded, failed));
         mock.Setup(m => m.GetChunkIdsForDocumentsAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingChunkIds ?? []);

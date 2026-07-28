@@ -1,3 +1,5 @@
+using AgenticRagApp.Common.Models;
+
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // Mirrors CSV's ValidationReport. Drops StaleDocCount — Zenya's check_date_exceeded

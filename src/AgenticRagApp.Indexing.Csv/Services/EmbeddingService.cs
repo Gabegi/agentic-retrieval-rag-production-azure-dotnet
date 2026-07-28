@@ -27,7 +27,7 @@ public class EmbeddingService : IEmbeddingService
     }
 
     public async Task<EmbeddingRunResult> EmbedDocumentsAsync(
-        IEnumerable<ProtocolDocument> documents,
+        IEnumerable<ChunkStatsSource> documents,
         CancellationToken ct = default)
     {
         var docList   = documents.ToList();
@@ -49,7 +49,7 @@ public class EmbeddingService : IEmbeddingService
     }
 
     private async Task<BatchResult> EmbedBatchAsync(
-        IReadOnlyList<ProtocolDocument> batch, SemaphoreSlim semaphore, CancellationToken ct)
+        IReadOnlyList<ChunkStatsSource> batch, SemaphoreSlim semaphore, CancellationToken ct)
     {
         await semaphore.WaitAsync(ct);
         try
@@ -98,6 +98,6 @@ public class EmbeddingService : IEmbeddingService
         }
     }
 
-    private record EmbedChunkResult(ProtocolDocument Document, bool Truncated, bool DimError);
+    private record EmbedChunkResult(ChunkStatsSource Document, bool Truncated, bool DimError);
     private record BatchResult(List<EmbedChunkResult> Results, int Retries);
 }

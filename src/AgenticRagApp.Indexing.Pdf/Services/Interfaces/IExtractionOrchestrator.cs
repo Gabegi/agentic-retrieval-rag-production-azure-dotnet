@@ -9,8 +9,11 @@ public interface IExtractionOrchestrator
 {
     string Source { get; }  // "pdf"
 
-    // Extracts only the given source ids - ExtractionService has already listed what's in
-    // blob storage and diffed it against the index to determine these are the only ones
-    // that are new or changed. Ids outside this set produce no ExtractionDocuments.
-    Task<ExtractionOutput> ExtractDocumentsAsync(IReadOnlySet<string> sourceIdsToProcess, CancellationToken ct = default);
+    // Extracts only the given source entries - ExtractionService has already listed what's in
+    // blob storage (LastModified, ContentLength, Zenya metadata - see PdfBlobInfo) and
+    // diffed it against the index to determine these are the only ones that are new or
+    // changed. Passing the entries themselves (not just the ids) means the orchestrator never
+    // needs to list the container a second time. Ids outside this set produce no
+    // ExtractionDocuments.
+    Task<PdfExtractionOutput> ExtractDocumentsAsync(IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken ct = default);
 }

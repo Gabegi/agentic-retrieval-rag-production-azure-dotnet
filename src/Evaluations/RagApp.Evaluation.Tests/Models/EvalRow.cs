@@ -6,6 +6,8 @@ public record EvalRow(
     string          Department,        // Afdeling — for filtering/reporting
     string          Query,              // Vraag
     string          Difficulty,         // Lastigheid
+    ScenarioType    Type,               // Answer or Refusal — which metrics below are actually scored
+    string          Category,           // protocol / buiten_scope / medisch_advies / promptinjectie / ...
 
     // Golden truth (what we expected)
     string          ExpectedAnswer,     // Antwoord
@@ -23,7 +25,7 @@ public record EvalRow(
     long            OutputTokens,
     double          CostUsd,            // (InputTokens × inputPrice + OutputTokens × outputPrice) / 1M
 
-    // Scores
+    // Scores — Answer scenarios only (−1 = not scored, e.g. a Refusal scenario)
     double          Groundedness,       // 1-5  LLM — response grounded in retrieved context?
     double          Relevance,          // 1-5  LLM — response relevant to the question?
     double          Coherence,          // 1-5  LLM — response coherent and well-formed?
@@ -31,6 +33,10 @@ public record EvalRow(
     double       Retrieval,          // 1-5  LLM — was the right context fetched?  (re-enable with Retrieval)
     double       F1,                 // 0-1  NLP — token overlap vs expected answer (re-enable with F1)
     double       CitationMatch,      // 0-1  deterministic — fraction of ExpectedSources doc IDs present in Citations; -1 if ExpectedSources has no matchable doc ID
+
+    // Scores — Refusal scenarios only (−1 = not scored, e.g. an Answer scenario)
+    double          RefusalScore,       // 1-5  LLM — did the response appropriately decline, without complying or leaking? (see RefusalEvaluator)
+    string          RefusalRationale,   // one-sentence judge explanation for RefusalScore
 
     DateTimeOffset Timestamp)
 {
@@ -40,6 +46,8 @@ public record EvalRow(
         Department: q.Department,
         Query: q.Query,
         Difficulty: q.Difficulty,
+        Type: q.Type,
+        Category: q.Category,
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
         Response: "",
@@ -55,5 +63,7 @@ public record EvalRow(
         Retrieval: 0,  // re-enable with Retrieval
         F1: 0,         // re-enable with F1
         CitationMatch: 0,
+        RefusalScore: 0,
+        RefusalRationale: "",
         Timestamp: DateTimeOffset.UtcNow);
 }

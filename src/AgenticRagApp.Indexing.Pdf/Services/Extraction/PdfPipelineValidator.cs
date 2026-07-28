@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
@@ -80,6 +81,14 @@ public class PdfPipelineValidator : IPdfPipelineValidator
         // actually visible in validation-report.json instead of silently discarded.
         issues.AddRange(GetIssuesFromMetadataDiagnostics(fileResults));
 
+        // 3c. PdfDocumentValidator's own soft warnings (old PDF spec version, near the
+        // size/page-count limit, suspiciously-small file) - same "captured but never
+        // folded into a report" gap MetadataDiagnostics had above, now fixed the same way.
+        // Only Warnings here: ValidationDiagnostics.Errors mirrors file.Error, which
+        // SortResultsInto3Buckets above already counted - folding it in too would
+        // double-count the same hard failure.
+        issues.AddRange(GetIssuesFromValidationDiagnostics(fileResults));
+
         // 4. Checks difference between Extraction count and Cleaning count
         var diffExtractionNCleaning = CheckDiffExtractNCleaning(pagesExtraction, cleanResult);
         diffExtractionNCleaning.AddRange(similarNamingProblems);
@@ -151,7 +160,9 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     // validation bookkeeping needs this exact shape.
     private static ExtractionResult<PdfPageRecord> SortResultsInto3Buckets(IEnumerable<PDFExtractionResult> fileResults)
     {
-        var pages = new ExtractionResult<PdfPageRecord>();
+        var records  = new List<PdfPageRecord>();
+        var errors   = new List<ExtractionError>();
+        var warnings = new List<ExtractionWarning>();
 
         foreach (var file in fileResults)
         {
@@ -159,16 +170,16 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             // without this check the Add fails
             if (file.Error != null)
             {
-                pages.AddError(file.Error);
+                errors.Add(file.Error);
                 continue;
             }
 
-            foreach (var page in file.Pages!) pages.AddRecord(page); // Ok=true guarantees Pages is populated
-            foreach (var pageError in file.PageErrors) pages.AddError(pageError);
-            foreach (var warning in file.Warnings) pages.AddWarning(warning);
+            records.AddRange(file.Pages!); // Ok=true guarantees Pages is populated
+            errors.AddRange(file.PageErrors);
+            warnings.AddRange(file.Warnings);
         }
 
-        return pages;
+        return new ExtractionResult<PdfPageRecord> { Records = records, Errors = errors, Warnings = warnings };
     }
 
 
@@ -201,17 +212,17 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     {
         var issues = new List<ValidationIssue>();
 
-        issues.AddRange(pagesExtraction.Errors.Select(e => new ValidationIssue
-            { Stage = "Parse:Pages", Severity = "Error", DocumentId = e.DocumentId ?? "", Message = e.Message, Reason = e.Reason }));
+        issues.AddRange(pagesExtraction.Errors.Select(e => new ValidationIssue(
+            Stage: "Parse:Pages", Severity: "Error", DocumentId: e.DocumentId ?? "", Message: e.Message, Reason: e.Reason)));
 
-        issues.AddRange(pagesExtraction.Warnings.Select(w => new ValidationIssue
-            { Stage = "Parse:Pages", Severity = "Warning", DocumentId = w.DocumentId ?? "", Message = w.Message }));
+        issues.AddRange(pagesExtraction.Warnings.Select(w => new ValidationIssue(
+            Stage: "Parse:Pages", Severity: "Warning", DocumentId: w.DocumentId ?? "", Message: w.Message)));
 
-        issues.AddRange(cleanResult.Errors.Select(e => new ValidationIssue
-            { Stage = "Clean", Severity = "Error", DocumentId = e.DocumentId, Message = e.Message }));
+        issues.AddRange(cleanResult.Errors.Select(e => new ValidationIssue(
+            Stage: "Clean", Severity: "Error", DocumentId: e.DocumentId ?? "", Message: e.Message)));
 
-        issues.AddRange(cleanResult.Warnings.Select(w => new ValidationIssue
-            { Stage = "Clean", Severity = "Warning", DocumentId = w.DocumentId, Message = w.Message }));
+        issues.AddRange(cleanResult.Warnings.Select(w => new ValidationIssue(
+            Stage: "Clean", Severity: "Warning", DocumentId: w.DocumentId ?? "", Message: w.Message)));
 
         return issues;
     }
@@ -223,8 +234,16 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     private static List<ValidationIssue> GetIssuesFromMetadataDiagnostics(
         IReadOnlyList<PDFExtractionResult> fileResults) =>
         fileResults
-            .SelectMany(f => f.MetadataDiagnostics.Warnings.Select(w => new ValidationIssue
-                { Stage = "Metadata", Severity = "Warning", DocumentId = w.DocumentId ?? f.BlobName, Message = w.Message }))
+            .SelectMany(f => f.MetadataDiagnostics.Warnings.Select(w => new ValidationIssue(
+                Stage: "Metadata", Severity: "Warning", DocumentId: w.DocumentId ?? f.BlobName, Message: w.Message)))
+            .ToList();
+
+    // See 3c. above - always Severity="Warning", never gates the run.
+    private static List<ValidationIssue> GetIssuesFromValidationDiagnostics(
+        IReadOnlyList<PDFExtractionResult> fileResults) =>
+        fileResults
+            .SelectMany(f => f.ValidationDiagnostics.Warnings.Select(w => new ValidationIssue(
+                Stage: "Validation", Severity: "Warning", DocumentId: w.DocumentId ?? f.BlobName, Message: w.Message)))
             .ToList();
 
     // 4. Every extracted page must land in exactly one Clean bucket, an empty run never
@@ -307,9 +326,9 @@ public class PdfPipelineValidator : IPdfPipelineValidator
                 if (replacementCount > 0) parts.Add($"{replacementCount} U+FFFD char(s)");
                 if (corruptCharCount > 0) parts.Add($"{corruptCharCount} control/unassigned character(s)");
 
-                issues.Add(new ValidationIssue { Stage = "TextQuality", Severity = "Error",
-                    DocumentId = record.BlobName,
-                    Message    = $"Page {record.PageNumber}: {string.Join(", ", parts)} — source text is corrupted / likely encoding corruption." });
+                issues.Add(new ValidationIssue(Stage: "TextQuality", Severity: "Error",
+                    DocumentId: record.BlobName,
+                    Message:    $"Page {record.PageNumber}: {string.Join(", ", parts)} — source text is corrupted / likely encoding corruption."));
             }
         }
 
@@ -323,6 +342,15 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     // Skips short pages entirely. Warning-only: it gates nothing, so its only cost is
     // report noise — watch it in real runs and delete it if it stays noisy (see
     // MinTrigramRepeats).
+    //
+    // Reviewed against a real 3-doc/30-page run (2026-07-27): 10 warnings fired, 8 were
+    // ordinary Dutch phrase repetition ("op basis van", "in de wijk", "en e mail" etc.),
+    // not flattened tables. Only 2 pointed at genuinely repeating templated content (a
+    // checkbox list, a glossary), and even those read fine as prose. ~80% noise — this
+    // meets the "mostly wolf-crying" bar above. There's no DI ground truth for "a table
+    // it chose not to make," so a fix here would just swap this text-pattern guess for a
+    // geometry-based one (line-polygon column alignment), still a heuristic. Next time
+    // this comes up, delete the check rather than try to make the guess smarter.
     private static List<ValidationIssue> TableFlatteningCheck(
         PdfCleanResult cleanResult, IReadOnlyDictionary<string, PdfDocumentStructure>? structures)
     {
@@ -338,9 +366,9 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             var repeated = FindRepeatedTrigrams(record.PageContent);
             if (repeated.Count == 0) continue;
 
-            issues.Add(new ValidationIssue { Stage = "TableFlattening", Severity = "Warning",
-                DocumentId = record.BlobName,
-                Message    = $"Page {record.PageNumber}: possible flattened table — repeated phrase(s) {string.Join(", ", repeated.Take(3))}." });
+            issues.Add(new ValidationIssue(Stage: "TableFlattening", Severity: "Warning",
+                DocumentId: record.BlobName,
+                Message:    $"Page {record.PageNumber}: possible flattened table — repeated phrase(s) {string.Join(", ", repeated.Take(3))}."));
         }
 
         return issues;
@@ -380,13 +408,13 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             foreach (var table in structure.Tables)
             {
                 if (table.RowCount <= 0 || table.ColumnCount <= 0)
-                    issues.Add(new ValidationIssue { Stage = "TableStructure", Severity = "Warning",
-                        DocumentId = blobName,
-                        Message    = $"Table at offset {table.Offset}: reported {table.RowCount} row(s) x {table.ColumnCount} column(s) — malformed." });
+                    issues.Add(new ValidationIssue(Stage: "TableStructure", Severity: "Warning",
+                        DocumentId: blobName,
+                        Message:    $"Table at offset {table.Offset}: reported {table.RowCount} row(s) x {table.ColumnCount} column(s) — malformed."));
                 else if (table.Cells.Count == 0)
-                    issues.Add(new ValidationIssue { Stage = "TableStructure", Severity = "Warning",
-                        DocumentId = blobName,
-                        Message    = $"Table at offset {table.Offset}: {table.RowCount}x{table.ColumnCount} reported but no cell data was extracted." });
+                    issues.Add(new ValidationIssue(Stage: "TableStructure", Severity: "Warning",
+                        DocumentId: blobName,
+                        Message:    $"Table at offset {table.Offset}: {table.RowCount}x{table.ColumnCount} reported but no cell data was extracted."));
             }
         }
 
