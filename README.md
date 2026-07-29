@@ -1,34 +1,43 @@
 # agentic-retrieval-chunking
 
-Agentic Retrieval with Chunking strategies in .NET and Terraform using Azure AI Foundry and Azure AI Search.
+A production-shaped Retrieval-Augmented Generation (RAG) pipeline in .NET and Terraform, built around Azure AI Search's **agentic retrieval** (knowledge base) feature and Azure AI Foundry. The knowledge base plans its own search queries and synthesizes the final answer, so there's no separate hand-rolled retrieval + chat step in production.
 
-## What this is
+It indexes a mixed document corpus (CSV records and PDFs), with a validation/quality gate between extraction and indexing, and an automated evaluation harness that scores answer quality on every run.
 
-A RAG pipeline for Cordaan's internal Dutch-language document corpus (protocols, policies, work instructions), built on Azure AI Search's **agentic retrieval** (knowledge base) feature — the knowledge base plans its own search queries and synthesizes the final answer, so there's no separate hand-rolled retrieval + chat step in production.
+## Repository layout
 
-## Projects
+- **`src/AgenticRagApp.FunctionApp`** — Azure Functions app, the deployable entry point:
+  - `IndexingFunctions/CsvIndexingFunction.cs` and `PdfIndexingFunction.cs` — durable orchestrations that extract, chunk, embed, and write documents to Azure AI Search.
+  - `QueryingFunctions/QueryingFunction.cs` (`POST /api/query`) — answers questions via `AgenticRagQueryService`.
 
-- **`src/agentic-rag-app`** (`ProtocolsIndexer`) — Azure Functions app with two responsibilities:
-  - **Indexing pipeline**: extracts documents (CSV-based extraction), chunks them (`ChunkingStrategy1` — sentence-aware sliding window), embeds and writes them to Azure AI Search, and provisions the knowledge source/knowledge base (`KnowledgeService`).
-  - **Querying** (`QueryingFunction`, `POST /api/query`): answers questions via `AgenticRagQueryService`, which orchestrates a knowledge base retrieval call and delegates the rest to focused collaborators:
-    - `KnowledgeBaseReferenceMapper` — parses knowledge base references into `RetrievedChunk`s.
-    - `ChunkNeighborExpander` — fetches neighboring pages via a raw Search side-channel when an answer likely continues onto an adjacent page (page-boundary continuation fix).
-    - `KnowledgeBaseActivitySummary` — sums token usage from the knowledge base's per-step activity records.
-  - `Services/Querying/Classic/RagQueryService.cs` is the older one-shot hybrid-search-plus-chat path. It's parked (not wired into DI) in favor of agentic retrieval, kept around in case it's revisited.
+- **`src/AgenticRagApp.Indexing.Csv`** / **`src/AgenticRagApp.Indexing.Pdf`** — extraction, cleaning, and chunking pipelines for each document type. The PDF pipeline additionally validates extraction quality (`PdfPipelineValidator`) before anything is written to the index — a bad run fails closed instead of silently deleting good documents from a passed run.
 
-- **`src/RagApp.Evaluation.Tests`** — MSTest eval harness. `EvaluateGoldenQuery` runs every scenario in `testdata/golden-questions.json` through `AgenticRagQueryService` and scores it with Groundedness/Relevance/Coherence/Equivalence/Retrieval/F1 evaluators (`Microsoft.Extensions.AI.Evaluation`). Only Groundedness gates the build; the rest are tracked as trends. F1 is skipped (scored `-1`) for scenarios flagged `AnswerableFromCorpus: false` — known corpus gaps where the expected behavior is abstention, not a lexical match.
+- **`src/AgenticRagApp.Querying`** — `AgenticRagQueryService` orchestrates a knowledge base retrieval call and delegates the rest to focused collaborators:
+  - `KnowledgeBaseReferenceMapper` — parses knowledge base references into retrieved chunks.
+  - `ChunkNeighborExpander` — fetches neighboring pages via a raw Search side-channel when an answer likely continues onto an adjacent page.
+  - `KnowledgeBaseActivitySummary` — sums token usage from the knowledge base's per-step activity records.
 
-- **`src/scraper`** — scrapes source protocol documents ahead of indexing.
+- **`src/AgenticRagApp.Infrastructure`** — Azure clients (Search, Blob, Document Intelligence) and configuration.
 
-- **`infra/`** — Terraform for the full stack: resource group, Azure AI Search, Azure OpenAI, Document Intelligence, Storage, the indexer Function App, Log Analytics/monitoring.
+- **`src/AgenticRagApp.Observability`** — structured diagnostics/reporting shared across the indexing pipelines.
+
+- **`src/AgenticRagApp.Common`** — shared models used across projects.
+
+- **`src/Evaluations/RagApp.Evaluation.Tests`** — MSTest eval harness. Runs every scenario in `testdata/golden-questions.json` through `AgenticRagQueryService` and scores it with Groundedness/Relevance/Coherence/Equivalence/Retrieval/F1 evaluators (`Microsoft.Extensions.AI.Evaluation`). Only Groundedness gates the build; the rest are tracked as trends.
+
+- **`src/scraper`** — scrapes source documents ahead of indexing.
+
+- **`src/UnitTests`** — unit tests for the indexing, querying, and function-app layers.
+
+- **`infra/`** — Terraform for the full stack: resource group, Azure AI Search, Azure OpenAI, Document Intelligence, Storage, the Function App, and monitoring.
 
 ## Running the eval
 
 ```
-dotnet test src/RagApp.Evaluation.Tests/RagApp.Evaluation.Tests.csproj -c Release --filter "TestCategory=golden"
+dotnet test src/Evaluations/RagApp.Evaluation.Tests/RagApp.Evaluation.Tests.csproj -c Release --filter "TestCategory=golden"
 ```
 
-Requires `SEARCH_ENDPOINT`, `OPENAI_ENDPOINT`, `OPENAI_GPT_DEPLOYMENT`, etc. as environment variables (see `src/RagApp.Evaluation.Tests/.env.example` for the full list and dev values) and an Azure identity with Search/OpenAI access.
+Requires `SEARCH_ENDPOINT`, `OPENAI_ENDPOINT`, `OPENAI_GPT_DEPLOYMENT`, etc. as environment variables (see `src/Evaluations/RagApp.Evaluation.Tests/.env.example` for the full list) and an Azure identity with Search/OpenAI access.
 
 ## CI
 
@@ -36,8 +45,3 @@ Requires `SEARCH_ENDPOINT`, `OPENAI_ENDPOINT`, `OPENAI_GPT_DEPLOYMENT`, etc. as 
 - `2-scrape-protocols.yml` — runs the scraper.
 - `3-deploy-application.yml` — deploys the Function App.
 - `4-evaluate-rag.yml` — runs the golden eval suite against live infra.
-
-## Current status / known issues
-
-- **Quota**: the subscription used for `infra/` (`Visual Studio Enterprise Subscription – MPN`) currently has 0 TPM quota for `gpt-4.1`/`gpt-4o`/`text-embedding-3-large` under the `Standard` SKU tier, and 0 quota for the `P1v3` App Service Plan, in East US. As a workaround, the Azure OpenAI account (`azurerm_cognitive_account.openai` in `openai.tf`) is pinned to **West Europe** independently of the resource group's `eastus` location — Search/Storage/Function App stay in East US, only OpenAI moved. West Europe doesn't offer the plain `Standard` SKU for these models either, so all four deployments use **`GlobalStandard`** instead, which has ample available quota there (confirmed via `az cognitiveservices usage list --location westeurope`). Note `GlobalStandard` routes requests through Microsoft's global capacity pool rather than guaranteeing EU-only processing — worth revisiting for data-residency reasons given Cordaan's healthcare data. The App Service Plan quota issue was worked around by switching `function_app.tf`'s `azurerm_service_plan.func_indexer` from `P1v3` to **`EP1`** (Elastic Premium) — a different compute family, so it doesn't hit the same 0-quota wall, and unlike a Consumption (Y1) plan it keeps `always_on` and has no function timeout cap (important for long indexing runs). App Service Plan quota isn't self-service checkable via CLI, so this is unverified until the next `terraform apply`.
-- **`golden-questions.json`** doesn't yet have `AnswerableFromCorpus` set on its known corpus-gap scenarios (e.g. "verschilt per locatie" answers) — pending review.
