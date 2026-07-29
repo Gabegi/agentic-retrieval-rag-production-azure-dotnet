@@ -71,8 +71,25 @@ public class ExtractionService : IExtractionService
             id => id, id => sourceListing[id], StringComparer.OrdinalIgnoreCase);
         var extractionOutput = await _extractor.ExtractDocumentsAsync(entriesToProcess, ct);
 
+        // A document slated for update (sourceIdsToProcess) is only safe to mark stale if
+        // this run's extraction actually produced replacement content for it. Extraction
+        // failures don't fail the whole run on their own (PdfPipelineValidator's error-rate
+        // gate tolerates them) - without this filter, a single failed extraction on an
+        // updated document would still reach UploadService as "stale," which deletes every
+        // existing chunk for it with nothing to replace them, silently dropping that
+        // document from the index. Docs staged for deletion because they're removed from
+        // the source or Zenya-inactive were never added to sourceIdsToProcess, so they're
+        // unaffected by this filter - there's no replacement to wait for; they're actually
+        // gone from the source.
+        var extractedSourceIds = extractionOutput.Docs
+            .Select(d => d.SourceId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var staleDocumentIds = toDeleteChunks
+            .Where(id => !sourceIdsToProcess.Contains(id) || extractedSourceIds.Contains(id))
+            .ToList();
+
         var diff = new DiffResult(
-            _extractor.Source, extractionOutput, extractionOutput.Docs.ToList(), removedSourceIds, toDeleteChunks, newCount, updated, skipped);
+            _extractor.Source, extractionOutput, extractionOutput.Docs.ToList(), removedSourceIds, staleDocumentIds, newCount, updated, skipped);
 
         await EmitMetricsAndBuildReport(diff, ct);
 

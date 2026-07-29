@@ -37,6 +37,14 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // number read back from the service.
         private const decimal CostPerPage = 0.01m;
 
+        // GetLines is the bulkiest thing this class produces - one LineInfo per OCR line,
+        // across every page - and PdfDocumentStructure.Lines isn't persisted anywhere yet
+        // (dev reports only; see GetLines's own comment). Defaulted off so a large document
+        // doesn't pay that allocation for data nothing reads. Flip to true once source
+        // grounding (the future highlight-on-source join GetLines exists for) actually
+        // consumes it.
+        private const bool IncludeLines = false;
+
         // Backoff after *consecutive* retryable failures on the status poll (429, retryable
         // 5xx, transient network errors - see IsRetryablePollFailure), per Microsoft's
         // documented 2-5-13-34 pattern. A Retry-After header, when present and the failure
@@ -169,7 +177,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
                     PageDimensions: GetPageDimensions(analysis),
                     SelectionMarks: GetSelectionMarks(analysis),
                     Figures:        figures,
-                    Lines:          GetLines(analysis),
+                    Lines:          IncludeLines ? GetLines(analysis) : [],
                     Sections:       GetSections(analysis)),
                 estimatedCost,
                 null)
@@ -212,11 +220,28 @@ namespace AgenticRagApp.Indexing.Pdf.Services
             }
             finally
             {
-                Instrumentation.DiAnalyzeDuration.Record(sw.Elapsed.TotalSeconds);
+                Instrumentation.DiAnalyzeDuration.Record(
+                    sw.Elapsed.TotalSeconds,
+                    new KeyValuePair<string, object?>("page_bucket", PageBucket(pageCount)),
+                    new KeyValuePair<string, object?>("outcome", throttleRetries > 0 ? "throttled" : "clean"));
                 if (throttleRetries > 0)
                     Instrumentation.DiThrottleRetries.Add(throttleRetries);
             }
         }
+
+        // Buckets rather than raw page count: keeps the duration histogram's tag
+        // cardinality bounded while still letting per-page cost be read off per bucket,
+        // which a single unbucketed distribution mixing 3-page and 800-page documents
+        // can't give you - see AnalyzeBudgetPerPage's derivation.
+        private static string PageBucket(int pageCount) => pageCount switch
+        {
+            <= 0    => "unknown",
+            <= 10   => "1-10",
+            <= 50   => "11-50",
+            <= 200  => "51-200",
+            <= 1000 => "201-1000",
+            _       => "1000+",
+        };
 
         private readonly record struct PollResult(AnalyzeOutcome Outcome, int ThrottleRetries);
 
@@ -417,6 +442,11 @@ namespace AgenticRagApp.Indexing.Pdf.Services
             _                                                               => false,
         };
 
+        // Floor for a Retry-After-derived delay: a zero-second wait on a 429 is
+        // effectively no backoff at all, so a past date or a zero/negative delta still
+        // waits at least this long rather than retrying immediately.
+        private static readonly TimeSpan MinRetryAfter = TimeSpan.FromSeconds(1);
+
         // Retry-After is the service's own instruction and beats any fixed schedule.
         // Sent either as delta-seconds or as an HTTP-date; both are accepted here.
         private static TimeSpan? RetryAfter(RequestFailedException ex)
@@ -427,12 +457,12 @@ namespace AgenticRagApp.Indexing.Pdf.Services
                 return null;
 
             if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds))
-                return seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
+                return seconds > 0 ? TimeSpan.FromSeconds(seconds) : MinRetryAfter;
 
             if (DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var when))
             {
                 var delay = when - DateTimeOffset.UtcNow;
-                return delay > TimeSpan.Zero ? delay : TimeSpan.Zero;
+                return delay > TimeSpan.Zero ? delay : MinRetryAfter;
             }
 
             return null;

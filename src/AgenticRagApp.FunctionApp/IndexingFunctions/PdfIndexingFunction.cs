@@ -156,6 +156,20 @@ public class PdfIndexingFunction
     }
 
     // Step 1 — ensure index exists, run the extractor, serialise docs to blob, return stats
+    //
+    // This whole step is ONE Durable activity, and PdfExtractionPipeline fans out internally
+    // via Parallel.ForEachAsync (MaxExtractionParallelism = 8) rather than one CallActivityAsync
+    // per document. Durable only checkpoints at activity-call boundaries in the orchestrator, so
+    // a host death partway through this activity (EP1 scale-in/recycle, deployment, OOM) causes
+    // Durable to redeliver and rerun the whole activity from scratch - every document's Document
+    // Intelligence analysis already completed in that invocation gets re-submitted and re-billed,
+    // not just whatever was in flight at the moment of death. This is a deliberate POC trade-off,
+    // not an oversight: for a low-frequency-restart POC, the cost is an occasional rerun's worth
+    // of pages, which is cheap against restructuring the orchestrator. The fix, if this ever
+    // needs revisiting, is per-document fan-out in the orchestrator (Task.WhenAll over one
+    // CallActivityAsync per document instead of Parallel.ForEachAsync here), which also changes
+    // the output shape to per-document and needs RetryOptions + maxConcurrentActivityFunctions
+    // decided deliberately - see the extraction-optimisation review thread for the full design.
     [Function("ExtractActivity")]
     public async Task<ExtractionResults> ExtractActivity([ActivityTrigger] ExtractRequest req, FunctionContext context)
     {
