@@ -94,7 +94,7 @@ public class PdfExtractionPipelineTests
         var cleaner      = new Mock<IPdfCleaner>();
         cleaner.Setup(c => c.CleanPdf(It.IsAny<IReadOnlyList<PdfPageRecord>>())).Returns(OneRecordCleanResult("doc1.pdf"));
         var validator = new Mock<IPdfPipelineValidator>();
-        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<IReadOnlyList<PdfExtractionDiagnostics>?>()))
+        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfValidationReport { Passed = true, CleanedRecords = 1 });
         var env = MockEnvironmentImpl("Production");
 
@@ -115,7 +115,7 @@ public class PdfExtractionPipelineTests
         var cleaner      = new Mock<IPdfCleaner>();
         cleaner.Setup(c => c.CleanPdf(It.IsAny<IReadOnlyList<PdfPageRecord>>())).Returns(new PdfCleanResult());
         var validator = new Mock<IPdfPipelineValidator>();
-        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<IReadOnlyList<PdfExtractionDiagnostics>?>()))
+        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfValidationReport { Passed = true, CleanedRecords = 0 });
         var env = MockEnvironmentImpl("Production");
 
@@ -136,7 +136,7 @@ public class PdfExtractionPipelineTests
         var cleaner      = new Mock<IPdfCleaner>();
         cleaner.Setup(c => c.CleanPdf(It.IsAny<IReadOnlyList<PdfPageRecord>>())).Returns(OneRecordCleanResult("doc1.pdf"));
         var validator = new Mock<IPdfPipelineValidator>();
-        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<IReadOnlyList<PdfExtractionDiagnostics>?>()))
+        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfValidationReport { Passed = false, ReconciliationProblems = ["mismatch"] });
         var env = MockEnvironmentImpl("Production");
 
@@ -155,7 +155,7 @@ public class PdfExtractionPipelineTests
         var cleaner      = new Mock<IPdfCleaner>();
         cleaner.Setup(c => c.CleanPdf(It.IsAny<IReadOnlyList<PdfPageRecord>>())).Returns(OneRecordCleanResult("doc1.pdf"));
         var validator = new Mock<IPdfPipelineValidator>();
-        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<IReadOnlyList<PdfExtractionDiagnostics>?>()))
+        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfValidationReport { Passed = false, ReconciliationProblems = ["mismatch"], CleanedRecords = 1 });
         var env = MockEnvironmentImpl("Development");
 
@@ -175,7 +175,7 @@ public class PdfExtractionPipelineTests
         var cleaner      = new Mock<IPdfCleaner>();
         cleaner.Setup(c => c.CleanPdf(It.IsAny<IReadOnlyList<PdfPageRecord>>())).Returns(OneRecordCleanResult("doc1.pdf"));
         var validator = new Mock<IPdfPipelineValidator>();
-        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<IReadOnlyList<PdfExtractionDiagnostics>?>()))
+        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfValidationReport { Passed = true, CleanedRecords = 1 });
         var env = MockEnvironmentImpl("Production");
 
@@ -197,7 +197,7 @@ public class PdfExtractionPipelineTests
         var cleaner = new Mock<IPdfCleaner>();
         cleaner.Setup(c => c.CleanPdf(It.IsAny<IReadOnlyList<PdfPageRecord>>())).Returns(new PdfCleanResult());
         var validator = new Mock<IPdfPipelineValidator>();
-        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<IReadOnlyList<PdfExtractionDiagnostics>?>()))
+        validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PDFExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfValidationReport { Passed = true, CleanedRecords = 0 });
         var env = MockEnvironmentImpl("Production");
 
