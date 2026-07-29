@@ -132,7 +132,8 @@ public class PdfCleaner : IPdfCleaner
     {
         try
         {
-            var (content, mojibakeFixed) = CleanPageContent(page.PageContent ?? "");
+            var (content, mojibakeFixed, counts) = CleanPageContent(page.PageContent ?? "");
+            result.AddCleaningCounts(counts);
             content = ConvertTablesToMarkdown(content);
             content = ConvertFigures(content);
 
@@ -186,27 +187,37 @@ public class PdfCleaner : IPdfCleaner
     // pipeline (see CleanSinglePage) - it changes structure rather than repairing/stripping
     // characters, and it builds its own clean spacing, so it doesn't need to precede or be
     // followed by any of the character/whitespace passes below.
-    private static (string Content, bool MojibakeFixed) CleanPageContent(string raw)
+    private static (string Content, bool MojibakeFixed, PdfCleaningCounts Counts) CleanPageContent(string raw)
     {
         var text = raw.Replace("\r\n", "\n").Replace("\r", "\n");
 
         (text, var mojibakeFixed) = RepairMojibake(text);
 
+        var controlCharCount = ControlChars.Matches(text).Count;
         text = ControlChars.Replace(text, "");
+
+        var invisibleCharCount = InvisibleChars.Matches(text).Count;
         text = InvisibleChars.Replace(text, "");
+
+        var ligatureCount = 0;
         foreach (var (ligature, expansion) in LigatureExpansions)
+        {
+            ligatureCount += text.Count(c => c == ligature[0]);
             text = text.Replace(ligature, expansion);
+        }
         text = text.Replace('\u00A0', ' '); // NBSP -> plain space
 
         text = text.Normalize(NormalizationForm.FormC);
 
+        var hyphenJoinCount = LineBreakHyphenation.Matches(text).Count;
         text = LineBreakHyphenation.Replace(text, "");
 
         text = TrailingLineSpace.Replace(text, "\n");
         text = ExcessSpaces.Replace(text, " ");
         text = ExcessBlankLines.Replace(text, "\n\n");
 
-        return (text.Trim(), mojibakeFixed);
+        var counts = new PdfCleaningCounts(controlCharCount, invisibleCharCount, ligatureCount, hyphenJoinCount);
+        return (text.Trim(), mojibakeFixed, counts);
     }
 
     // Repairs the entire Windows-1252/UTF-8 mis-decode class in one round-trip

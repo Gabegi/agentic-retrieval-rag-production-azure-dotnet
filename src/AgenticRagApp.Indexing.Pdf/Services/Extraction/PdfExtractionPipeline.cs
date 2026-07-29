@@ -113,7 +113,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             diagnostics = fileResults.Select(f => f.Diagnostics).OfType<PdfExtractionDiagnostics>().ToList();
 
             // 4/ Validate results
-            validation = _validator.Validate(fileResults, cleanResult, previousCount, diagnostics);
+            validation = _validator.Validate(fileResults, cleanResult, previousCount);
 
             // 5/ Validation Gate — reconciliation problems only (magnitude-shift is
             // advisory-only, see PdfPipelineValidator's tiering comment; report.Passed
@@ -549,6 +549,13 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
         _logger.LogInformation("PDF validation {Result} — {Cleaned} records, {Issues} issues",
             report.Passed ? "passed" : "failed", report.CleanedRecords, report.Issues.Count);
+
+        _logger.LogInformation(
+            "PDF cleaning this run: {Mojibake} mojibake page(s), {ControlChars} control char(s), " +
+            "{InvisibleChars} invisible char(s), {Ligatures} ligature(s), {HyphenJoins} hyphenation join(s) — " +
+            "all zero means the source had nothing to clean, not that cleaning didn't run.",
+            report.MojibakeRepairedPages, report.ControlCharsStripped, report.InvisibleCharsStripped,
+            report.LigaturesExpanded, report.HyphenationJoinsRepaired);
 
         foreach (var issue in report.Issues.Take(MaxLoggedIssues))
             _logger.Log(

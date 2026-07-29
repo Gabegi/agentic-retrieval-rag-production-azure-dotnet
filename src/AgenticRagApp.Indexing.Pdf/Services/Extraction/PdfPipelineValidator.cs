@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Common.Models;
@@ -8,52 +10,56 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // Quality gate between extraction and the index. Mirrors PipelineValidator.cs's checks
 // and pass/fail algorithm, adapted to the PDF models.
 //
-// The checks fall into three tiers — the tier decides where a finding lands:
+// The checks fall into three tiers, and the tier decides where a finding lands:
 //   HARD GATES  (-> ReconciliationProblems; fail the run):
-//     pipeline invariants and corpus-level sanity. These exist because the diff step
-//     downstream DELETES whatever is missing from a passed run — a bad run that
+//     pipeline invariants and corpus level sanity. These exist because the diff step
+//     downstream DELETES whatever is missing from a passed run: a bad run that
 //     passes doesn't just index garbage, it removes good documents from the index.
-//   QUALITY ISSUES (-> Issues; gate only via the aggregate error-rate threshold):
-//     per-page signals (encoding corruption, malformed tables).
+//   QUALITY ISSUES (-> Issues; gate only via the aggregate error rate threshold):
+//     per page signals (encoding corruption, malformed tables).
 //   ADVISORY (-> RedFlags / MagnitudeWarnings / report fields; never gate):
-//     trends and chunking hints (table counts, heading coverage, spot-check sample).
-//     MagnitudeWarnings (run-over-run record-count shift) lives here too — it's noisy
-//     against a corpus that's mostly stable extraction-skip runs, so it's surfaced for
+//     trends and chunking hints (table counts, heading coverage, spot check sample).
+//     MagnitudeWarnings (run over run record count shift) lives here too: it's noisy
+//     against a corpus that's mostly stable extraction skip runs, so it's surfaced for
 //     a human to read, not enforced.
 //
 // Differences from CSV's validator:
-//   - No CheckDateExceeded red flag — no attention-flags data source for PDFs.
-//   - PDF-only: table-flattening heuristic (see TableFlatteningCheck) and table
-//     structure checks read from DI's own table data.
+//   - No CheckDateExceeded red flag; no attention flags data source for PDFs.
+//   - PDF only: table structure checks read from DI's own table data.
+//
+// The table flattening heuristic (repeated trigram detection) was deleted: a real
+// 3 doc / 30 page run produced 10 warnings of which 8 were ordinary Dutch phrase
+// repetition, so roughly 80% noise. It gated nothing, and there is no DI ground truth
+// for "a table it chose not to make", so any replacement would be another heuristic.
+// Do not reintroduce it without such ground truth.
 public class PdfPipelineValidator : IPdfPipelineValidator
 {
     private const double MaxAcceptableErrorRatePercent      = 1.0;
     private const double MaxAcceptableMagnitudeShiftPercent = 20.0;
     private const int    SpotCheckSampleSize                = 5;
-    private const char   ReplacementChar                    = '�';
+    private const int    ReplacementCodePoint               = 0xFFFD;
 
-    // A trigram must repeat at least this many times on one page before it's flagged as
-    // possible table flattening. 2 was the spike's value and false-positives on
-    // legitimately repetitive protocol prose ("de cliënt moet ..."); 3 trades a little
-    // sensitivity for a lot less noise. Tune against real runs — if the flattening
-    // warnings are still mostly wolf-crying at 3, delete the whole check rather than
-    // keep raising this.
-    private const int MinTrigramRepeats = 3;
-
-    // Pages shorter than this can't meaningfully contain a flattened table; skip them.
-    private const int MinWordsForFlatteningCheck = 30;
+    // Corruption promotion thresholds. A single stray U+FFFD in a 3000 character page is
+    // not a corrupt page, but it used to fail one page's worth of the 1% error budget.
+    // A page is an Error only once corruption is either absolutely (>= 3 chars) or
+    // relatively (> 0.1% of the page) significant; anything below that is a Warning.
+    private const int    MinCorruptCharsForError    = 3;
+    private const double MaxAcceptableCorruptRatio  = 0.001;
 
     private static readonly Regex MarkdownHeading =
         new(@"^#{1,6}\s", RegexOptions.Multiline | RegexOptions.Compiled);
 
-    private static readonly Regex NonWordChars =
-        new(@"[^\w\s]", RegexOptions.Compiled);
+    // Shared key comparer for (BlobName, PageNumber) lookups. Azure Blob Storage allows
+    // "Report.pdf" and "report.pdf" in the same container, and every lookup in this file
+    // treats them as the same document. Using a comparer rather than ToUpperInvariant()
+    // per record avoids a string allocation per page in every keyed pass.
+    private static readonly BlobPageComparer PageKeyComparer = new();
 
     public PdfValidationReport Validate(
-        IReadOnlyList<PDFExtractionResult>        fileResults,
-        PdfCleanResult                             cleanResult,
-        int?                                       previousRunCleanedCount = null,
-        IReadOnlyList<PdfExtractionDiagnostics>?   diagnostics = null)
+        IReadOnlyList<PDFExtractionResult> fileResults,
+        PdfCleanResult                     cleanResult,
+        int?                               previousRunCleanedCount = null,
+        int?                               spotCheckSeed           = null)
     {
         // 1. Puts things into 3 buckets:
             // - Records = pages from files that extracted successfully.
@@ -62,7 +68,7 @@ public class PdfPipelineValidator : IPdfPipelineValidator
         var pagesExtraction = SortResultsInto3Buckets(fileResults);
 
         // 2. dictionary of document structure per blob name (key)
-        var (structures, similarNamingProblems) = GetDocumentStructure(fileResults);
+        var (structures, collisionProblems) = GetDocumentStructure(fileResults);
 
         var redFlags = new List<string>();
 
@@ -71,71 +77,54 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             // - Cleaning
         var issues = GetIssuesFromExtractionNCleaning(pagesExtraction, cleanResult);
 
-        // 3b. Native-metadata diagnostics (PdfNativeMetadataExtractor's missing-Title/
-        // Author/Producer and unparseable-CreationDate/ModDate warnings, plus the
-        // bookmark-count note) - file-level, so read straight off fileResults rather than
+        // 3b. Native metadata diagnostics (PdfNativeMetadataExtractor's missing Title/
+        // Author/Producer and unparseable CreationDate/ModDate warnings, plus the
+        // bookmark count note). File level, so read straight off fileResults rather than
         // pagesExtraction. Previously captured into MetadataDiagnostics but never folded
         // into a report anywhere (see PDFExtractionResult.MetadataDiagnostics's own
-        // comment) - added here as advisory Warnings, same severity tier as the Parse/
+        // comment), added here as advisory Warnings, same severity tier as the Parse/
         // Clean warnings above, so a run missing native metadata on several files is
         // actually visible in validation-report.json instead of silently discarded.
         issues.AddRange(GetIssuesFromMetadataDiagnostics(fileResults));
 
         // 3c. PdfDocumentValidator's own soft warnings (old PDF spec version, near the
-        // size/page-count limit, suspiciously-small file) - same "captured but never
+        // size/page count limit, suspiciously small file), the same "captured but never
         // folded into a report" gap MetadataDiagnostics had above, now fixed the same way.
         // Only Warnings here: ValidationDiagnostics.Errors mirrors file.Error, which
-        // SortResultsInto3Buckets above already counted - folding it in too would
-        // double-count the same hard failure.
+        // SortResultsInto3Buckets above already counted, so folding it in too would
+        // double count the same hard failure.
         issues.AddRange(GetIssuesFromValidationDiagnostics(fileResults));
 
         // 4. Checks difference between Extraction count and Cleaning count
         var diffExtractionNCleaning = CheckDiffExtractNCleaning(pagesExtraction, cleanResult);
-        diffExtractionNCleaning.AddRange(similarNamingProblems);
+        diffExtractionNCleaning.AddRange(collisionProblems);
 
         // 5. Checks difference between Cleaning and Previous Run
         var diffCleaningNPreviousRun = CheckDiffCleanNPreviousRun(cleanResult, previousRunCleanedCount);
 
-        // 6. Per-page text quality (U+FFFD, control/unassigned chars).
+        // 6. Per page text quality (U+FFFD, control/unassigned scalars, unpaired surrogates).
         issues.AddRange(TextQualityCheck(cleanResult));
 
-        // 7. Tables collapsed into repeated-phrase prose during extraction.
-        issues.AddRange(TableFlatteningCheck(cleanResult, structures));
-
-        // 8. Table structure issues, from DI's own table data — not a text-pattern guess.
+        // 7. Table structure issues, from DI's own table data, not a text pattern guess.
         issues.AddRange(TableStructureQualityCheck(structures));
 
-        // 9. ADVISORY: total tables detected this run — trended over time, not gated.
+        // 8. ADVISORY: total tables detected this run, trended over time, not gated.
         var detectedTableCount = CountDetectedTables(structures);
 
-        // 10. ADVISORY: documents with zero headings across every page need fallback chunking.
+        // 9. ADVISORY: documents with zero headings across every page need fallback chunking.
         var docsWithNoPagesWithHeadings = DocsWithNoPagesWithHeading(cleanResult);
         if (docsWithNoPagesWithHeadings.Count > 0)
-            redFlags.Add($"{docsWithNoPagesWithHeadings.Count} document(s) have no markdown headings — need fallback chunking.");
+            redFlags.Add($"{docsWithNoPagesWithHeadings.Count} document(s) have no markdown headings, need fallback chunking.");
 
-        // 11. ADVISORY, currently dormant: only fires if a backend populates
-        // PdfFileExtraction.Diagnostics again (nothing does since PdfPig was removed).
-        // Kept as the report slot for whichever backend picks decoration detection back up.
-        if (diagnostics is { Count: > 0 })
-        {
-            var noDecorationCount = diagnostics.Count(d => !d.DecorationDetectionRan);
-            if (noDecorationCount > 0)
-                redFlags.Add(
-                    $"{noDecorationCount} document(s) got no header/footer stripping — too few pages for decoration detection.");
-        }
+        // 10. ADVISORY: deterministic sample for human review.
+        var sample = BuildRandomCheckSample(cleanResult, spotCheckSeed);
 
-        // 12. ADVISORY: random sample for human review.
-        var sample = BuildRandomCheckSample(cleanResult);
+        // 10b. ADVISORY, dev only: same sampled pages, paired with their pre clean raw
+        // content. See CleaningSpotCheckEntry's comment for why this exists alongside 10.
+        var cleaningSample = BuildCleaningSpotCheckSample(sample, pagesExtraction.Records);
 
-        // 13. Final pass/fail. Error rate is per ATTEMPTED page, so file-level failures
-        // (which contribute errors but no pages) still count against the denominator.
-        var errorCount     = issues.Count(i => i.Severity == "Error");
-        var totalAttempted = pagesExtraction.RowsAttempted;
-        var errorRate      = totalAttempted == 0 ? 100.0 : 100.0 * errorCount / totalAttempted;
-
-        // Magnitude shift never gates - diffCleaningNPreviousRun still computed above and
-        // surfaced via MagnitudeWarnings, just not folded into Passed.
-        var passed = errorRate <= MaxAcceptableErrorRatePercent && diffExtractionNCleaning.Count == 0;
+        // 11. Final pass/fail.
+        var passed = EvaluateGate(issues, pagesExtraction.RowsAttempted, diffExtractionNCleaning);
 
         return new PdfValidationReport
         {
@@ -150,13 +139,18 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             DocumentsNeedingFallbackChunking = docsWithNoPagesWithHeadings,
             MojibakeRepairedPages            = cleanResult.MojibakeRepairedPages,
             DetectedTableCount               = detectedTableCount,
+            ControlCharsStripped             = cleanResult.ControlCharsStripped,
+            InvisibleCharsStripped           = cleanResult.InvisibleCharsStripped,
+            LigaturesExpanded                = cleanResult.LigaturesExpanded,
+            HyphenationJoinsRepaired         = cleanResult.HyphenationJoinsRepaired,
+            CleaningSpotCheckSample          = cleaningSample,
             Passed                           = passed,
         };
     }
 
-        // 1. Folds per-file PDFExtractionResult results into the batch-level shape the checks
-    // operate on. A file-level extraction error is recorded once; a file that failed to
-    // parse contributes nothing else. Validator-private on purpose — nothing but
+    // 1. Folds per file PDFExtractionResult results into the batch level shape the checks
+    // operate on. A file level extraction error is recorded once; a file that failed to
+    // parse contributes nothing else. Validator private on purpose: nothing but
     // validation bookkeeping needs this exact shape.
     private static ExtractionResult<PdfPageRecord> SortResultsInto3Buckets(IEnumerable<PDFExtractionResult> fileResults)
     {
@@ -182,10 +176,8 @@ public class PdfPipelineValidator : IPdfPipelineValidator
         return new ExtractionResult<PdfPageRecord> { Records = records, Errors = errors, Warnings = warnings };
     }
 
-
-
     // 2. Azure Blob Storage allows both "Report.pdf" and "report.pdf" in the same container,
-    // but this lookup is case-insensitive, so they'd collide. ToDictionary would throw and
+    // but this lookup is case insensitive, so they'd collide. ToDictionary would throw and
     // crash the run on that collision; TryAdd below just logs it as a reconciliation
     // problem instead.
     private static (Dictionary<string, PdfDocumentStructure> Structures, List<string> CollisionProblems) GetDocumentStructure(
@@ -198,7 +190,7 @@ public class PdfPipelineValidator : IPdfPipelineValidator
         {
             if (!structures.TryAdd(file.BlobName, file.Structure!))
                 collisionProblems.Add(
-                    $"Blob name '{file.BlobName}' collides case-insensitively with another blob in this run — structure data for one was dropped.");
+                    $"Blob name '{file.BlobName}' collides case insensitively with another blob in this run, structure data for one was dropped.");
         }
 
         return (structures, collisionProblems);
@@ -228,9 +220,9 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     }
 
     // 3b. Folds each file's MetadataDiagnostics.Warnings (native Title/Author/Producer/
-    // CreationDate/ModDate/bookmark-count facts - see PdfNativeMetadataExtractor) into the
-    // same Issues list the Parse/Clean warnings land in. Always Severity="Warning" - never
-    // gates the run (errorRate above only counts Severity="Error"), purely advisory.
+    // CreationDate/ModDate/bookmark count facts, see PdfNativeMetadataExtractor) into the
+    // same Issues list the Parse/Clean warnings land in. Always Severity="Warning", never
+    // gates the run (EvaluateGate only counts Severity="Error"), purely advisory.
     private static List<ValidationIssue> GetIssuesFromMetadataDiagnostics(
         IReadOnlyList<PDFExtractionResult> fileResults) =>
         fileResults
@@ -238,7 +230,7 @@ public class PdfPipelineValidator : IPdfPipelineValidator
                 Stage: "Metadata", Severity: "Warning", DocumentId: w.DocumentId ?? f.BlobName, Message: w.Message)))
             .ToList();
 
-    // See 3c. above - always Severity="Warning", never gates the run.
+    // See 3c. above, always Severity="Warning", never gates the run.
     private static List<ValidationIssue> GetIssuesFromValidationDiagnostics(
         IReadOnlyList<PDFExtractionResult> fileResults) =>
         fileResults
@@ -249,7 +241,7 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     // 4. Every extracted page must land in exactly one Clean bucket, an empty run never
     // passes (the diff step would delete the entire index), and the extractor must not
     // produce duplicate (BlobName, PageNumber) pairs. Duplicates land in reconciliation
-    // (not Issues) so no error-rate threshold can let them slip through — this is the
+    // (not Issues) so no error rate threshold can let them slip through: this is the
     // sole enforcement of that invariant, checked against pagesExtraction so the
     // "extractor" attribution stays honest regardless of what Clean does.
     private static List<string> CheckDiffExtractNCleaning(
@@ -264,13 +256,14 @@ public class PdfPipelineValidator : IPdfPipelineValidator
                 $"{cleanResult.Records.Count} cleaned + {cleanResult.Errors.Count} errored.");
 
         if (cleanResult.Records.Count == 0)
-            reconciliation.Add("Zero cleaned records produced — refusing to pass an empty run.");
+            reconciliation.Add("Zero cleaned records produced, refusing to pass an empty run.");
 
-        // Grouped case-insensitively on BlobName - same convention as BuildStructureLookup's
-        // dictionary, so "Report.pdf" and "report.pdf" pages of the same PageNumber collide
-        // here too instead of only being caught by the structure-lookup collision check.
+        // Grouped case insensitively on BlobName via PageKeyComparer, the same convention
+        // as GetDocumentStructure's dictionary, so "Report.pdf" and "report.pdf" pages of
+        // the same PageNumber collide here too instead of only being caught by the
+        // structure lookup collision check.
         reconciliation.AddRange(pagesExtraction.Records
-            .GroupBy(r => (BlobName: r.BlobName.ToUpperInvariant(), r.PageNumber))
+            .GroupBy(r => (r.BlobName, r.PageNumber), PageKeyComparer)
             .Where(g => g.Count() > 1)
             .Select(g => $"Duplicate page from extractor: {g.First().BlobName} / page {g.Key.PageNumber} appears {g.Count()} times"));
 
@@ -278,8 +271,8 @@ public class PdfPipelineValidator : IPdfPipelineValidator
     }
 
     // 5. Magnitude shift vs a previous run, if supplied. Advisory only (see the tiering
-    // comment at the top of this file) - previousRunCleanedCount is itself just "however
-    // many records the last run actually processed", which shrinks a lot once extraction-
+    // comment at the top of this file). previousRunCleanedCount is itself just "however
+    // many records the last run actually processed", which shrinks a lot once extraction
     // skip means most runs only touch a handful of changed documents. Gating on that
     // would fail nearly every normal run, so this is reported via MagnitudeWarnings for a
     // human to read, never enforced.
@@ -293,115 +286,81 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             if (Math.Abs(deltaPercent) > MaxAcceptableMagnitudeShiftPercent)
                 magnitude.Add(
                     $"Cleaned count shifted {deltaPercent:+0.0;-0.0}% vs previous run " +
-                    $"({previous} -> {cleanResult.Records.Count}) — exceeds {MaxAcceptableMagnitudeShiftPercent}% threshold.");
+                    $"({previous} -> {cleanResult.Records.Count}), exceeds {MaxAcceptableMagnitudeShiftPercent}% threshold.");
         }
 
         return magnitude;
     }
 
-    // 6. Per-page text-quality signals. Single pass per page: both counters in one
-    // walk of the content instead of two full Count() scans.
+    // 6. Per page text quality signals. Decoded per Unicode scalar rather than per char:
+    // CharUnicodeInfo.GetUnicodeCategory(char) reports Surrogate for both halves of a
+    // surrogate pair, so a char loop can never see the real category of an astral code
+    // point and silently misses unassigned scalars above U+FFFF.
+    //
+    // Rune.DecodeFromUtf16 is used instead of EnumerateRunes because EnumerateRunes
+    // substitutes U+FFFD for ill formed sequences, which would make a genuine replacement
+    // character in the source indistinguishable from an unpaired surrogate. The
+    // OperationStatus tells them apart, and an unpaired surrogate is itself a corruption
+    // signal worth counting rather than ignoring.
+    //
+    // Single pass per page: all three counters in one walk of the content.
     private static List<ValidationIssue> TextQualityCheck(PdfCleanResult cleanResult)
     {
         var issues = new List<ValidationIssue>();
 
         foreach (var record in cleanResult.Records)
         {
-            int replacementCount = 0, corruptCharCount = 0;
+            int replacementCount = 0, corruptCharCount = 0, unpairedSurrogateCount = 0;
 
-            foreach (var c in record.PageContent)
+            var remaining = record.PageContent.AsSpan();
+            while (!remaining.IsEmpty)
             {
-                if (c == ReplacementChar) { replacementCount++; continue; }
-                if (c is '\n' or '\r' or '\t') continue;
-                if (CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.OtherNotAssigned)
+                var status = Rune.DecodeFromUtf16(remaining, out var rune, out var consumed);
+                remaining = remaining[consumed..];
+
+                if (status != OperationStatus.Done) { unpairedSurrogateCount++; continue; }
+                if (rune.Value == ReplacementCodePoint) { replacementCount++; continue; }
+                if (rune.Value is '\n' or '\r' or '\t') continue;
+                if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.OtherNotAssigned)
                     corruptCharCount++;
             }
 
-            // One issue per page even when both problems are present - each Error here
-            // counts against the error-rate denominator (attempted pages), so a page
+            var corruptTotal = replacementCount + corruptCharCount + unpairedSurrogateCount;
+            if (corruptTotal == 0) continue;
+
+            // One issue per page even when several problems are present: each Error here
+            // counts against the error rate denominator (attempted pages), so a page
             // reported twice would silently double its own weight in that rate.
-            if (replacementCount > 0 || corruptCharCount > 0)
-            {
-                var parts = new List<string>();
-                if (replacementCount > 0) parts.Add($"{replacementCount} U+FFFD char(s)");
-                if (corruptCharCount > 0) parts.Add($"{corruptCharCount} control/unassigned character(s)");
+            var parts = new List<string>(3);
+            if (replacementCount > 0)       parts.Add($"{replacementCount} U+FFFD char(s)");
+            if (corruptCharCount > 0)       parts.Add($"{corruptCharCount} control/unassigned character(s)");
+            if (unpairedSurrogateCount > 0) parts.Add($"{unpairedSurrogateCount} unpaired surrogate(s)");
 
-                issues.Add(new ValidationIssue(Stage: "TextQuality", Severity: "Error",
-                    DocumentId: record.BlobName,
-                    Message:    $"Page {record.PageNumber}: {string.Join(", ", parts)} — source text is corrupted / likely encoding corruption."));
-            }
-        }
+            // Ratio is against UTF-16 code unit length, close enough to scalar count for a
+            // threshold and free to obtain.
+            var pageLength = record.PageContent.Length;
+            var isError    = corruptTotal >= MinCorruptCharsForError
+                          || (pageLength > 0 && (double)corruptTotal / pageLength > MaxAcceptableCorruptRatio);
 
-        return issues;
-    }
-
-    // 7. PDF-only heuristic: a trigram repeating MinTrigramRepeats+ times on one page
-    // suggests table rows run together with no delimiters left. Skips pages where DI
-    // already detected a table — this check's purpose is tables DI MISSED; running it on
-    // detected-table pages just false-positives on legitimate repeated cell content.
-    // Skips short pages entirely. Warning-only: it gates nothing, so its only cost is
-    // report noise — watch it in real runs and delete it if it stays noisy (see
-    // MinTrigramRepeats).
-    //
-    // Reviewed against a real 3-doc/30-page run (2026-07-27): 10 warnings fired, 8 were
-    // ordinary Dutch phrase repetition ("op basis van", "in de wijk", "en e mail" etc.),
-    // not flattened tables. Only 2 pointed at genuinely repeating templated content (a
-    // checkbox list, a glossary), and even those read fine as prose. ~80% noise — this
-    // meets the "mostly wolf-crying" bar above. There's no DI ground truth for "a table
-    // it chose not to make," so a fix here would just swap this text-pattern guess for a
-    // geometry-based one (line-polygon column alignment), still a heuristic. Next time
-    // this comes up, delete the check rather than try to make the guess smarter.
-    private static List<ValidationIssue> TableFlatteningCheck(
-        PdfCleanResult cleanResult, IReadOnlyDictionary<string, PdfDocumentStructure>? structures)
-    {
-        var issues = new List<ValidationIssue>();
-
-        foreach (var record in cleanResult.Records)
-        {
-            var hasDetectedTable = structures != null
-                && structures.TryGetValue(record.BlobName, out var structure)
-                && structure.Tables.Any(t => t.PageNumber == record.PageNumber);
-            if (hasDetectedTable) continue;
-
-            var repeated = FindRepeatedTrigrams(record.PageContent);
-            if (repeated.Count == 0) continue;
-
-            issues.Add(new ValidationIssue(Stage: "TableFlattening", Severity: "Warning",
+            issues.Add(new ValidationIssue(
+                Stage:      "TextQuality",
+                Severity:   isError ? "Error" : "Warning",
                 DocumentId: record.BlobName,
-                Message:    $"Page {record.PageNumber}: possible flattened table — repeated phrase(s) {string.Join(", ", repeated.Take(3))}."));
+                Message:    $"Page {record.PageNumber}: {string.Join(", ", parts)}" +
+                            (isError ? ", source text is corrupted / likely encoding corruption."
+                                     : ", isolated bad character(s), below the corruption threshold.")));
         }
 
         return issues;
     }
 
-    private static List<string> FindRepeatedTrigrams(string text)
-    {
-        var words = NonWordChars.Replace(text.ToLowerInvariant(), " ")
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length < MinWordsForFlatteningCheck) return [];
-
-        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (int i = 0; i <= words.Length - 3; i++)
-        {
-            var trigram = $"{words[i]} {words[i + 1]} {words[i + 2]}";
-            seen[trigram] = seen.TryGetValue(trigram, out var count) ? count + 1 : 1;
-        }
-
-        return seen
-            .Where(kv => kv.Value >= MinTrigramRepeats)
-            .OrderByDescending(kv => kv.Value)
-            .Select(kv => $"\"{kv.Key}\" ({kv.Value}x)")
-            .ToList();
-    }
-
-    // 8. Table structure issues read directly off DI's own table data. Replaces an
-    // earlier heuristic that pattern-matched GFM pipe tables — DI renders tables as
+    // 7. Table structure issues read directly off DI's own table data. Replaces an
+    // earlier heuristic that pattern matched GFM pipe tables: DI renders tables as
     // HTML <table> elements, so that heuristic never matched and was silently a no-op.
     private static List<ValidationIssue> TableStructureQualityCheck(
-        IReadOnlyDictionary<string, PdfDocumentStructure>? structures)
+        IReadOnlyDictionary<string, PdfDocumentStructure> structures)
     {
         var issues = new List<ValidationIssue>();
-        if (structures is null) return issues;
 
         foreach (var (blobName, structure) in structures)
         {
@@ -410,7 +369,7 @@ public class PdfPipelineValidator : IPdfPipelineValidator
                 if (table.RowCount <= 0 || table.ColumnCount <= 0)
                     issues.Add(new ValidationIssue(Stage: "TableStructure", Severity: "Warning",
                         DocumentId: blobName,
-                        Message:    $"Table at offset {table.Offset}: reported {table.RowCount} row(s) x {table.ColumnCount} column(s) — malformed."));
+                        Message:    $"Table at offset {table.Offset}: reported {table.RowCount} row(s) x {table.ColumnCount} column(s), malformed."));
                 else if (table.Cells.Count == 0)
                     issues.Add(new ValidationIssue(Stage: "TableStructure", Severity: "Warning",
                         DocumentId: blobName,
@@ -421,28 +380,143 @@ public class PdfPipelineValidator : IPdfPipelineValidator
         return issues;
     }
 
-    // 9. Total tables detected this run — real count from DI's table detection.
-    private static int CountDetectedTables(IReadOnlyDictionary<string, PdfDocumentStructure>? structures) =>
-        structures?.Values.Sum(s => s.Tables.Count) ?? 0;
+    // 8. Total tables detected this run, real count from DI's table detection.
+    private static int CountDetectedTables(IReadOnlyDictionary<string, PdfDocumentStructure> structures) =>
+        structures.Values.Sum(s => s.Tables.Count);
 
-    // 10. Document flagged if none of its pages has a markdown heading.
-    private static List<string> DocsWithNoPagesWithHeading(PdfCleanResult cleanResult)
-    {
-        var docsWithHeadings = cleanResult.Records
-            .Where(r => MarkdownHeading.IsMatch(r.PageContent))
-            .Select(r => r.BlobName)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        return cleanResult.Records
-            .Select(r => r.BlobName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(id => !docsWithHeadings.Contains(id))
+    // 9. Document flagged if none of its pages has a markdown heading. Grouped first so
+    // Any() short circuits on the first page of a document that has one, instead of
+    // running the regex over every page of every document.
+    private static List<string> DocsWithNoPagesWithHeading(PdfCleanResult cleanResult) =>
+        cleanResult.Records
+            .GroupBy(r => r.BlobName, StringComparer.OrdinalIgnoreCase)
+            .Where(g => !g.Any(r => MarkdownHeading.IsMatch(r.PageContent)))
+            .Select(g => g.First().BlobName)
             .ToList();
+
+    // 10. Sample for human review. Reservoir sampling (Algorithm R): one pass, no
+    // intermediate allocation, versus the previous OrderBy(Guid.NewGuid()) which sorted
+    // the whole corpus and allocated a Guid per page.
+    //
+    // The seed is explicit or derived from the cleaned page keys, so rerunning the same
+    // input produces the same sample and validation-report.json stays diffable. Any real
+    // content change reshuffles it, which is the intended behaviour: the sample should
+    // track the run, not be frozen forever.
+    private static List<CleanedPdfPageRecord> BuildRandomCheckSample(PdfCleanResult cleanResult, int? seed)
+    {
+        var records = cleanResult.Records;
+        if (records.Count <= SpotCheckSampleSize) return [.. records];
+
+        var random    = new Random(seed ?? StableSeed(records));
+        var reservoir = new List<CleanedPdfPageRecord>(SpotCheckSampleSize);
+
+        for (int i = 0; i < records.Count; i++)
+        {
+            if (i < SpotCheckSampleSize)
+            {
+                reservoir.Add(records[i]);
+                continue;
+            }
+
+            var j = random.Next(i + 1);
+            if (j < SpotCheckSampleSize) reservoir[j] = records[i];
+        }
+
+        return reservoir;
     }
 
-    // 12. Random sample for human review.
-    private static List<CleanedPdfPageRecord> BuildRandomCheckSample(PdfCleanResult cleanResult) =>
-        cleanResult.Records.Count <= SpotCheckSampleSize
-            ? [.. cleanResult.Records]
-            : [.. cleanResult.Records.OrderBy(_ => Guid.NewGuid()).Take(SpotCheckSampleSize)];
+    // FNV-1a over the page keys. string.GetHashCode is randomised per process on .NET
+    // Core, so it cannot be used for anything that must be stable across runs.
+    private static int StableSeed(IReadOnlyList<CleanedPdfPageRecord> records)
+    {
+        const uint offsetBasis = 2166136261;
+        const uint prime       = 16777619;
+
+        var hash = offsetBasis;
+        foreach (var record in records)
+        {
+            foreach (var c in record.BlobName)
+            {
+                hash = (hash ^ char.ToUpperInvariant(c)) * prime;
+            }
+            hash = (hash ^ (uint)record.PageNumber) * prime;
+        }
+
+        return (int)hash;
+    }
+
+    // 10b. Pairs the same sampled pages with their pre clean raw content, keyed on
+    // (BlobName, PageNumber) against pagesExtraction.Records, the raw PdfPageRecord list
+    // Clean read from. A miss (extractor produced a page Clean has no record for, which
+    // reconciliation above would already flag as a hard failure) is skipped rather than
+    // guessed at.
+    //
+    // Scans rawRecords looking for the <= 5 wanted keys rather than indexing the entire
+    // corpus into a dictionary to serve five lookups, and stops as soon as all are found.
+    private static List<CleaningSpotCheckEntry> BuildCleaningSpotCheckSample(
+        IReadOnlyList<CleanedPdfPageRecord> sample, IReadOnlyList<PdfPageRecord> rawRecords)
+    {
+        if (sample.Count == 0) return [];
+
+        var wanted = new HashSet<(string BlobName, int PageNumber)>(sample.Count, PageKeyComparer);
+        foreach (var record in sample) wanted.Add((record.BlobName, record.PageNumber));
+
+        var found = new Dictionary<(string BlobName, int PageNumber), PdfPageRecord>(wanted.Count, PageKeyComparer);
+        foreach (var raw in rawRecords)
+        {
+            var key = (raw.BlobName, raw.PageNumber);
+            // TryAdd, not indexer assignment: a duplicate (BlobName, PageNumber) from the
+            // extractor is already a hard reconciliation failure above, so this lookup just
+            // needs the first raw page for the sample, not to re-detect that problem.
+            if (wanted.Contains(key)) found.TryAdd(key, raw);
+            if (found.Count == wanted.Count) break;
+        }
+
+        var entries = new List<CleaningSpotCheckEntry>(sample.Count);
+        foreach (var record in sample)
+        {
+            if (!found.TryGetValue((record.BlobName, record.PageNumber), out var raw)) continue;
+
+            entries.Add(new CleaningSpotCheckEntry
+            {
+                BlobName       = record.BlobName,
+                PageNumber     = record.PageNumber,
+                RawContent     = raw.PageContent,
+                CleanedContent = record.PageContent,
+            });
+        }
+
+        return entries;
+    }
+
+    // 11. The whole gating policy in one place, so the thresholds can be unit tested
+    // without building a full Validate fixture.
+    //
+    // Error rate is per ATTEMPTED page, so file level failures (which contribute errors
+    // but no pages) still count against the denominator. Magnitude shift never gates:
+    // CheckDiffCleanNPreviousRun is still computed and surfaced via MagnitudeWarnings,
+    // just not folded in here.
+    internal static bool EvaluateGate(
+        IReadOnlyList<ValidationIssue> issues,
+        int                            attemptedPages,
+        IReadOnlyList<string>          reconciliationProblems)
+    {
+        var errorCount = issues.Count(i => i.Severity == "Error");
+        var errorRate  = attemptedPages == 0 ? 100.0 : 100.0 * errorCount / attemptedPages;
+
+        return errorRate <= MaxAcceptableErrorRatePercent && reconciliationProblems.Count == 0;
+    }
+
+    // Case insensitive on BlobName, exact on PageNumber. Tuple keys cannot carry a per
+    // field comparer, which is why every keyed pass previously had to allocate an
+    // upper invariant copy of the blob name per record.
+    private sealed class BlobPageComparer : IEqualityComparer<(string BlobName, int PageNumber)>
+    {
+        public bool Equals((string BlobName, int PageNumber) x, (string BlobName, int PageNumber) y) =>
+            x.PageNumber == y.PageNumber
+            && StringComparer.OrdinalIgnoreCase.Equals(x.BlobName, y.BlobName);
+
+        public int GetHashCode((string BlobName, int PageNumber) obj) =>
+            HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(obj.BlobName), obj.PageNumber);
+    }
 }

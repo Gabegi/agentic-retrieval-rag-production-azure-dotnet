@@ -16,7 +16,8 @@ namespace AgenticRagApp.Indexing.Pdf.Services
     // Everything Document Intelligence (DI) needs for one PDF, except preflight checks
     // and PdfPig-native reads.
     // - Makes the one paid analyze call, polls for completion itself, and retries only
-    //   the free status poll on 429; never resubmits the paid POST.
+    //   the free status poll on 429/5xx/transient network errors; never resubmits the
+    //   paid POST.
     // - Validates the response (markdown format, non-empty) before trusting any offset.
     // - Extracts every DI structural feature into PdfDocumentStructure.
     // - Surfaces DI's own warnings plus whatever this class flags along the way.
@@ -36,21 +37,42 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // number read back from the service.
         private const decimal CostPerPage = 0.01m;
 
-        // Backoff after *consecutive* 429s on the status poll, per Microsoft's documented
-        // 2-5-13-34 pattern. A Retry-After header, when present, wins over this schedule.
+        // Backoff after *consecutive* retryable failures on the status poll (429, retryable
+        // 5xx, transient network errors - see IsRetryablePollFailure), per Microsoft's
+        // documented 2-5-13-34 pattern. A Retry-After header, when present and the failure
+        // was a 429, wins over this schedule.
         private static readonly TimeSpan[] BackoffDelays =
         [
             TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(13), TimeSpan.FromSeconds(34)
         ];
 
         // Ordinary interval between status-poll GETs; unrelated to BackoffDelays, which
-        // only applies after a 429. Microsoft advises no more than one poll per 2s.
+        // only applies after a retryable poll failure. Microsoft advises no more than one
+        // poll per 2s.
         private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(2);
 
         // Hard ceiling on one document's analysis, so a server-side operation that never
         // reports completion can't pin a worker forever. Only applies when the caller's
         // own token has no earlier deadline; see AnalyzeDocumentAsync.
-        private static readonly TimeSpan MaxAnalyzeDuration = TimeSpan.FromMinutes(10);
+        // Scaled by page count rather than flat: preflight admits up to 2,000 pages, and a
+        // flat ceiling generous enough for those would be useless on a 3 page file, while
+        // one tight enough for small files abandons large ones mid-analysis. Abandoning
+        // costs real money here, since the analyze POST is already billed by the time this
+        // fires. Budget is deliberately loose; it's a runaway guard, not an SLA.
+        private static readonly TimeSpan AnalyzeBudgetBase    = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan AnalyzeBudgetPerPage = TimeSpan.FromSeconds(3);
+        private static readonly TimeSpan AnalyzeBudgetCeiling = TimeSpan.FromMinutes(90);
+
+        // PageCount comes from PdfPig, which counts every page in the file. DI bills and
+        // analyzes the same pages for PDFs, so the two agree here. Falls back to the flat
+        // base if preflight somehow reported nothing usable.
+        private static TimeSpan AnalyzeBudget(int pageCount)
+        {
+            if (pageCount <= 0) return AnalyzeBudgetBase;
+
+            var budget = AnalyzeBudgetBase + (AnalyzeBudgetPerPage * pageCount);
+            return budget > AnalyzeBudgetCeiling ? AnalyzeBudgetCeiling : budget;
+        }
 
         private readonly IDocumentAnalysisClient _diClient;
         private readonly ILogger _logger;
@@ -73,7 +95,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         public async Task<DocumentAnalyzedResults> AnalyzeDocumentAsync(
             byte[] pdfBytes, string blobName, DocMetadata nativeMetadata, CancellationToken ct)
         {
-            var outcome = await AnalyzeWithMetricsAsync(pdfBytes, blobName, ct);
+            var outcome = await AnalyzeWithMetricsAsync(pdfBytes, blobName, nativeMetadata.PageCount, ct);
 
             if (!TryValidateAnalyzeOutcome(outcome, blobName, out var analysis, out var error))
             {
@@ -96,6 +118,37 @@ namespace AgenticRagApp.Indexing.Pdf.Services
                 };
             }
 
+            try
+            {
+                return BuildResults(analysis, blobName, nativeMetadata, outcome);
+            }
+            catch (Exception ex)
+            {
+                // The analysis itself succeeded and is already paid for; this is a defect in
+                // our own extraction over a response shape we didn't anticipate. Typed like
+                // every other failure so it can't escape past the caller's error handling.
+                _logger.LogError(ex,
+                    "Failed to extract structure from a successful Document Intelligence response for '{Blob}'.",
+                    blobName);
+
+                return new DocumentAnalyzedResults(false, null, null, null, null,
+                    new ExtractionError(
+                        RowNumber:  0,
+                        DocumentId: blobName,
+                        Message:    $"Extraction from the Document Intelligence response failed: {ex.Message}",
+                        Reason:     PdfOpenFailureReason.Unknown))
+                {
+                    Warnings = outcome.Warnings,
+                    Infos    = [],
+                };
+            }
+        }
+
+        // Everything from a validated AnalyzeResult to the finished DocumentAnalyzedResults.
+        // Split out of AnalyzeDocumentAsync only so the try/catch above stays readable.
+        private DocumentAnalyzedResults BuildResults(
+            AnalyzeResult analysis, string blobName, DocMetadata nativeMetadata, AnalyzeOutcome outcome)
+        {
             var title = GetTitle(nativeMetadata, blobName);
 
             var (pages, pageWarnings, pageInfos) = GetPages(analysis, blobName, title);
@@ -136,7 +189,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // wall-clock), which are recorded regardless of outcome: they describe the call,
         // not the file's content quality.
         private async Task<AnalyzeOutcome> AnalyzeWithMetricsAsync(
-            byte[] pdfBytes, string blobName, CancellationToken ct)
+            byte[] pdfBytes, string blobName, int pageCount, CancellationToken ct)
         {
             _logger.LogInformation("Submitting '{Blob}' to Document Intelligence.", blobName);
 
@@ -153,7 +206,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
 
             try
             {
-                var poll = await SubmitAndPollAsync(blobName, options, ct);
+                var poll = await SubmitAndPollAsync(blobName, options, pageCount, ct);
                 throttleRetries = poll.ThrottleRetries;
                 return poll.Outcome;
             }
@@ -169,24 +222,35 @@ namespace AgenticRagApp.Indexing.Pdf.Services
 
         // Submits once (WaitUntil.Started), then polls manually instead of using
         // WaitUntil.Completed.
-        // - Why: SDK bug Azure/azure-sdk-for-net#50904 means DI's internal polling can still
-        //   hit 429 even with client-level retry. Retrying that resubmits from scratch and
-        //   pays for a whole new analysis (up to 5x cost under sustained throttling).
-        //   Polling here means a 429 only ever retries the free GET.
-        // - Backoff is indexed by *consecutive* 429s, not by poll count. Indexing by poll
-        //   count silently spent the whole retry budget on successful polls, so any document
-        //   taking more than BackoffDelays.Length * PollingInterval to analyze had zero
-        //   retries left by the time a 429 could occur.
-        // - Retry-After, when the service sends it, is authoritative over BackoffDelays.
+        // - Why: control over the poll, not cost. The paid unit is the analyze POST; every
+        //   UpdateStatus after it is a GET against Operation-Location and is free, and
+        //   Azure.Core retries the individual failed request, so a 429 while polling
+        //   retries the status check under WaitUntil.Completed too. What WaitUntil.Completed
+        //   doesn't give us is a usable backoff: per Azure/azure-sdk-for-net#50904 its
+        //   internal loop can still hit 429 with client-level retry configured, and it
+        //   offers no hook for Retry-After, a consecutive-failure budget, or a wall-clock
+        //   ceiling. Sustained throttling here costs time and a possible timeout, not pages.
+        // - A poll is a free GET against an already-paid analysis, so 429s, retryable 5xx,
+        //   and transient network errors (HttpRequestException/IOException) are all worth
+        //   retrying here rather than abandoning a billed document - see
+        //   IsRetryablePollFailure.
+        // - Backoff is indexed by *consecutive* retryable failures, not by poll count.
+        //   Indexing by poll count silently spent the whole retry budget on successful
+        //   polls, so any document taking more than BackoffDelays.Length * PollingInterval
+        //   to analyze had zero retries left by the time a failure could occur.
+        // - Retry-After, when the service sends it on a 429, is authoritative over
+        //   BackoffDelays.
         // - OperationCanceledException from the caller's own token propagates (host
         //   shutdown, not a per-document failure). The internal timeout becomes a typed error.
         private async Task<PollResult> SubmitAndPollAsync(
-            string blobName, AnalyzeDocumentOptions options, CancellationToken ct)
+            string blobName, AnalyzeDocumentOptions options, int pageCount, CancellationToken ct)
         {
+            var budget = AnalyzeBudget(pageCount);
+
             // Linked so the caller's token still wins if it fires first; CancelAfter only
             // adds a ceiling, it never extends the caller's deadline.
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(MaxAnalyzeDuration);
+            timeoutCts.CancelAfter(budget);
             var pollCt = timeoutCts.Token;
 
             var throttleRetries = 0;
@@ -209,38 +273,38 @@ namespace AgenticRagApp.Indexing.Pdf.Services
                     return new PollResult(Unexpected(blobName, ex), throttleRetries);
                 }
 
-                // Consecutive-429 counter: reset by any successful poll, so a document that
-                // is throttled, recovers, then is throttled again gets a fresh budget.
-                var consecutive429 = 0;
+                // Consecutive-failure counter: reset by any successful poll, so a document
+                // that is throttled/blips, recovers, then fails again gets a fresh budget.
+                var consecutiveFailures = 0;
 
                 while (!operation.HasCompleted)
                 {
                     try
                     {
                         await operation.UpdateStatusAsync(pollCt);
-                        consecutive429 = 0;
+                        consecutiveFailures = 0;
                     }
-                    catch (RequestFailedException ex) when (ex.Status == 429 && consecutive429 < BackoffDelays.Length)
+                    catch (Exception ex) when (IsRetryablePollFailure(ex) && consecutiveFailures < BackoffDelays.Length)
                     {
-                        var wait = RetryAfter(ex) ?? BackoffDelays[consecutive429];
-                        consecutive429++;
-                        throttleRetries++;
+                        var wait = (ex as RequestFailedException) is { } rfe
+                            ? RetryAfter(rfe) ?? BackoffDelays[consecutiveFailures]
+                            : BackoffDelays[consecutiveFailures];
 
-                        _logger.LogWarning(
-                            "DI throttled polling '{Blob}' (consecutive 429 #{Count}); backing off {Wait}.",
-                            blobName, consecutive429, wait);
+                        consecutiveFailures++;
+                        if ((ex as RequestFailedException)?.Status == 429) throttleRetries++;
+
+                        _logger.LogWarning(ex,
+                            "Transient failure polling '{Blob}' (consecutive #{Count}, status {Status}); backing off {Wait}.",
+                            blobName, consecutiveFailures, (ex as RequestFailedException)?.Status, wait);
 
                         await Task.Delay(wait, pollCt);
                         continue;
                     }
                     catch (RequestFailedException ex)
                     {
-                        if (ex.Status == 429)
-                            _logger.LogWarning(ex,
-                                "Document Intelligence throttled '{Blob}'; retries exhausted after {Count} consecutive 429(s).",
-                                blobName, consecutive429);
-                        else
-                            _logger.LogWarning(ex, "Document Intelligence failed while polling '{Blob}'.", blobName);
+                        _logger.LogWarning(ex,
+                            "Document Intelligence failed while polling '{Blob}' (status {Status}) after {Count} consecutive transient failure(s).",
+                            blobName, ex.Status, consecutiveFailures);
 
                         return new PollResult(RequestFailure(blobName, ex), throttleRetries);
                     }
@@ -275,10 +339,11 @@ namespace AgenticRagApp.Indexing.Pdf.Services
             {
                 // Our ceiling fired, not the caller's token: a per-document failure, not a shutdown.
                 _logger.LogWarning(
-                    "Document Intelligence analysis of '{Blob}' exceeded {Limit}; abandoning.", blobName, MaxAnalyzeDuration);
+                    "Document Intelligence analysis of '{Blob}' exceeded its {Limit} budget ({Pages} page(s)); abandoning a paid analysis.",
+                    blobName, budget, pageCount);
                 return new PollResult(
                     Fail(blobName,
-                        $"Document Intelligence analysis timed out after {MaxAnalyzeDuration.TotalMinutes:F0} minute(s).",
+                        $"Document Intelligence analysis timed out after {budget.TotalMinutes:F0} minute(s) for {pageCount} page(s).",
                         PdfOpenFailureReason.DiServiceError),
                     throttleRetries);
             }
@@ -335,6 +400,22 @@ namespace AgenticRagApp.Indexing.Pdf.Services
                 Reason:     PdfOpenFailureReason.MissingAnalysisResult);
             return false;
         }
+
+        // A poll is a free GET against a paid, already-running analysis, so anything
+        // plausibly transient is worth another attempt: abandoning here throws away work
+        // that has already been billed. 429 plus the standard retryable 5xx, plus the
+        // network-level exceptions the SDK surfaces raw.
+        // OperationCanceledException is excluded deliberately: cancellation is either the
+        // caller's shutdown or our own AnalyzeBudget ceiling, and both are handled
+        // outside this loop.
+        private static bool IsRetryablePollFailure(Exception ex) => ex switch
+        {
+            OperationCanceledException                                     => false,
+            RequestFailedException { Status: 429 or 500 or 502 or 503 or 504 } => true,
+            System.Net.Http.HttpRequestException                           => true,
+            IOException                                                    => true,
+            _                                                               => false,
+        };
 
         // Retry-After is the service's own instruction and beats any fixed schedule.
         // Sent either as delta-seconds or as an HTTP-date; both are accepted here.
@@ -642,7 +723,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // Offset/PageNumber come from Spans/BoundingRegions: DocumentParagraph has no
         // PageNumber of its own.
         private static IReadOnlyList<Heading> GetHeadings(AnalyzeResult result) =>
-            result.Paragraphs
+            (result.Paragraphs ?? [])
                 .Where(p => p.Role == ParagraphRole.Title || p.Role == ParagraphRole.SectionHeading)
                 .Select(ToHeading)
                 .ToList();
@@ -651,7 +732,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // PageNumber belongs here rather than in its own bucket; without it those paragraphs
         // fell through both and vanished.
         private static IReadOnlyList<Heading> GetBoilerplate(AnalyzeResult result) =>
-            result.Paragraphs
+            (result.Paragraphs ?? [])
                 .Where(p => p.Role == ParagraphRole.PageHeader || p.Role == ParagraphRole.PageFooter
                          || p.Role == ParagraphRole.Footnote   || p.Role == ParagraphRole.PageNumber)
                 .Select(ToHeading)
@@ -684,16 +765,16 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // hand - see TableInfo for why Regions captures every BoundingRegion rather than
         // just the first.
         private static IReadOnlyList<TableInfo> GetTables(AnalyzeResult result) =>
-            result.Tables
+            (result.Tables ?? [])
                 .Select(t => new TableInfo(
                     t.RowCount,
                     t.ColumnCount,
-                    t.Cells.Select(c => new TableCellInfo(
+                    (t.Cells ?? []).Select(c => new TableCellInfo(
                         c.RowIndex, c.ColumnIndex, c.Kind.ToString() ?? "", c.Content, c.RowSpan, c.ColumnSpan)).ToList(),
                     FirstOffset(t.Spans),
                     FirstPage(t.BoundingRegions),
                     t.Caption?.Content,
-                    t.Footnotes.Select(f => f.Content).ToList(),
+                    (t.Footnotes ?? []).Select(f => f.Content).ToList(),
                     (t.BoundingRegions ?? []).Select(br => new DocumentRegion(br.PageNumber, ToPolygonPoints(br.Polygon))).ToList()))
                 .ToList();
 
@@ -702,7 +783,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // unlike paragraphs/tables.
         private static IReadOnlyList<SelectionMarkInfo> GetSelectionMarks(AnalyzeResult result) =>
             result.Pages
-                .SelectMany(p => p.SelectionMarks.Select(sm => new SelectionMarkInfo(
+                .SelectMany(p => (p.SelectionMarks ?? []).Select(sm => new SelectionMarkInfo(
                     p.PageNumber, sm.State.ToString(), sm.Span.Offset, sm.Confidence, ToPolygonPoints(sm.Polygon))))
                 .ToList();
 
@@ -710,7 +791,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // - Id: only needed to fetch the cropped image later via the figures endpoint.
         // - Elements: JSON-pointer refs to paragraphs discussing the figure, broader than Caption.
         private static IReadOnlyList<FigureInfo> GetFigures(AnalyzeResult result) =>
-            result.Figures
+            (result.Figures ?? [])
                 .Select(f => new FigureInfo(
                     f.Caption?.Content,
                     FirstOffset(f.Spans),
@@ -726,7 +807,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         //   only), which is correct until source-grounding ships.
         private static IReadOnlyList<LineInfo> GetLines(AnalyzeResult result) =>
             result.Pages
-                .SelectMany(p => p.Lines.Select(line => new LineInfo(
+                .SelectMany(p => (p.Lines ?? []).Select(line => new LineInfo(
                     line.Content, FirstOffset(line.Spans), p.PageNumber, ToPolygonPoints(line.Polygon))))
                 .ToList();
 
@@ -749,10 +830,10 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // - Elements stay as raw JSON-pointer strings; resolving them is a future
         //   chunk-builder's job.
         private static IReadOnlyList<SectionInfo> GetSections(AnalyzeResult result) =>
-            result.Sections
+            (result.Sections ?? [])
                 .Select(s => new SectionInfo(
-                    s.Spans.Select(sp => new SectionSpan(sp.Offset, sp.Length)).ToList(),
-                    s.Elements.ToList()))
+                    (s.Spans ?? []).Select(sp => new SectionSpan(sp.Offset, sp.Length)).ToList(),
+                    s.Elements?.ToList() ?? []))
                 .ToList();
 
         // --- Quality --------------------------------------------------------------
@@ -773,7 +854,10 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // internal (not private): testable without a live DI call, as with GetPages.
         internal static IReadOnlyList<AnalysisWarning> GetZeroWordWarnings(AnalyzeResult result, string blobName) =>
             result.Pages
-                .Where(p => p.Words.Count == 0)
+                // Null Words means DI returned no words collection at all, which for this
+                // warning's purpose is the same signal as an empty one: nothing OCR-able
+                // was reported for the page.
+                .Where(p => (p.Words?.Count ?? 0) == 0)
                 .Select(p => new AnalysisWarning(
                     "ZeroWordsOnPage",
                     $"Page {p.PageNumber} has zero detected words - either genuinely blank or entirely vector figure content (no OCR-able text).",
@@ -823,7 +907,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services
         // the zero-pages case which is an outright failure. Wraps the SDK type so callers
         // don't need it.
         private static IReadOnlyList<AnalysisWarning> GetDiWarnings(AnalyzeResult result) =>
-            result.Warnings
+            (result.Warnings ?? [])
                 .Select(w => new AnalysisWarning(w.Code, w.Message, w.Target))
                 .ToList();
     }

@@ -20,4 +20,13 @@ public class PdfValidationReport
     public IReadOnlyList<string>               DocumentsNeedingFallbackChunking { get; init; } = [];
     public int                                 MojibakeRepairedPages            { get; init; }
     public int                                 DetectedTableCount               { get; init; }
+
+    // Per-transform counts and raw/cleaned pairs — see PdfCleanResult and
+    // CleaningSpotCheckEntry's own comments for why these exist alongside
+    // MojibakeRepairedPages/SpotCheckSample above rather than replacing them.
+    public int                                    ControlCharsStripped     { get; init; }
+    public int                                    InvisibleCharsStripped   { get; init; }
+    public int                                    LigaturesExpanded        { get; init; }
+    public int                                    HyphenationJoinsRepaired { get; init; }
+    public IReadOnlyList<CleaningSpotCheckEntry>  CleaningSpotCheckSample  { get; init; } = [];
 }

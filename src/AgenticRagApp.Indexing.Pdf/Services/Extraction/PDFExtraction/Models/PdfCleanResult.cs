@@ -40,4 +40,3 @@ public class PdfCleanResult
 
 // One page's transform counts, before they're summed into PdfCleanResult's run-level totals.
 public readonly record struct PdfCleaningCounts(int ControlChars, int InvisibleChars, int Ligatures, int HyphenJoins);
-}
