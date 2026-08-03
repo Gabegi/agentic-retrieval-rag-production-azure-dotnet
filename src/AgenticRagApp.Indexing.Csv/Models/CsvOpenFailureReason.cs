@@ -3,7 +3,7 @@ using AgenticRagApp.Common.Models;
 namespace AgenticRagApp.Indexing.Csv.Models;
 
 // Structured category for a file-level CSV open/parse failure. Not wired into
-// ExtractionError.Reason yet - CsvExtractor.EnsureHeadersAreCorrect currently reports
+// PipelineIssue.Reason yet - CsvExtractor.EnsureHeadersAreCorrect currently reports
 // these as free-text InvalidOperationExceptions - but gives CSV the same structured-
 // reason shape PDF uses (PdfOpenFailureReason), for whichever caller wants to break
 // failures down by cause instead of grepping messages.

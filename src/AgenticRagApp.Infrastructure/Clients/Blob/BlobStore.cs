@@ -38,8 +38,14 @@ public class BlobStore : IBlobStore
     {
         var result = new List<(string, DateTimeOffset?, long?, IReadOnlyDictionary<string, string>)>();
         await foreach (var item in container.GetBlobsAsync(BlobTraits.Metadata, BlobStates.None, prefix, ct))
+            // Azure Blob Storage treats metadata key names as case-insensitive (a manual
+            // upload setting "Zenya_Document_Id" is the same key as "zenya_document_id" to
+            // Azure), but the SDK hands back item.Metadata as an ordinal-comparer dictionary -
+            // wrapped here so a differently-cased key doesn't silently miss every lookup
+            // (ZenyaMetadata.FromBlobMetadata) and read as "not set".
             result.Add((item.Name, item.Properties.LastModified, item.Properties.ContentLength,
-                (IReadOnlyDictionary<string, string>)(item.Metadata ?? new Dictionary<string, string>())));
+                (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(
+                    item.Metadata ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase)));
         return result;
     }
 

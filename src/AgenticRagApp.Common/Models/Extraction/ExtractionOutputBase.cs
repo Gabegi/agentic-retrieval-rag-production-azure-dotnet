@@ -1,4 +1,3 @@
-using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Common.Models;
 
@@ -21,7 +20,7 @@ public abstract record ExtractionOutputBase
     // Null = source has no equivalent mechanism (CSV traces back to Zenya via relative_path
     // instead), not "verified zero".
     public int? TraceabilityGapCount { get; init; }
-    public required IReadOnlyList<ValidationIssueEntry> Issues { get; init; }
+    public required IReadOnlyList<PipelineIssue> Issues { get; init; }
     public required IReadOnlyList<string> RedFlags { get; init; }
     public required IReadOnlyList<SpotCheckEntry> SpotCheckSample { get; init; }
 }

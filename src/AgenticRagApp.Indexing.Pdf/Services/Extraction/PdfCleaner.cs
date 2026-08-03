@@ -1,6 +1,8 @@
 ﻿using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Common.Models;
 
@@ -16,7 +18,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 //     (table tags - see ConvertTablesToMarkdown) so no downstream stage has to work
 //     around HTML sitting inside an otherwise-markdown text field.
 // Nothing here rewrites or paraphrases actual content - chunking and retrieval need
-// the source text, just undamaged. One bad page becomes a CleaningError; it never
+// the source text, just undamaged. One bad page becomes an error-severity PipelineIssue; it never
 // aborts the whole run.
 //
 // Explicitly out of scope:
@@ -29,6 +31,10 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 //     pageHeader/pageFooter roles at extraction time - prefer solving it there.
 public class PdfCleaner : IPdfCleaner
 {
+    private readonly ILogger<PdfCleaner> _logger;
+
+    public PdfCleaner(ILogger<PdfCleaner>? logger = null) => _logger = logger ?? NullLogger<PdfCleaner>.Instance;
+
     // Windows-1252 with exception fallbacks on both sides: any character that can't
     // round-trip losslessly throws instead of silently becoming '?' (encode) or a
     // replacement char (decode). RepairMojibake treats either as "not mojibake" and
@@ -67,6 +73,17 @@ public class PdfCleaner : IPdfCleaner
     private static readonly Regex InvisibleChars =
         new(@"[\u200B\u200C\u200D\uFEFF\u00AD]", RegexOptions.Compiled);
 
+    // Document Intelligence's markdown OutputContentFormat follows CommonMark, which
+    // backslash-escapes ASCII punctuation wherever it could otherwise be read as markdown
+    // syntax (e.g. a literal "1-2" mid-sentence escaped to "1\-2" so "-" isn't parsed as a
+    // list bullet). That escaping is a markdown-rendering concern, not real content - left
+    // in place it's a literal "\-" in the indexed/embedded text that matches neither a
+    // plain-text query for "-" nor "\-". Unescapes the exact CommonMark backslash-escape
+    // punctuation set (https://spec.commonmark.org/0.31.2/#backslash-escapes), not a guess
+    // at which characters DI happens to escape.
+    private static readonly Regex MarkdownEscapedPunctuation =
+        new(@"\\([!""#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~])", RegexOptions.Compiled);
+
     // Typographic ligatures PDFs embed as single glyphs (e.g. U+FB01 "fi") that won't
     // match a plain-text query in keyword/hybrid search - expand to plain letters.
     // internal: PdfCleanerTests asserts table completeness directly against this.
@@ -76,7 +93,7 @@ public class PdfCleaner : IPdfCleaner
     ];
 
     // \u2500\u2500 Table HTML -> markdown \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    // DI renders tables as real HTML with rowspan/colspan (see PdfDocumentAnalyzer's
+    // DI renders tables as real HTML with rowspan/colspan (see PdfDocumentIntelligenceAnalyzer's
     // OutputContentFormat comment) - the regexes/grid logic below turn that into a plain
     // GFM pipe table, in place within the page's markdown text. Merged cells are expanded
     // into a full grid so every row has the same column count - a ragged pipe table (rows
@@ -105,7 +122,7 @@ public class PdfCleaner : IPdfCleaner
     // Figure HTML -> caption text, or stripped entirely.
     // DI marks every detected figure as a <figure> placeholder in Content, but never embeds
     // the actual image there (a figure's pixels only exist behind a separate fetch-by-id
-    // endpoint - see PDFDocumentAnalyzer.GetFigures) - so the tag itself carries zero
+    // endpoint - see PdfDocumentIntelligenceAnalyzer.GetFigures) - so the tag itself carries zero
     // retrieval-useful information. If DI attached a caption/alt text, that's real content
     // (a label for what the figure is about) worth keeping; a bare placeholder with neither
     // wastes chunk/embedding budget on nothing and is worse than no tag at all.
@@ -128,13 +145,23 @@ public class PdfCleaner : IPdfCleaner
         return result;
     }
 
-    private static void CleanSinglePage(PdfPageRecord page, PdfCleanResult result)
+    private void CleanSinglePage(PdfPageRecord page, PdfCleanResult result)
     {
         try
         {
             var (content, mojibakeFixed, counts) = CleanPageContent(page.PageContent ?? "");
             result.AddCleaningCounts(counts);
-            content = ConvertTablesToMarkdown(content);
+            var (tableConverted, tableFallbacks) = ConvertTablesToMarkdown(content);
+            content = tableConverted;
+            if (tableFallbacks > 0)
+            {
+                for (var i = 0; i < tableFallbacks; i++)
+                    result.CountTableConversionFallback();
+                result.AddIssue(PipelineIssue.Warning(
+                    PipelineStage.TableStructure,
+                    page.BlobName,
+                    $"Page {page.PageNumber}: {tableFallbacks} table(s) had an unparseable shape (no rows/empty grid/zero columns) - fell back to plain text instead of a markdown table."));
+            }
             content = ConvertFigures(content);
 
             // Stripping an empty <figure> placeholder can leave a blank line behind where
@@ -145,21 +172,29 @@ public class PdfCleaner : IPdfCleaner
             if (mojibakeFixed)
             {
                 result.CountMojibakeRepaired();
-                result.AddWarning(new CleaningWarning(
-                    DocumentId: page.BlobName,
-                    Message:    $"Page {page.PageNumber}: repaired mojibake in source text (round-trip re-decode)."));
+                result.AddIssue(PipelineIssue.Warning(
+                    PipelineStage.TextQuality,
+                    page.BlobName,
+                    $"Page {page.PageNumber}: repaired mojibake in source text (round-trip re-decode)."));
             }
 
             if (string.IsNullOrWhiteSpace(content))
-                result.AddWarning(new CleaningWarning(
-                    DocumentId: page.BlobName,
-                    Message:    $"PageContent is empty after cleanup (page {page.PageNumber}) - likely a blank source page."));
+                result.AddIssue(PipelineIssue.Warning(
+                    PipelineStage.Clean,
+                    page.BlobName,
+                    $"PageContent is empty after cleanup (page {page.PageNumber}) - likely a blank source page."));
 
             result.AddRecord(ToCleanedRecord(page, content));
         }
         catch (Exception ex)
         {
-            result.AddError(new CleaningError(DocumentId: page.BlobName, Message: ex.Message));
+            // PipelineIssue.Message (shared with CSV's cleaner) only ever carries
+            // ex.Message - full exception type/stack trace previously had nowhere to go
+            // and was discarded. Logged here instead so a cleaning bug is actually
+            // diagnosable from Application Insights, without changing PipelineIssue's
+            // shape or the JSON reports built from it.
+            _logger.LogError(ex, "Cleaning failed for '{Blob}' page {Page}.", page.BlobName, page.PageNumber);
+            result.AddIssue(PipelineIssue.Error(PipelineStage.Clean, page.BlobName, ex.Message));
         }
     }
 
@@ -178,11 +213,14 @@ public class PdfCleaner : IPdfCleaner
     //   2. Mojibake repair before anything else that inspects characters -
     //      downstream steps should see the *real* text.
     //   3. Character-level cleanup: control/invisible chars, ligatures, NBSP.
-    //   4. NFC normalization - accented letters are always one codepoint; composed
+    //   4. Markdown punctuation-escape removal before hyphenation repair - an escaped
+    //      "\-" at a line break must become a plain "-" first, or LineBreakHyphenation's
+    //      "-\n" pattern never matches it.
+    //   5. NFC normalization - accented letters are always one codepoint; composed
     //      vs. decomposed forms embed and keyword-match differently, which is silent
     //      retrieval noise.
-    //   5. Hyphenation repair before whitespace collapse - it consumes a \n.
-    //   6. Whitespace last, over the fully repaired text.
+    //   6. Hyphenation repair before whitespace collapse - it consumes a \n.
+    //   7. Whitespace last, over the fully repaired text.
     // Table HTML -> markdown (ConvertTablesToMarkdown) runs separately, after this whole
     // pipeline (see CleanSinglePage) - it changes structure rather than repairing/stripping
     // characters, and it builds its own clean spacing, so it doesn't need to precede or be
@@ -206,6 +244,8 @@ public class PdfCleaner : IPdfCleaner
             text = text.Replace(ligature, expansion);
         }
         text = text.Replace('\u00A0', ' '); // NBSP -> plain space
+
+        text = MarkdownEscapedPunctuation.Replace(text, "$1");
 
         text = text.Normalize(NormalizationForm.FormC);
 
@@ -248,24 +288,34 @@ public class PdfCleaner : IPdfCleaner
 
     // Cheap substring check before the regex engine ever runs - the overwhelming majority
     // of pages have no table at all, and shouldn't pay for a Singleline scan over the whole
-    // page just to find nothing.
-    private static string ConvertTablesToMarkdown(string content)
+    // page just to find nothing. fallbackCount is a local (not a ref parameter) precisely
+    // so it can be captured and mutated from the MatchEvaluator lambda below - a ref
+    // parameter can't be captured by a lambda (CS1628).
+    private static (string Content, int FallbackCount) ConvertTablesToMarkdown(string content)
     {
-        if (!content.Contains("<table", StringComparison.OrdinalIgnoreCase)) return content;
+        if (!content.Contains("<table", StringComparison.OrdinalIgnoreCase)) return (content, 0);
 
-        return TableRegex.Replace(content, m => ConvertTable(m.Groups[1].Value));
+        var fallbackCount = 0;
+        var result = TableRegex.Replace(content, m => ConvertTable(m.Groups[1].Value, ref fallbackCount));
+        return (result, fallbackCount);
     }
 
-    private static string ConvertTable(string tableInner)
+    // On a shape ConvertTable can't parse (no rows, empty grid, zero columns), the whole
+    // <table>...</table> block used to be deleted outright by returning "" here - the
+    // cell text (real content) vanished from the indexed page with no signal at all.
+    // Falling back to CleanCellContent's tag-stripped, decoded, single-line text keeps
+    // that content (as plain text, not a pipe table) instead of discarding it, and
+    // fallbackCount makes the substitution visible instead of silent (finding #16).
+    private static string ConvertTable(string tableInner, ref int fallbackCount)
     {
         var rowMatches = RowRegex.Matches(tableInner);
-        if (rowMatches.Count == 0) return "";
+        if (rowMatches.Count == 0) { fallbackCount++; return CleanCellContent(tableInner); }
 
         var grid = BuildGrid(rowMatches);
-        if (grid.Count == 0) return "";
+        if (grid.Count == 0) { fallbackCount++; return CleanCellContent(tableInner); }
 
         var columnCount = grid.Max(r => r.Count);
-        if (columnCount == 0) return "";
+        if (columnCount == 0) { fallbackCount++; return CleanCellContent(tableInner); }
 
         foreach (var row in grid)
             while (row.Count < columnCount)

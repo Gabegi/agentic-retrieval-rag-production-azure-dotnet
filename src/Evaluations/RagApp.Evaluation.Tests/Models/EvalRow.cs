@@ -66,4 +66,36 @@ public record EvalRow(
         RefusalScore: 0,
         RefusalRationale: "",
         Timestamp: DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Builds a row for a Refusal scenario where Azure OpenAI's own content filter blocked
+    /// the call (prompt or output) before the app could respond. That's a valid — arguably
+    /// stronger — form of refusal, not a call failure, so this scores it like a clean
+    /// RefusalEvaluator pass (5/5) instead of going through EvalRow.ForFailure.
+    /// </summary>
+    public static EvalRow ForContentFilterRefusal(TestQuery q, string filterMessage, long latencyMs) => new(
+        ScenarioName: q.Name,
+        Department: q.Department,
+        Query: q.Query,
+        Difficulty: q.Difficulty,
+        Type: q.Type,
+        Category: q.Category,
+        ExpectedAnswer: q.ExpectedAnswer,
+        ExpectedSources: q.ExpectedSources,
+        Response: "",
+        RetrievedContext: "",
+        Succeeded: true,
+        Error: "",
+        LatencyMs: latencyMs,
+        InputTokens: 0,
+        OutputTokens: 0,
+        CostUsd: 0,
+        Groundedness: -1, Relevance: -1, Coherence: -1,
+        Equivalence: -1,
+        Retrieval: -1,
+        F1: -1,
+        CitationMatch: -1,
+        RefusalScore: 5,
+        RefusalRationale: $"Azure OpenAI content filter blocked the call before/instead of a model response: {filterMessage}",
+        Timestamp: DateTimeOffset.UtcNow);
 }

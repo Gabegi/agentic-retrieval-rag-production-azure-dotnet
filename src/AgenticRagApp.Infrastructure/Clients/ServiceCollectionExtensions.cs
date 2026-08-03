@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Azure.AI.DocumentIntelligence;
 using Azure.AI.OpenAI;
 using Azure.Core;
@@ -31,24 +32,18 @@ public static class ServiceCollectionExtensions
     {
         // Fail fast with a named list of missing settings, rather than letting a missing
         // value surface later as an obscure NullReferenceException or UriFormatException.
-        var requiredKeys = new[]
+        // Two keys below (APPLICATIONINSIGHTS_CONNECTION_STRING, AzureWebJobsStorage:accountName)
+        // are Azure Functions host settings, not IndexerConfig fields, so they're checked
+        // here rather than via [Required] on the config object below.
+        var requiredHostKeys = new[]
         {
-            "SEARCH_ENDPOINT",
-            "OPENAI_ENDPOINT",
-            "OPENAI_EMBEDDING_DEPLOYMENT",
-            "OPENAI_GPT_DEPLOYMENT",
-            "OPENAI_GPT_MODEL_NAME",
-            "STORAGE_ACCOUNT_URL",
-            "SEARCH_INDEX_NAME",
-            "KNOWLEDGE_SOURCE_NAME",
-            "KNOWLEDGE_BASE_NAME",
             "APPLICATIONINSIGHTS_CONNECTION_STRING",
             "AzureWebJobsStorage:accountName",
         };
-        var missingKeys = requiredKeys.Where(k => string.IsNullOrWhiteSpace(configuration[k])).ToList();
-        if (missingKeys.Count > 0)
+        var missingHostKeys = requiredHostKeys.Where(k => string.IsNullOrWhiteSpace(configuration[k])).ToList();
+        if (missingHostKeys.Count > 0)
             throw new InvalidOperationException(
-                $"Missing required app setting(s): {string.Join(", ", missingKeys)}. " +
+                $"Missing required app setting(s): {string.Join(", ", missingHostKeys)}. " +
                 "Set these in local.settings.json (local) or the Function App configuration (deployed).");
 
         var config = new IndexerConfig
@@ -68,6 +63,20 @@ public static class ServiceCollectionExtensions
             OpenAiEmbeddingModelName     = configuration["OPENAI_EMBEDDING_MODEL_NAME"] ?? "text-embedding-3-large",
             OpenAiEmbeddingDimensions    = int.TryParse(configuration["OPENAI_EMBEDDING_DIMENSIONS"], out var dims) ? dims : 3072,
         };
+
+        // [Required]-annotated IndexerConfig properties, validated here rather than via the
+        // Options pattern's ValidateOnStart: config keys above are SCREAMING_SNAKE_CASE and
+        // don't match IndexerConfig's property names, so IConfiguration.Bind() can't
+        // populate this type directly - it's assembled manually above instead. Validating
+        // the finished object still catches every required field regardless of which of
+        // the two constructors (here, or RagEvaluationTests) built it, with the same
+        // "named list of missing settings" fail-fast rather than a null surfacing later
+        // as an obscure NullReferenceException or UriFormatException.
+        var validationResults = new List<ValidationResult>();
+        if (!Validator.TryValidateObject(config, new ValidationContext(config), validationResults, validateAllProperties: true))
+            throw new InvalidOperationException(
+                $"Invalid IndexerConfig: {string.Join(", ", validationResults.Select(r => r.ErrorMessage))}. " +
+                "Set these in local.settings.json (local) or the Function App configuration (deployed).");
 
         TokenCredential credential = new DefaultAzureCredential();
 
@@ -123,15 +132,14 @@ public static class ServiceCollectionExtensions
         // Generic wrappers — every raw client above is only ever consumed through one of
         // these from here on. No caller outside this project holds a raw SDK client.
         services.AddSingleton<IBlobStore, BlobStore>();
-        services.AddSingleton<ISearchIndexStore, SearchIndexStore>();
-        services.AddSingleton<ISearchDocumentStore, SearchDocumentStore>();
-        services.AddSingleton<IKnowledgeRetrievalClient, KnowledgeRetrievalClient>();
+        services.AddSingleton<IKnowledgeRetrievalClient, KnowledgeBaseClient>();
         services.AddSingleton<IEmbeddingClient, EmbeddingClient>();
 
         // Shared Search index lifecycle + document CRUD — one instance for both PDF and
         // CSV, since both write into the same index (see IndexService's own comment).
         services.AddSingleton<IIndexService, IndexService>();
         services.AddSingleton<IIndexDocumentService, IndexDocumentService>();
+        services.AddSingleton<IKnowledgeService, KnowledgeService>();
 
         return config;
     }

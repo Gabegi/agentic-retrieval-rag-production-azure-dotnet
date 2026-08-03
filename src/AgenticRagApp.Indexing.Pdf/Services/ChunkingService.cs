@@ -30,8 +30,8 @@ public class ChunkingService : IChunkingService
     }
 
     // Converts ExtractionDocuments into indexed DocumentChunks,
-    // computes ChunkingResults, and emits all chunk telemetry in one place.
-    public (IReadOnlyList<DocumentChunk> Docs, ChunkingResults Stats) ChunkDocuments(
+    // computes ChunkingStageMetrics, and emits all chunk telemetry in one place.
+    public (IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats) ChunkDocuments(
         IReadOnlyList<PdfExtractionDocument> docs)
     {
         var result = new List<DocumentChunk>();
@@ -69,7 +69,7 @@ public class ChunkingService : IChunkingService
 
                 result.Add(new DocumentChunk
                 {
-                    Id                    = ChunkingUtils.SafeKey($"{doc.SourceId}::{doc.Ordinal}", docChunkIndex),
+                    Id                    = ChunkingHelper.SafeKey($"{doc.SourceId}::{doc.Ordinal}", docChunkIndex),
                     DocumentId            = doc.SourceId,
                     Title                 = doc.Title,
                     LastModifiedDate      = doc.LastModifiedDate,
@@ -88,18 +88,19 @@ public class ChunkingService : IChunkingService
                     Bookmarks             = doc.Bookmarks,
                     Sections              = doc.Sections,
                     Breadcrumb            = doc.Breadcrumb,
-                    Headings              = doc.Headings,
-                    Boilerplate           = doc.Boilerplate,
-                    Tables                = doc.Tables,
-                    Dimensions            = doc.Dimensions,
-                    SelectionMarks        = doc.SelectionMarks,
-                    Figures               = doc.Figures,
-                    Lines                 = doc.Lines,
+                    Structure             = new ChunkStructure(
+                        Headings:       doc.Headings,
+                        Boilerplate:    doc.Boilerplate,
+                        Tables:         doc.Tables,
+                        Dimensions:     doc.Dimensions,
+                        SelectionMarks: doc.SelectionMarks,
+                        Figures:        doc.Figures,
+                        Lines:          doc.Lines),
                 });
             }
         }
 
-        var stats = ChunkingResults.Compute(result, Name);
+        var stats = ChunkingStageMetrics.Compute(result, Name);
         EmitChunkMetrics(stats, result);
 
         _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks ({Strategy})",
@@ -108,14 +109,14 @@ public class ChunkingService : IChunkingService
         return (result, stats);
     }
 
-    private static void EmitChunkMetrics(ChunkingResults stats, IReadOnlyList<DocumentChunk> chunks)
+    private static void EmitChunkMetrics(ChunkingStageMetrics stats, IReadOnlyList<DocumentChunk> chunks)
     {
         var strategyTag = new KeyValuePair<string, object?>("strategy", stats.Strategy);
 
         Instrumentation.ChunksExtracted.Record(stats.ChunksProduced, strategyTag);
 
         // Per-chunk histogram — preserves the real distribution in App Insights,
-        // not just the aggregates already in ChunkingResults.
+        // not just the aggregates already in ChunkingStageMetrics.
         foreach (var chunk in chunks)
             Instrumentation.ChunkSizeChars.Record(chunk.Content.Length, strategyTag);
 

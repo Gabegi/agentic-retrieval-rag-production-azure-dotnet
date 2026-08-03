@@ -5,7 +5,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 
 // Converts a PDF's flat bookmark/outline list into one breadcrumb string per page, e.g.
 // "Chapter 3 > 3.2 Dosage" - the deepest section active on that page, plus its parents.
-// Extracted out of the deleted PDFMarkdownExtractor: real PDF outline data and a correct
+// Extracted out of the deleted PdfMarkdownExtractor: real PDF outline data and a correct
 // stack algorithm are worth keeping for a future chunk-builder to attach per-chunk (not
 // per-page, the way the old class did it).
 public static class PdfSectionBreadCrumbBuilder
@@ -38,9 +38,9 @@ public static class PdfSectionBreadCrumbBuilder
     public static (Dictionary<int, string> Breadcrumbs, PdfStepDiagnostics Diagnostics) BuildSectionBreadcrumbs(
         IReadOnlyList<Bookmark>? bookmarks, int pageCount, string blobName)
     {
-        var warnings = new List<ExtractionWarning>();
+        var warnings = new List<PipelineIssue>();
         void Warn(string message) =>
-            warnings.Add(new ExtractionWarning(RowNumber: null, DocumentId: blobName, Message: message));
+            warnings.Add(PipelineIssue.Warning(PipelineStage.Metadata, blobName, message));
 
         if (bookmarks is not { Count: > 0 })
             return ([], new PdfStepDiagnostics(warnings, []));
@@ -60,20 +60,26 @@ public static class PdfSectionBreadCrumbBuilder
     }
 
     // Keeps only bookmarks with a resolvable page number, warns about everything dropped
-    // (split into external-file vs. unresolvable-internal, and separately, in-range vs.
-    // beyond the document), and returns the survivors sorted by page.
+    // (split into external-file, embedded-file, and unresolvable-internal - which also
+    // covers PdfPig's internal, non-public container nodes, see Bookmark's doc comment -
+    // and separately, in-range vs. beyond the document), and returns the survivors sorted
+    // by page.
     private static List<Bookmark> KeepBookmarksWithPageNumbers(
         IReadOnlyList<Bookmark> bookmarks, int pageCount, Action<string> warn)
     {
         var unresolvable         = bookmarks.Where(b => b.PageNumber is not > 0).ToList();
         var externalCount        = unresolvable.Count(b => b.IsExternal);
-        var unresolvableInternal = unresolvable.Count - externalCount;
+        var embeddedCount        = unresolvable.Count(b => b.IsEmbedded);
+        var unresolvableInternal = unresolvable.Count - externalCount - embeddedCount;
 
         if (unresolvableInternal > 0)
             warn($"{unresolvableInternal} bookmark(s) excluded - no resolvable page.");
 
         if (externalCount > 0)
             warn($"{externalCount} bookmark(s) excluded - point to an external file, not a page in this document.");
+
+        if (embeddedCount > 0)
+            warn($"{embeddedCount} bookmark(s) excluded - point to a file embedded in this document, not a page.");
 
         // Stable sort matters here: two bookmarks on the same page keep their original
         // outline order (OrderBy is documented as stable) - if it weren't, a page with

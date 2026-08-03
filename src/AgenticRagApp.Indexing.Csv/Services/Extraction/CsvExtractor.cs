@@ -48,7 +48,7 @@ public class CsvExtractor : ICsvExtractor
         };
     }
 
-    public ExtractionResult<PageRecord> ExtractPages(Stream stream) =>
+    public ExtractionBatch<PageRecord> ExtractPages(Stream stream) =>
         Extract(stream, PagesRequiredHeaders, csv => new PageRecord
         {
             DocumentId      = RequireDocumentId(csv),
@@ -67,7 +67,7 @@ public class CsvExtractor : ICsvExtractor
     // metadata (title/version/summary/etc.) that CsvJoiner later attaches to every
     // page of the matching DOCUMENT_ID from ExtractPages. Same per-row error handling
     // as ExtractPages: a bad row is recorded and skipped, not fatal to the whole file.
-    public ExtractionResult<IndexRecord> ExtractIndex(Stream stream) =>
+    public ExtractionBatch<IndexRecord> ExtractIndex(Stream stream) =>
         Extract(stream, IndexRequiredHeaders, csv => new IndexRecord
         {
             DocumentId        = RequireDocumentId(csv),
@@ -86,11 +86,11 @@ public class CsvExtractor : ICsvExtractor
     //      - returns true  -> row read OK, go to step 3
     // 3. Try to build a PageRecord from that row's fields (needs DOCUMENT_ID + valid PAGE_INDEX):
     //      - succeeds -> add it as a PageRecord
-    //      - fails    -> log it as an ExtractionError, with DocumentId if we could read one
-    private ExtractionResult<T> Extract<T>(Stream stream, string[] requiredHeaders, Func<CsvReader, T> build)
+    //      - fails    -> log it as an error-severity PipelineIssue, with DocumentId if we could read one
+    private ExtractionBatch<T> Extract<T>(Stream stream, string[] requiredHeaders, Func<CsvReader, T> build)
     {
         var records = new List<T>();
-        var errors  = new List<ExtractionError>();
+        var errors  = new List<PipelineIssue>();
         using var csv = EnsureHeadersAreCorrect(stream, requiredHeaders);
 
         var rowNumber = 1;
@@ -105,22 +105,23 @@ public class CsvExtractor : ICsvExtractor
             }
             catch (Exception ex)
             {
-                errors.Add(new ExtractionError(
-                    RowNumber:  rowNumber,
-                    DocumentId: csv.TryGetField<string>("DOCUMENT_ID", out var id) ? id : null,
-                    Message:    ex.Message));
+                errors.Add(PipelineIssue.Error(
+                    PipelineStage.ParsePages,
+                    csv.TryGetField<string>("DOCUMENT_ID", out var id) ? id : null,
+                    ex.Message,
+                    rowNumber: rowNumber));
             }
         }
 
-        return new ExtractionResult<T> { Records = records, Errors = errors, Warnings = [] };
+        return new ExtractionBatch<T> { Records = records, Errors = errors, Warnings = [] };
     }
 
     // Repeatedly calls csv.Read() until it gets a definitive answer: true (there's a
     // So what this method actually does is:
 // 1. Call csv.Read() — this performs the real read/tokenize work.
 // 2. If it returns (either true = got a row, or false = EOF) → pass that straight back to the caller, done.
-// 3. If it instead throws — meaning the row was too broken to even tokenize — catch it, log an ExtractionError, and loop back to step 1 to try the next row instead of giving up.
-    private static bool EnsureRowIsReadable(CsvReader csv, List<ExtractionError> errors, ref int rowNumber)
+// 3. If it instead throws — meaning the row was too broken to even tokenize — catch it, log an error-severity PipelineIssue, and loop back to step 1 to try the next row instead of giving up.
+    private static bool EnsureRowIsReadable(CsvReader csv, List<PipelineIssue> errors, ref int rowNumber)
     {
         var failureStreak = 0;
         while (true)
@@ -132,7 +133,7 @@ public class CsvExtractor : ICsvExtractor
             catch (Exception ex)
             {
                 rowNumber++;
-                errors.Add(new ExtractionError(RowNumber: rowNumber, DocumentId: null, Message: $"Unreadable CSV row: {ex.Message}"));
+                errors.Add(PipelineIssue.Error(PipelineStage.ParsePages, null, $"Unreadable CSV row: {ex.Message}", rowNumber: rowNumber));
                 if (++failureStreak >= MaxConsecutiveReadFailures)
                     throw new InvalidOperationException(
                         $"{MaxConsecutiveReadFailures} consecutive unreadable rows around row {rowNumber} — input is not parseable CSV.", ex);

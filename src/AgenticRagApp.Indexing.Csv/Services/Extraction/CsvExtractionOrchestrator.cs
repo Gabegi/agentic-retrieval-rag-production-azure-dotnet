@@ -9,10 +9,10 @@ using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Indexing.Csv.Services;
 
-// CSV implementation of IExtractionOrchestrator.
+// CSV implementation of ICsvExtractionOrchestrator.
 // Downloads pages.csv + index.csv from blob storage, runs the full CSV pipeline,
 // and returns source-agnostic ExtractionDocuments plus quality metadata from the validator.
-public class CsvExtractionOrchestrator : IExtractionOrchestrator
+public class CsvExtractionOrchestrator : ICsvExtractionOrchestrator
 {
     private readonly BlobContainerClient                _container;
     private readonly BlobContainerClient                _stateContainer;
@@ -31,7 +31,7 @@ public class CsvExtractionOrchestrator : IExtractionOrchestrator
     private const string StateBlobName = "csv-extraction-state.json";
 
     // Folder segment namespacing every report blob this orchestrator writes, so a
-    // future second IExtractionOrchestrator (e.g. PDF) writing to the same
+    // future second ICsvExtractionOrchestrator (e.g. PDF) writing to the same
     // "pipeline-reports" container doesn't mix its blobs in with these.
     private const string ReportFolder = "indexing/csv-extraction";
 
@@ -143,9 +143,9 @@ public class CsvExtractionOrchestrator : IExtractionOrchestrator
                 }))
             .ToList();
 
+        // No projection needed: report.Issues is already the type the output carries.
         var issues = report.Issues
             .Take(100)  // cap to stay safely under Durable Table Storage 64KB limit
-            .Select(i => new ValidationIssueEntry(i.Stage, i.Severity, i.DocumentId, i.Message))
             .ToList();
 
         var spotCheck = report.SpotCheckSample
@@ -204,14 +204,14 @@ public class CsvExtractionOrchestrator : IExtractionOrchestrator
 
         foreach (var issue in report.Issues.Take(MaxLoggedIssues))
             _logger.Log(
-                issue.Severity == "Error" ? LogLevel.Error : LogLevel.Warning,
+                issue.IsError ? LogLevel.Error : LogLevel.Warning,
                 "[{Stage}] {DocId}: {Message}", issue.Stage, issue.DocumentId, issue.Message);
         if (report.Issues.Count > MaxLoggedIssues)
             _logger.LogWarning("…{More} more issue(s) not logged (see the run report for the full list).",
                 report.Issues.Count - MaxLoggedIssues);
 
-        var errors   = report.Issues.Count(i => i.Severity == "Error");
-        var warnings = report.Issues.Count(i => i.Severity != "Error");
+        var errors   = report.Issues.Count(i => i.IsError);
+        var warnings = report.Issues.Count(i => i.IsWarning);
 
         var sourceTag = new KeyValuePair<string, object?>("source", Source);
 

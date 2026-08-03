@@ -85,8 +85,7 @@ var host = new HostBuilder()
         services.AddSingleton<IRunReportWriter>(sp =>
             new RunReportWriter(
                 sp.GetRequiredService<IBlobStore>(),
-                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
-                sp.GetRequiredService<IHostEnvironment>()));
+                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports")));
 
         // Persistent full-content archive - separate container from pipeline-reports above,
         // always on (not gated by environment or a config flag - see IPipelineArtifactWriter).

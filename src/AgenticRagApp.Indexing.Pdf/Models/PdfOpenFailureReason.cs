@@ -3,7 +3,7 @@ using AgenticRagApp.Common.Models;
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // Structured category for a file-level PDF open/parse failure, set by
-// PdfDocumentValidator.TryOpenAndValidate. Lets PdfValidationReport break down
+// PdfDocumentValidator.TryOpenAndValidate. Lets PdfQualityGateResult break down
 // "how many files failed" by cause instead of grepping free-text messages.
 public sealed record PdfOpenFailureReason(string Code) : OpenFailureReasonBase(Code)
 {
@@ -19,4 +19,5 @@ public sealed record PdfOpenFailureReason(string Code) : OpenFailureReasonBase(C
     public static readonly PdfOpenFailureReason DiServiceError = new(nameof(DiServiceError)); // Document Intelligence returned a non-429 request failure
     public static readonly PdfOpenFailureReason UnexpectedContentFormat = new(nameof(UnexpectedContentFormat)); // DI returned Text instead of the requested Markdown - offsets would be untrustworthy
     public static readonly PdfOpenFailureReason MissingAnalysisResult = new(nameof(MissingAnalysisResult)); // AnalyzeOutcome.Ok was true but Result was null - an internal bug, not a DI failure
+    public static readonly PdfOpenFailureReason TruncatedPages = new(nameof(TruncatedPages)); // DI returned a different page count than the native PDF has - partial/truncated analysis
 }

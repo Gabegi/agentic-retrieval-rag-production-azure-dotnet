@@ -55,12 +55,12 @@ public class PdfIndexingFunctionTests
     {
         var deps    = new Deps();
         var context = MockOrchestrationContext();
-        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(false));
-        context.Setup(c => c.CallActivityAsync<ExtractionResults>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(false));
+        context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ReturnsAsync(ExtractStats());
-        context.Setup(c => c.CallActivityAsync<ChunkingResults>("ChunkActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ReturnsAsync(ChunkingResults.Empty("v1"));
-        context.Setup(c => c.CallActivityAsync<EmbedUploadingResults>("EmbedAndUploadActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+        context.Setup(c => c.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(ChunkingStageMetrics.Empty("v1"));
+        context.Setup(c => c.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ReturnsAsync(EmbedStats());
         context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .Returns(Task.CompletedTask);
@@ -78,8 +78,8 @@ public class PdfIndexingFunctionTests
     {
         var deps    = new Deps();
         var context = MockOrchestrationContext();
-        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(false));
-        context.Setup(c => c.CallActivityAsync<ExtractionResults>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(false));
+        context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ThrowsAsync(new InvalidOperationException("ExtractActivity failed: boom"));
         context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .Returns(Task.CompletedTask);
@@ -90,7 +90,7 @@ public class PdfIndexingFunctionTests
 
         context.Verify(c => c.CallActivityAsync("SaveIndexReportActivity",
             It.Is<PdfIndexRunReport>(r => !r.Success && r.ErrorMessage != null), It.IsAny<TaskOptions>()), Times.Once);
-        context.Verify(c => c.CallActivityAsync<ChunkingResults>(It.IsAny<TaskName>(), It.IsAny<object>(), It.IsAny<TaskOptions>()), Times.Never);
+        context.Verify(c => c.CallActivityAsync<ChunkingStageMetrics>(It.IsAny<TaskName>(), It.IsAny<object>(), It.IsAny<TaskOptions>()), Times.Never);
     }
 
     // ── ExtractActivity ──────────────────────────────────────────────────────
@@ -106,12 +106,13 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.ExtractActivity(new ExtractRequest(false, "extracted.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.ExtractActivity(new PdfExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(stats, result);
         deps.IndexService.Verify(s => s.EnsureIndexAsync(), Times.Once);
-        deps.BlobStore.Verify(b => b.EnsureContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.EnsureContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -124,7 +125,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ExtractActivity(new PdfExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "ExtractActivity failed");
     }
@@ -139,7 +140,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
-            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ExtractActivity(new PdfExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
     }
 
     // ── ChunkActivity ────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ public class PdfIndexingFunctionTests
         var deps  = new Deps();
         var docs  = new List<PdfExtractionDocument> { Doc("doc1.pdf") };
         var chunk = new DocumentChunk { Id = "c1", DocumentId = "doc1.pdf", Content = "hello" };
-        var stats = ChunkingResults.Empty("v1");
+        var stats = ChunkingStageMetrics.Empty("v1");
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<PdfExtractionDocument>>(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(docs);
         deps.ChunkingService.Setup(c => c.ChunkDocuments(docs)).Returns(([chunk], stats));
@@ -158,7 +159,7 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.ChunkActivity(new ChunkRequest("extracted.json", "chunks.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(stats, result);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()), Times.Once);
@@ -176,7 +177,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.ChunkActivity(new ChunkRequest("extracted.json", "chunks.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "ChunkActivity failed");
     }
@@ -190,24 +191,27 @@ public class PdfIndexingFunctionTests
         var chunks = new List<DocumentChunk> { new() { Id = "c1", DocumentId = "doc1.pdf", Content = "hello" } };
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<DocumentChunk>>(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(chunks);
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<string>>(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["stale1"]);
         deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EmbeddingRunResult(chunks, ChunksTruncated: 0, EmbeddingRetries: 0, VectorDimErrors: 0, CacheHits: 1));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
         deps.SnapshotService.Setup(s => s.UpdateAsync(
-                "pdf", It.IsAny<IReadOnlyList<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<CancellationToken>()))
+                "pdf", It.IsAny<IReadOnlyList<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlySet<string>)new HashSet<string> { "hash1" });
         deps.VectorCache.Setup(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>())).ReturnsAsync(2);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", ["stale1"], "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(1, result.DocsUploaded);
         Assert.AreEqual(1, result.VectorCacheHits);
         deps.VectorCache.Verify(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()), Times.Once);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -217,6 +221,8 @@ public class PdfIndexingFunctionTests
         var chunks = new List<DocumentChunk> { new() { Id = "c1", DocumentId = "doc1.pdf", Content = "hello" } };
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<DocumentChunk>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(chunks);
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<string>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EmbeddingRunResult(chunks, 0, 0, 0, 0));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
@@ -226,7 +232,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", [], "instance-1", DateTimeOffset.UtcNow), context));
+            function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "EmbedAndUploadActivity failed");
     }
@@ -241,7 +247,7 @@ public class PdfIndexingFunctionTests
         deps.ReportWriter.Setup(w => w.WriteReportAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
-        var report   = PdfIndexRunReport.FromResults("instance-1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, false, null, null, null, true, null);
+        var report   = new PdfIndexRunReport { Run = new RunIdentity("instance-1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, false, true) };
 
         await function.SaveIndexReportActivity(report, context);
 
@@ -256,7 +262,7 @@ public class PdfIndexingFunctionTests
         deps.ReportWriter.SetupGet(w => w.IsEnabled).Returns(false);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
-        var report   = PdfIndexRunReport.FromResults("instance-1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, false, null, null, null, true, null);
+        var report   = new PdfIndexRunReport { Run = new RunIdentity("instance-1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, false, true) };
 
         await function.SaveIndexReportActivity(report, context);
 
@@ -302,22 +308,35 @@ public class PdfIndexingFunctionTests
     // ── RecreateIndexActivity / RestoreFromSnapshotActivity ─────────────────
 
     [TestMethod]
-    public async Task RecreateIndexActivity_Success_CallsRecreateIndex()
+    public async Task RecreateIndexActivity_Success_DeletesKnowledgeBaseAndSourceBeforeIndexThenRebuildsAfter()
     {
         var deps = new Deps();
-        deps.IndexService.Setup(s => s.RecreateIndexAsync()).Returns(Task.CompletedTask);
+        var callOrder = new List<string>();
+        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeBaseAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("delete-base")).Returns(Task.CompletedTask);
+        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeSourceAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("delete-source")).Returns(Task.CompletedTask);
+        deps.IndexService.Setup(s => s.RecreateIndexAsync())
+            .Callback(() => callOrder.Add("recreate-index")).Returns(Task.CompletedTask);
+        deps.KnowledgeService.Setup(s => s.EnsureKnowledgeSourceAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("ensure-source")).Returns(Task.CompletedTask);
+        deps.KnowledgeService.Setup(s => s.EnsureKnowledgeBaseAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("ensure-base")).Returns(Task.CompletedTask);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
         await function.RecreateIndexActivity(null, context);
 
-        deps.IndexService.Verify(s => s.RecreateIndexAsync(), Times.Once);
+        CollectionAssert.AreEqual(
+            new[] { "delete-base", "delete-source", "recreate-index", "ensure-source", "ensure-base" }, callOrder);
     }
 
     [TestMethod]
     public async Task RecreateIndexActivity_Throws_WrapsInInvalidOperationException()
     {
         var deps = new Deps();
+        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeBaseAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeSourceAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         deps.IndexService.Setup(s => s.RecreateIndexAsync()).ThrowsAsync(new Exception("boom"));
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -440,14 +459,14 @@ public class PdfIndexingFunctionTests
         Figures:               [],
         Lines:                 []);
 
-    private static ExtractionResults ExtractStats() => new(
+    private static ExtractionStageMetrics ExtractStats() => new(
         Source: "pdf", DocsToProcess: 1, DocsSkipped: 0, DocsNew: 1, DocsUpdated: 0, DocsDeleted: 0,
         StaleDocumentIds: [], ValidationErrors: 0, ValidationWarnings: 0, ReconciliationProblems: 0,
         StaleDocCount: 0, MojibakeRepairedPages: 0, DetectedTableCount: 0, DocsWithoutHeadings: 0,
         MissingTitleCount: 0, MissingVersionCount: 0, MissingDepartmentCount: 0, TraceabilityGapCount: 0,
         Issues: [], RedFlags: [], SpotCheckSample: []);
 
-    private static EmbedUploadingResults EmbedStats() => new(
+    private static EmbedUploadStageMetrics EmbedStats() => new(
         DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunksTruncated: 0, EmbeddingRetries: 0,
         VectorDimErrors: 0, VectorCacheHits: 0, TotalEmbeddingDurationMs: 10, IndexDocumentCountSnapshot: 10,
         IndexStorageSizeBytesSnapshot: 100, RedFlags: []);

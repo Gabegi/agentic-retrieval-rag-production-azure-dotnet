@@ -2,6 +2,12 @@ using System.Text.Json.Serialization;
 
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
+// Deliberately takes DocumentChunk directly, unlike SnapshotChunk.From<T>, which is
+// generic over ISnapshotSource. The snapshot is doc-type-agnostic by design (Observability
+// must not reference a pipeline's chunk type), whereas this projection mirrors
+// IndexService.BuildIndexDefinition field for field and is only meaningful for PDF chunks -
+// a second pipeline would need its own schema mapping, not a shared interface.
+//
 // The exact subset of DocumentChunk that Azure AI Search's schema actually knows about -
 // built right before the upload call (IndexDocumentService.UpsertDocumentsAsync), never
 // persisted or passed between Durable activities itself. DocumentChunk carries everything

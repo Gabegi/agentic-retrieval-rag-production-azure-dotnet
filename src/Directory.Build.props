@@ -4,4 +4,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+
+  <!-- The solution builds warning-free, so any new warning is a real signal rather than
+       noise to scroll past. Production projects only: test projects host analyzers
+       (MSTest, Durable Functions) that flag patterns which are legitimate in tests - most
+       notably DURABLE2003, which fires because the test assembly doesn't compile the real
+       activity functions it names. Turning warnings into errors there would block builds
+       on false positives. -->
+  <PropertyGroup Condition="!$(MSBuildProjectName.EndsWith('.Tests'))">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
 </Project>

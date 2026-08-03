@@ -2,6 +2,11 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AzureFunctionsVersion>v4</AzureFunctionsVersion>
+    <!-- NU1510: the pruning heuristic is wrong here, not a leftover dependency -
+         System.Text.Encoding.CodePages is load-bearing for the PDF pipeline's mojibake
+         repair (Program.cs calls Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+         see PdfCleaner for the consuming code). Do not remove the package to silence this. -->
+    <NoWarn>$(NoWarn);NU1510</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CsvHelper" />

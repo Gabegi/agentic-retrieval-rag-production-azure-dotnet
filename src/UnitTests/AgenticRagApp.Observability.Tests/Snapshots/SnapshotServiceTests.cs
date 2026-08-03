@@ -1,3 +1,4 @@
+using AgenticRagApp.Common.Models;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -9,6 +10,7 @@ namespace AgenticRagApp.Observability.Reports.Tests;
 public class SnapshotServiceTests
 {
     private static readonly IReadOnlyDictionary<string, string> NoMetadata = new Dictionary<string, string>();
+    private static readonly DateTimeOffset StartedAt = new(2024, 3, 15, 0, 0, 0, TimeSpan.Zero);
 
     private sealed record TestChunk(
         string Id, string DocumentId, string? Title, DateTimeOffset? LastModifiedDate,
@@ -29,7 +31,7 @@ public class SnapshotServiceTests
         var service = BuildService(blobStore);
         var newChunks = new List<TestChunk> { new("id1", "doc1", "Title", null, "content", null, 0, 0, "hash1") };
 
-        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-1");
+        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-1", StartedAt);
 
         Assert.AreEqual(1, hashes.Count);
         Assert.IsTrue(hashes.Contains("hash1"));
@@ -48,7 +50,7 @@ public class SnapshotServiceTests
         var service = BuildService(blobStore);
         var newChunks = new List<TestChunk> { new("new-id", "doc-new", "New", null, "new content", null, 0, 0, "new-hash") };
 
-        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-2");
+        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-2", StartedAt);
 
         Assert.AreEqual(2, hashes.Count);
         Assert.IsTrue(hashes.Contains("old-hash"));
@@ -71,7 +73,7 @@ public class SnapshotServiceTests
             .ReturnsAsync(previousChunks);
         var service = BuildService(blobStore);
 
-        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2");
+        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2", StartedAt);
 
         Assert.AreEqual(1, hashes.Count);
         Assert.IsTrue(hashes.Contains("keep-hash"));
@@ -90,7 +92,7 @@ public class SnapshotServiceTests
             .ReturnsAsync(previousChunks);
         var service = BuildService(blobStore);
 
-        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2");
+        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2", StartedAt);
 
         Assert.AreEqual(0, hashes.Count);
     }
@@ -102,10 +104,10 @@ public class SnapshotServiceTests
         SetupNoExisting(blobStore, "pdf");
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1");
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
 
         blobStore.Verify(s => s.UploadJsonAsync(
-            It.IsAny<BlobContainerClient>(), "snapshots/pdf/run-1/full-index.json", It.IsAny<List<SnapshotChunk>>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<BlobContainerClient>(), "snapshots/pdf/2024/03/15/run-1/full-index.json", It.IsAny<List<SnapshotChunk>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -115,7 +117,7 @@ public class SnapshotServiceTests
         SetupNoExisting(blobStore, "pdf");
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1");
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
 
         blobStore.Verify(s => s.EnsureContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -131,7 +133,7 @@ public class SnapshotServiceTests
             .ReturnsAsync([]);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-2");
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-2", StartedAt);
 
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -155,7 +157,7 @@ public class SnapshotServiceTests
             .ReturnsAsync([]);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-new");
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-new", StartedAt);
 
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/instance-2/full-index.json", It.IsAny<CancellationToken>()), Times.Once);
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/instance-1/full-index.json", It.IsAny<CancellationToken>()), Times.Once);

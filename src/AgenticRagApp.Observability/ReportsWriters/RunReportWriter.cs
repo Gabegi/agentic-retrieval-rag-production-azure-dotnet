@@ -1,24 +1,40 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Azure.Storage.Blobs;
-using Microsoft.Extensions.Hosting;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 
 namespace AgenticRagApp.Observability.Reports;
 
 public class RunReportWriter : IRunReportWriter
 {
-    private static readonly JsonSerializerOptions s_opts = new() { WriteIndented = true };
+    // JsonStringEnumConverter so PipelineStage/IssueSeverity serialise as names rather
+    // than integers. These reports are read by humans and (soon) by a model; "Parse:Pages"
+    // and "Error" carry meaning, 0 and 1 do not. The names on the wire are pinned by
+    // [JsonStringEnumMemberName] on each enum member, so reordering the enum can't
+    // silently change the report format.
+    private static readonly JsonSerializerOptions s_opts = new()
+    {
+        WriteIndented = true,
+        Converters    = { new JsonStringEnumConverter() },
+    };
 
     private readonly IBlobStore         _blobStore;
     private readonly BlobContainerClient _container;
 
-    public bool IsEnabled { get; }
+    // Always true - these are the small (few-KB) diagnostic reports (validation-report.json,
+    // file-facts.json, the extraction diff, PdfIndexRunReport) that operators need to read in
+    // Azure, not just locally. Previously gated to env.IsDevelopment(), which meant the one
+    // environment where you can't attach a debugger was also the one environment with none of
+    // these reports - same principle GetLastIndexStatsAsync/SaveLastIndexStatsAsync below
+    // already followed ("drift detection is pointless if it only runs in dev"), now applied
+    // consistently. Kept as a property (rather than deleting every "if (!IsEnabled) return"
+    // call site) so this is the one place that decides it.
+    public bool IsEnabled => true;
 
-    public RunReportWriter(IBlobStore blobStore, BlobContainerClient container, IHostEnvironment env)
+    public RunReportWriter(IBlobStore blobStore, BlobContainerClient container)
     {
         _blobStore = blobStore;
         _container = container;
-        IsEnabled  = env.IsDevelopment();
     }
 
     public Task WriteReportAsync<T>(string path, T report, CancellationToken ct = default) =>

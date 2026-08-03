@@ -1,3 +1,4 @@
+using AgenticRagApp.Common.Models;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Blob;
@@ -24,7 +25,7 @@ public class SnapshotService : ISnapshotService
     }
 
     public async Task<IReadOnlySet<string>> UpdateAsync<T>(
-        string source, IReadOnlyList<T> newChunks, IReadOnlyList<string> staleDocumentIds, string instanceId, CancellationToken ct = default)
+        string source, IReadOnlyList<T> newChunks, IReadOnlyList<string> staleDocumentIds, string instanceId, DateTimeOffset startedAt, CancellationToken ct = default)
         where T : ISnapshotSource
     {
         var prefix = $"snapshots/{source}/";
@@ -46,7 +47,7 @@ public class SnapshotService : ISnapshotService
             .Concat(newChunks.Select(SnapshotChunk.From))
             .ToList();
 
-        var path = $"{prefix}{instanceId}/{FileName}";
+        var path = $"{prefix}{startedAt:yyyy/MM/dd}/{instanceId}/{FileName}";
         await _blobStore.EnsureContainerExistsAsync(_container, ct);
         await _blobStore.UploadJsonAsync(_container, path, merged, ct);
         _logger.LogInformation("Snapshot written — source '{Source}', {Count} chunks → {Path}", source, merged.Count, path);
@@ -65,9 +66,13 @@ public class SnapshotService : ISnapshotService
         var existing = await ListSnapshotBlobsAsync(prefix, ct);
         if (existing.Count == 0) return ([], null);
 
-        var latest     = existing[0];
-        var chunks     = await ReadSnapshotAsync(latest.Path, ct);
-        var instanceId = latest.Path[prefix.Length..^($"/{FileName}".Length)];
+        var latest = existing[0];
+        var chunks = await ReadSnapshotAsync(latest.Path, ct);
+
+        // Path is {prefix}{yyyy}/{MM}/{dd}/{instanceId}/{FileName} — instanceId is the last
+        // segment before the file name, not everything after the prefix.
+        var dirs       = latest.Path[prefix.Length..^($"/{FileName}".Length)];
+        var instanceId = dirs[(dirs.LastIndexOf('/') + 1)..];
         return (chunks, instanceId);
     }
 

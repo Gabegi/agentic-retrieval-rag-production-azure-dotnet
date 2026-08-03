@@ -1,7 +1,9 @@
+using AgenticRagApp.Common.Models;
 namespace AgenticRagApp.Observability.Reports;
 
 // One row per chunk believed to be live in the Search index right now, for one doc-type
-// pipeline. The rolling snapshot (pipeline-artifacts/snapshots/{source}/{instanceId}/full-index.json)
+// pipeline. The rolling snapshot
+// (pipeline-artifacts/snapshots/{source}/{yyyy}/{MM}/{dd}/{instanceId}/full-index.json)
 // is the union of these across every run of that pipeline, not a per-run diff — and never
 // mixes chunks from a different source. Carries everything a future rebuild would need to
 // bulk-upsert directly into a fresh index - the real fields UploadService sends to Search,

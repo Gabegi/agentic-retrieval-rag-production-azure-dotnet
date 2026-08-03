@@ -7,9 +7,9 @@ namespace AgenticRagApp.Querying;
 // All of querying's DI registrations live here, self-contained, so the Functions host
 // (AgenticRagApp.FunctionApp/Program.cs) only ever needs one line — services.AddQuerying()
 // — to wire it in. Assumes the host has already called AgenticRagApp.Infrastructure's
-// AddAgenticRagAppInfrastructure() (SearchClient, ISearchIndexStore, IndexerConfig,
-// IKnowledgeRetrievalClient). Doc-type-agnostic — reads the one shared Search index
-// regardless of which pipeline (PDF/CSV) wrote a given chunk.
+// AddAgenticRagAppInfrastructure() (SearchClient, IKnowledgeSourceStore, IKnowledgeService,
+// IndexerConfig, IKnowledgeRetrievalClient). Doc-type-agnostic — reads the one shared Search
+// index regardless of which pipeline (PDF/CSV) wrote a given chunk.
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddQuerying(this IServiceCollection services)
@@ -17,7 +17,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp =>
             new ChunkNeighborExpander(sp.GetRequiredService<SearchClient>()));
         services.AddSingleton<IRagQueryService, AgenticRagQueryService>();
-        services.AddSingleton<IKnowledgeService, KnowledgeService>();
 
         return services;
     }

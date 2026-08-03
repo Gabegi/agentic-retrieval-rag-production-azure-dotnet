@@ -43,7 +43,7 @@ public class KnowledgeRetrievalClientTests
         underlying
             .Setup(c => c.RetrieveAsync(It.IsAny<KnowledgeBaseRetrievalRequest>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Response.FromValue(response, Mock.Of<Response>()));
-        var client = new KnowledgeRetrievalClient(underlying.Object);
+        var client = new KnowledgeBaseClient(underlying.Object);
 
         var result = await client.RetrieveAsync(Request());
 
@@ -58,7 +58,7 @@ public class KnowledgeRetrievalClientTests
         underlying
             .Setup(c => c.RetrieveAsync(request, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Response.FromValue(EmptyResponse(), Mock.Of<Response>()));
-        var client = new KnowledgeRetrievalClient(underlying.Object);
+        var client = new KnowledgeBaseClient(underlying.Object);
 
         await client.RetrieveAsync(request);
 

@@ -5,21 +5,21 @@ using AgenticRagApp.Common.Models;
 namespace RagApp.UnitTests.PdfExtraction;
 
 [TestClass]
-public class PDFExtractionResultTests
+public class PdfExtractionResultTests
 {
     [TestMethod]
     public void OkTrue_WithError_ThrowsAtConstruction()
     {
-        Assert.ThrowsExactly<ArgumentException>(() => new PDFExtractionResult(
+        Assert.ThrowsExactly<ArgumentException>(() => new PdfExtractionResult(
             Ok: true, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: null,
             NativeMetadata: null, RawContent: null, Pages: [], Structure: null,
-            EstimatedCostUsd: null, Error: new ExtractionError(RowNumber: 0, DocumentId: "doc1.pdf", Message: "boom")));
+            EstimatedCostUsd: null, Error: PipelineIssue.Error(PipelineStage.ParsePages, "doc1.pdf", "boom")));
     }
 
     [TestMethod]
     public void OkFalse_WithNoError_ThrowsAtConstruction()
     {
-        Assert.ThrowsExactly<ArgumentException>(() => new PDFExtractionResult(
+        Assert.ThrowsExactly<ArgumentException>(() => new PdfExtractionResult(
             Ok: false, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: null,
             NativeMetadata: null, RawContent: null, Pages: null, Structure: null,
             EstimatedCostUsd: null, Error: null));
@@ -28,7 +28,7 @@ public class PDFExtractionResultTests
     [TestMethod]
     public void OkTrue_WithNullPages_ThrowsAtConstruction()
     {
-        Assert.ThrowsExactly<ArgumentException>(() => new PDFExtractionResult(
+        Assert.ThrowsExactly<ArgumentException>(() => new PdfExtractionResult(
             Ok: true, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: null,
             NativeMetadata: null, RawContent: null, Pages: null, Structure: null,
             EstimatedCostUsd: null, Error: null));
@@ -37,7 +37,7 @@ public class PDFExtractionResultTests
     [TestMethod]
     public void OkTrue_WithPagesAndNoError_ConstructsFine()
     {
-        var result = new PDFExtractionResult(
+        var result = new PdfExtractionResult(
             Ok: true, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: 1.7,
             NativeMetadata: null, RawContent: null, Pages: [], Structure: null,
             EstimatedCostUsd: null, Error: null);
@@ -48,10 +48,10 @@ public class PDFExtractionResultTests
     [TestMethod]
     public void OkFalse_WithError_ConstructsFine()
     {
-        var result = new PDFExtractionResult(
+        var result = new PdfExtractionResult(
             Ok: false, BlobName: "doc1.pdf", FileSizeBytes: 1024, PdfSpecVersion: null,
             NativeMetadata: null, RawContent: null, Pages: null, Structure: null,
-            EstimatedCostUsd: null, Error: new ExtractionError(RowNumber: 0, DocumentId: "doc1.pdf", Message: "boom"));
+            EstimatedCostUsd: null, Error: PipelineIssue.Error(PipelineStage.ParsePages, "doc1.pdf", "boom"));
 
         Assert.IsFalse(result.Ok);
     }

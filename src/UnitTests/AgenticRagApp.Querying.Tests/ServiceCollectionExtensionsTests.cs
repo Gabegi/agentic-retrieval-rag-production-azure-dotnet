@@ -30,16 +30,6 @@ public class ServiceCollectionExtensionsTests
     }
 
     [TestMethod]
-    public void AddQuerying_RegistersKnowledgeServiceAsSingleton()
-    {
-        var services = new ServiceCollection();
-
-        services.AddQuerying();
-
-        AssertSingleton<IKnowledgeService, KnowledgeService>(services);
-    }
-
-    [TestMethod]
     public void AddQuerying_ReturnsSameServiceCollectionInstance_ForChaining()
     {
         var services = new ServiceCollection();

@@ -3,7 +3,9 @@
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\AgenticRagApp.Observability\AgenticRagApp.Observability.csproj" />
-  </ItemGroup>
+  <!-- Common deliberately has no ProjectReference to any other project in this solution.
+       It is the source-agnostic seam both indexing pipelines share, so a dependency from
+       here to Observability (or anywhere else) inverts the intended direction and forces
+       pipeline contracts to be declared in the reporting project. If a type is needed by
+       both Common and Observability, it belongs here. -->
 </Project>

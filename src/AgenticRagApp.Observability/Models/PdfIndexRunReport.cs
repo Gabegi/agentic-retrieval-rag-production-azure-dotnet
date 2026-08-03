@@ -1,78 +1,43 @@
 namespace AgenticRagApp.Observability.Reports;
 
-// Same shape as CsvIndexRunReport (IndexRunReportBase). Deliberately has no
-// StaleDocCount/MissingVersionCount/MissingDepartmentCount - PDF has no equivalent
-// concept for any of them (unlike CsvIndexRunReport, which always has real values).
+// Written to blob after every PDF indexing run.
+// Path: pipeline-reports/indexing/{yyyy}/{MM}/{dd}/{instanceId}.json
 //
-// How to use: compare two reports side-by-side after a source change or config tweak
-// to see whether quality moved in the right direction.
-public sealed record PdfIndexRunReport : IndexRunReportBase
+// Composed from the run's identity plus one record per pipeline stage, rather than ~40
+// flat fields copied out of those same stage records by hand. The old shape had a
+// 45-line FromResults that assigned every field individually and substituted `?? 0` for
+// a stage that never ran - which made "the embed stage crashed" and "the embed stage
+// uploaded nothing" serialise identically. Here a stage that never ran is null, and the
+// difference is visible to anything reading the JSON.
+//
+// How to use: compare two reports side-by-side after a source change or config tweak to
+// see whether quality moved in the right direction. See docs/report-schema.md for what
+// each stage's fields mean.
+public sealed record PdfIndexRunReport
 {
+    public required RunIdentity Run { get; init; }
+
+    // Each null when that stage never ran (an earlier stage threw, or the orchestration
+    // was cut short). Null is not zero: it means "no measurement", not "measured nothing".
+    public ExtractionStageMetrics?  Extraction { get; init; }
+    public ChunkingStageMetrics?    Chunking   { get; init; }
+    public EmbedUploadStageMetrics? Embedding  { get; init; }
+
     // Quality signal: documents with no zenya_document_id blob metadata set. Non-zero means
     // every citation built from them will show Citation.TraceabilityGap - this is the one
     // metric that tells you, without waiting for a query, how much of the corpus is
     // currently untraceable back to Zenya. Expected to be the full corpus count until
     // whoever uploads PDFs starts setting this metadata.
-    public int? TraceabilityGapCount { get; init; }
+    //
+    // Read off the extraction stage rather than stored again, so it can't drift from it.
+    public int? TraceabilityGapCount => Extraction?.TraceabilityGapCount;
 
-    // Assembles the report from the three pipeline stage results - any stage can be null
-    // (it never ran, e.g. a failure partway through the orchestration), in which case its
-    // fields are zeroed rather than left absent.
-    public static PdfIndexRunReport FromResults(
-        string                 instanceId,
-        DateTimeOffset         startedAt,
-        DateTimeOffset         finishedAt,
-        bool                   forceReindex,
-        ExtractionResults?     ext,
-        ChunkingResults?       chunk,
-        EmbedUploadingResults? embed,
-        bool                   success,
-        string?                error) => new()
-        {
-            InstanceId              = instanceId,
-            StartedAt               = startedAt,
-            FinishedAt              = finishedAt,
-            ForceReindex            = forceReindex,
-            Success                 = success,
-            ErrorMessage            = error,
-            DocsToProcess           = ext?.DocsToProcess          ?? 0,
-            DocsSkipped             = ext?.DocsSkipped             ?? 0,
-            DocsNew                 = ext?.DocsNew                 ?? 0,
-            DocsUpdated             = ext?.DocsUpdated             ?? 0,
-            DocsDeleted             = ext?.DocsDeleted             ?? 0,
-            ChunksRemoved           = embed?.ChunksRemoved         ?? 0,
-            ValidationErrors        = ext?.ValidationErrors        ?? 0,
-            ValidationWarnings      = ext?.ValidationWarnings      ?? 0,
-            ReconciliationProblems  = ext?.ReconciliationProblems  ?? 0,
-            MojibakeRepairedPages   = ext?.MojibakeRepairedPages   ?? 0,
-            DetectedTableCount      = ext?.DetectedTableCount      ?? 0,
-            DocsWithoutHeadings     = ext?.DocsWithoutHeadings     ?? 0,
-            MissingTitleCount       = ext?.MissingTitleCount       ?? 0,
-            TraceabilityGapCount    = ext?.TraceabilityGapCount    ?? 0,
-            ChunksProduced          = chunk?.ChunksProduced        ?? 0,
-            DocsWithZeroChunks      = chunk?.DocsWithZeroChunks    ?? 0,
-            DuplicateChunks         = chunk?.DuplicateChunks       ?? 0,
-            MinChunkSizeChars       = chunk?.MinChunkSizeChars     ?? 0,
-            MaxChunkSizeChars       = chunk?.MaxChunkSizeChars     ?? 0,
-            AvgChunkSizeChars       = chunk?.AvgChunkSizeChars     ?? 0,
-            P95ChunkSizeChars       = chunk?.P95ChunkSizeChars     ?? 0,
-            BandUnder100            = chunk?.BandUnder100          ?? 0,
-            Band100To500            = chunk?.Band100To500          ?? 0,
-            Band500To1500           = chunk?.Band500To1500         ?? 0,
-            Band1500Plus            = chunk?.Band1500Plus          ?? 0,
-            CoherentChunks          = chunk?.CoherentChunks        ?? 0,
-            HeadingsDetected        = chunk?.HeadingsDetected      ?? 0,
-            ChunksTruncated         = embed?.ChunksTruncated       ?? 0,
-            VectorCacheHits         = embed?.VectorCacheHits       ?? 0,
-            EmbeddingRetries        = embed?.EmbeddingRetries      ?? 0,
-            VectorDimErrors         = embed?.VectorDimErrors       ?? 0,
-            TotalEmbeddingDurationMs = embed?.TotalEmbeddingDurationMs ?? 0,
-            DocsUploaded                   = embed?.DocsUploaded                  ?? 0,
-            DocsFailed                     = embed?.DocsFailed                    ?? 0,
-            IndexDocumentCountSnapshot     = embed?.IndexDocumentCountSnapshot,
-            IndexStorageSizeBytesSnapshot  = embed?.IndexStorageSizeBytesSnapshot,
-            Issues                  = ext?.Issues         ?? [],
-            RedFlags                = [.. ext?.RedFlags ?? [], .. embed?.RedFlags ?? []],
-            SpotCheckSample         = ext?.SpotCheckSample ?? [],
-        };
+    // Convenience accessors for the handful of headline numbers callers log or assert on.
+    // These read through to the stage records - they are not a second copy of the data.
+    public string InstanceId    => Run.InstanceId;
+    public bool   Success       => Run.Success;
+    public string? ErrorMessage => Run.ErrorMessage;
+    public int    DocsToProcess  => Extraction?.DocsToProcess  ?? 0;
+    public int    ChunksProduced => Chunking?.ChunksProduced   ?? 0;
+    public int    DocsUploaded   => Embedding?.DocsUploaded    ?? 0;
 }

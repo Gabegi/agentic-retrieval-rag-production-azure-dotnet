@@ -68,7 +68,7 @@ public class EmbeddingClientTests
                 throw new InvalidOperationException("not retryable");
             });
 
-        await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => client.EmbedWithRetryAsync(["a"]));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => client.EmbedWithRetryAsync(["a"]));
         Assert.AreEqual(1, attempts);
     }
 }

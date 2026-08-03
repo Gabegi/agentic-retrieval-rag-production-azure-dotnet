@@ -34,8 +34,8 @@ public class SnapshotServiceReadLatestTests
         blobStore.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/", It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
-                ("snapshots/pdf/instance-old/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-01-01"), (long?)null, NoMetadata),
-                ("snapshots/pdf/instance-new/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-06-01"), (long?)null, NoMetadata),
+                ("snapshots/pdf/2024/01/01/instance-old/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-01-01"), (long?)null, NoMetadata),
+                ("snapshots/pdf/2024/06/01/instance-new/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-06-01"), (long?)null, NoMetadata),
             ]);
 
         var expectedChunks = new List<SnapshotChunk>
@@ -43,7 +43,7 @@ public class SnapshotServiceReadLatestTests
             new("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash1"),
         };
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
-                It.IsAny<BlobContainerClient>(), "snapshots/pdf/instance-new/full-index.json", It.IsAny<CancellationToken>()))
+                It.IsAny<BlobContainerClient>(), "snapshots/pdf/2024/06/01/instance-new/full-index.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedChunks);
 
         var service = BuildService(blobStore);
@@ -62,7 +62,7 @@ public class SnapshotServiceReadLatestTests
         blobStore.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/", It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
-                ("snapshots/pdf/instance-new/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-06-01"), (long?)null, NoMetadata),
+                ("snapshots/pdf/2024/06/01/instance-new/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-06-01"), (long?)null, NoMetadata),
             ]);
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
                 It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))

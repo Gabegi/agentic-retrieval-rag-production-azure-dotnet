@@ -42,7 +42,7 @@ public class ServiceCollectionExtensionsTests
         services.AddPdfIndexing(Config(documentIntelligenceEndpoint: "https://di.example.com"));
 
         var extractorDescriptor = services.Single(d => d.ServiceType == typeof(IPdfExtractor));
-        Assert.AreEqual(typeof(PDFExtractor), extractorDescriptor.ImplementationType);
+        Assert.AreEqual(typeof(PdfExtractor), extractorDescriptor.ImplementationType);
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(PdfDocumentIntelligenceAnalyzer)));
     }
 

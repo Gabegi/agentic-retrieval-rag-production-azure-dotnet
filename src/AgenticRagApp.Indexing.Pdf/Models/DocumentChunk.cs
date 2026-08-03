@@ -1,3 +1,4 @@
+using AgenticRagApp.Common.Models;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -10,8 +11,13 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 // project only ever handles PDFs now (see docs/plan210726.md's "no generic" note).
 //
 // Implements ISnapshotSource/IChunkStatsSource so Observability's SnapshotService and
-// ChunkingResults.Compute can work generically without referencing this (or any other
+// ChunkingStageMetrics.Compute can work generically without referencing this (or any other
 // doc-type's) chunk type directly - see docs/260721 for why.
+//
+// Mutable class, not a record: EmbedAndUploadActivity assigns Vector onto an already-built
+// chunk after the embedding call returns, so the type needs a setter (or every caller would
+// need a `with`-expression rewrite at the one place that actually needs a field written
+// post-construction).
 public class DocumentChunk : ISnapshotSource, IChunkStatsSource
 {
     // ── Search-indexed fields (IndexService's schema) ───────────────────────
@@ -79,20 +85,20 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     // actually store, derived from the richer objects Search can't.
 
     [JsonPropertyName("table_count")]
-    public int TableCount => Tables.Count;
+    public int TableCount => Structure.Tables.Count;
 
     [JsonPropertyName("has_table")]
-    public bool HasTable => Tables.Count > 0;
+    public bool HasTable => Structure.Tables.Count > 0;
 
-    // Sourced only from DI's own structured Figure.Caption (PDFDocumentAnalyzer.GetFigures) -
+    // Sourced only from DI's own structured Figure.Caption (PdfDocumentIntelligenceAnalyzer.GetFigures) -
     // expect this to be empty on most current documents, since none of them contain figures
     // yet and DI's own caption detection is inconsistent even when they do (see the
-    // FiguresWithoutCaption warning in PdfDocumentAnalyzer.StructureWarnings). PdfCleaner
+    // FiguresWithoutCaption warning in PdfDocumentIntelligenceAnalyzer.StructureWarnings). PdfCleaner
     // separately extracts a figure's figcaption/alt text into the page's Content text (see
     // ConvertFigures) - that's deliberately not threaded back into this structured field
     // today; revisit once real figure-bearing documents exist to validate against.
     [JsonPropertyName("figure_captions")]
-    public IReadOnlyList<string> FigureCaptions => Figures
+    public IReadOnlyList<string> FigureCaptions => Structure.Figures
         .Where(f => !string.IsNullOrWhiteSpace(f.Caption))
         .Select(f => f.Caption!)
         .ToList();
@@ -115,13 +121,10 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     public IReadOnlyList<SectionInfo> Sections  { get; set; } = [];
 
     public string? Breadcrumb { get; set; }
-    public IReadOnlyList<Heading>           Headings       { get; set; } = [];
-    public IReadOnlyList<Heading>           Boilerplate    { get; set; } = [];
-    public IReadOnlyList<TableInfo>         Tables         { get; set; } = [];
-    public PageDimensions?                  Dimensions     { get; set; }
-    public IReadOnlyList<SelectionMarkInfo> SelectionMarks { get; set; } = [];
-    public IReadOnlyList<FigureInfo>        Figures        { get; set; } = [];
-    public IReadOnlyList<LineInfo>          Lines          { get; set; } = [];
+
+    // The page-level structural payload, grouped rather than spread across seven loose
+    // properties - see ChunkStructure for why it is carried but not Search-indexed.
+    public ChunkStructure Structure { get; set; } = ChunkStructure.Empty;
 
     [JsonIgnore] public int  TokenEstimate => Content.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     [JsonIgnore] public bool IsEmpty       => string.IsNullOrWhiteSpace(Content);

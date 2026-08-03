@@ -12,16 +12,17 @@ using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
-using AgenticRagApp.Querying.Services;
 
 namespace AgenticRagApp.Functions;
 
 // PDF indexing entrypoint - Durable Functions orchestrator driving the
 // extract/chunk/embed-and-upload pipeline.
 //
-// Payload pattern: extracted docs and chunks are written to blob (container: indexing-pipeline,
-// paths: {instanceId}/extracted.json and {instanceId}/chunks.json). Only the blob name string
-// travels through Durable Table Storage, avoiding the 64KB row-size limit.
+// Payload pattern: extracted docs, chunks, and stale document IDs are all written to blob
+// (container: indexing-pipeline, paths: {date}/{instanceId}/extracted.json,
+// {date}/{instanceId}/chunks.json, {date}/{instanceId}/stale-document-ids.json). Only the blob name string travels through
+// Durable Table Storage, avoiding the 64KB row-size limit - ExtractActivity's own return value
+// is stripped of the raw stale-ID list for the same reason (see ExtractActivity).
 public class PdfIndexingFunction
 {
     // Scopes the rolling snapshot and drift baseline to this doc-type - PDF and CSV must
@@ -83,7 +84,7 @@ public class PdfIndexingFunction
         var forceReindex = req.Query["force"] == "true";
 
         var instanceId = await client.ScheduleNewOrchestrationInstanceAsync(
-            "IndexingOrchestrator", new IndexRequest(forceReindex));
+            "IndexingOrchestrator", new PdfIndexRequest(forceReindex));
         _logger.LogInformation("Indexing started — instance {InstanceId}", instanceId);
         return client.CreateCheckStatusResponse(req, instanceId);
     }
@@ -112,7 +113,7 @@ public class PdfIndexingFunction
     //             or OrchestrationRuntimeStatus.Terminated)
     //     {
     //         await client.ScheduleNewOrchestrationInstanceAsync(
-    //             "IndexingOrchestrator", new IndexRequest(false),
+    //             "IndexingOrchestrator", new PdfIndexRequest(false),
     //             new StartOrchestrationOptions { InstanceId = instanceId });
     //     }
     // }
@@ -121,21 +122,24 @@ public class PdfIndexingFunction
     public async Task RunOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)
     {
         var startedAt = context.CurrentUtcDateTime;
-        var input     = context.GetInput<IndexRequest>()!;
-        var docsBlob   = $"{context.InstanceId}/extracted.json";
-        var chunksBlob = $"{context.InstanceId}/chunks.json";
+        var input     = context.GetInput<PdfIndexRequest>()!;
+        // Dated like the artifact/report paths below so today's run's temp files can be found
+        // by browsing without already knowing the instance ID.
+        var docsBlob     = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/extracted.json";
+        var chunksBlob   = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/chunks.json";
+        var staleIdsBlob = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/stale-document-ids.json";
 
-        ExtractionResults?  extractResults = null;
-        ChunkingResults?       chunkResults   = null;
-        EmbedUploadingResults? embedResults   = null;
+        ExtractionStageMetrics?  extractResults = null;
+        ChunkingStageMetrics?       chunkResults   = null;
+        EmbedUploadStageMetrics? embedResults   = null;
         bool    success = false;
         string? error   = null;
 
         try
         {
-            extractResults = await context.CallActivityAsync<ExtractionResults>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, context.InstanceId, startedAt));
-            chunkResults   = await context.CallActivityAsync<ChunkingResults>("ChunkActivity",               new ChunkRequest(docsBlob, chunksBlob, context.InstanceId, startedAt));
-            embedResults   = await context.CallActivityAsync<EmbedUploadingResults>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, extractResults.StaleDocumentIds, context.InstanceId, startedAt));
+            extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new PdfExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
+            chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new PdfChunkRequest(docsBlob, chunksBlob, context.InstanceId, startedAt));
+            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new PdfEmbedUploadRequest(chunksBlob, staleIdsBlob, context.InstanceId, startedAt));
             success      = true;
         }
         catch (Exception ex)
@@ -147,9 +151,15 @@ public class PdfIndexingFunction
         // injected-dependency read inside orchestrator code, which Durable Functions'
         // determinism rules warn against. The activity itself is the right place to check.
         await context.CallActivityAsync("SaveIndexReportActivity",
-            PdfIndexRunReport.FromResults(
-                context.InstanceId, startedAt, context.CurrentUtcDateTime, input.ForceReindex,
-                extractResults, chunkResults, embedResults, success, error));
+            new PdfIndexRunReport
+            {
+                Run = new RunIdentity(
+                    context.InstanceId, startedAt, context.CurrentUtcDateTime,
+                    input.ForceReindex, success, error),
+                Extraction = extractResults,
+                Chunking   = chunkResults,
+                Embedding  = embedResults,
+            });
 
         if (!success)
             throw new InvalidOperationException(error ?? "Indexing pipeline failed");
@@ -171,7 +181,7 @@ public class PdfIndexingFunction
     // the output shape to per-document and needs RetryOptions + maxConcurrentActivityFunctions
     // decided deliberately - see the extraction-optimisation review thread for the full design.
     [Function("ExtractActivity")]
-    public async Task<ExtractionResults> ExtractActivity([ActivityTrigger] ExtractRequest req, FunctionContext context)
+    public async Task<ExtractionStageMetrics> ExtractActivity([ActivityTrigger] PdfExtractRequest req, FunctionContext context)
     {
         try
         {
@@ -179,12 +189,17 @@ public class PdfIndexingFunction
             var (docs, stats) = await _extractionService.ExtractAsync(
                 req.ForceReindex, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, docs, context.CancellationToken);
+            await WriteBlobAsync(req.StaleIdsBlob, stats.StaleDocumentIds, context.CancellationToken);
 
             await _artifactWriter.WriteArtifactAsync(
                 $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/extraction.json", new { Docs = docs, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Extracted {Count} docs → {Blob}", docs.Count, req.OutputBlob);
-            return stats;
+
+            // Stale IDs already went to req.StaleIdsBlob above; stripped here so they don't
+            // also ride along on this activity's own Durable-persisted return value - see
+            // the class comment and finding #3 of the 2026-07-29 extraction review.
+            return stats with { StaleDocumentIds = [] };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -196,7 +211,7 @@ public class PdfIndexingFunction
 
     // Step 2 — read ExtractionDocuments, chunk, serialise DocumentChunks to blob; return stats
     [Function("ChunkActivity")]
-    public async Task<ChunkingResults> ChunkActivity([ActivityTrigger] ChunkRequest req, FunctionContext context)
+    public async Task<ChunkingStageMetrics> ChunkActivity([ActivityTrigger] PdfChunkRequest req, FunctionContext context)
     {
         try
         {
@@ -221,11 +236,12 @@ public class PdfIndexingFunction
 
     // Step 3 — read DocumentChunks, embed then upload to Azure AI Search; return combined stats
     [Function("EmbedAndUploadActivity")]
-    public async Task<EmbedUploadingResults> EmbedAndUploadActivity([ActivityTrigger] EmbedUploadRequest req, FunctionContext context)
+    public async Task<EmbedUploadStageMetrics> EmbedAndUploadActivity([ActivityTrigger] PdfEmbedUploadRequest req, FunctionContext context)
     {
         try
         {
-            var chunks = await ReadBlobAsync<List<DocumentChunk>>(req.ChunksBlob, context.CancellationToken);
+            var chunks         = await ReadBlobAsync<List<DocumentChunk>>(req.ChunksBlob, context.CancellationToken);
+            var staleDocumentIds = await ReadBlobAsync<List<string>>(req.StaleIdsBlob, context.CancellationToken);
             LogProcessMemory("chunks loaded", chunks.Count);
 
             var sw              = System.Diagnostics.Stopwatch.StartNew();
@@ -258,7 +274,7 @@ public class PdfIndexingFunction
                 context.CancellationToken);
 
             var uploadResult = await _uploadService.UploadDocumentsAsync(
-                embeddedDocs, req.StaleDocumentIds, context.CancellationToken);
+                embeddedDocs, staleDocumentIds, context.CancellationToken);
             LogProcessMemory("upload complete", chunks.Count);
 
             // Rolling full-corpus snapshot (source-scoped) + the vector-cache eviction that
@@ -267,15 +283,16 @@ public class PdfIndexingFunction
             // (UploadService doesn't report which specific chunks failed, only the count) -
             // rare, self-corrects whenever that document is next reprocessed.
             var liveHashes = await _snapshotService.UpdateAsync(
-                Source, embeddedDocs, req.StaleDocumentIds, req.InstanceId, context.CancellationToken);
+                Source, embeddedDocs, staleDocumentIds, req.InstanceId, req.StartedAt, context.CancellationToken);
             var evictedCount = await _vectorCache.EvictOrphanedAsync(liveHashes, context.CancellationToken);
             if (evictedCount > 0)
                 _logger.LogInformation("Vector cache eviction — {Count} orphaned entr{Suffix} deleted",
                     evictedCount, evictedCount == 1 ? "y" : "ies");
 
             await DeleteBlobAsync(req.ChunksBlob, context.CancellationToken);
+            await DeleteBlobAsync(req.StaleIdsBlob, context.CancellationToken);
 
-            return new EmbedUploadingResults(
+            return new EmbedUploadStageMetrics(
                 DocsUploaded:                  uploadResult.DocsUploaded,
                 DocsFailed:                    uploadResult.DocsFailed,
                 ChunksRemoved:                 uploadResult.ChunksRemoved,
@@ -301,7 +318,7 @@ public class PdfIndexingFunction
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"indexing/{report.StartedAt:yyyy/MM/dd}/{report.StartedAt:HH-mm-ss}.json", report, context.CancellationToken);
+            $"indexing/{report.Run.StartedAt:yyyy/MM/dd}/{report.Run.InstanceId}.json", report, context.CancellationToken);
         _logger.LogInformation(
             "Index run report saved — instance={InstanceId}, docs={Docs}, chunks={Chunks}, success={Success}",
             report.InstanceId, report.DocsToProcess, report.ChunksProduced, report.Success);
@@ -348,12 +365,20 @@ public class PdfIndexingFunction
             throw new InvalidOperationException(error ?? "Index restore failed");
     }
 
+    // Knowledge base references knowledge source references index, so teardown goes
+    // base -> source -> index and rebuild goes index -> source -> base - Azure AI Search
+    // refuses to delete an index while a knowledge source still references it (see
+    // docs/260730/index-restore-knowledge-source-plan.md).
     [Function("RecreateIndexActivity")]
     public async Task RecreateIndexActivity([ActivityTrigger] object? _, FunctionContext context)
     {
         try
         {
+            await _knowledgeService.DeleteKnowledgeBaseAsync(context.CancellationToken);
+            await _knowledgeService.DeleteKnowledgeSourceAsync(context.CancellationToken);
             await _indexService.RecreateIndexAsync();
+            await _knowledgeService.EnsureKnowledgeSourceAsync(context.CancellationToken);
+            await _knowledgeService.EnsureKnowledgeBaseAsync(context.CancellationToken);
         }
         catch (Exception ex)
         {
@@ -384,7 +409,7 @@ public class PdfIndexingFunction
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"restore/{report.StartedAt:yyyy/MM/dd}/{report.StartedAt:HH-mm-ss}.json", report, context.CancellationToken);
+            $"restore/{report.StartedAt:yyyy/MM/dd}/{report.InstanceId}.json", report, context.CancellationToken);
         _logger.LogInformation(
             "Index restore report saved — instance={InstanceId}, restored={Restored}, success={Success}",
             report.InstanceId, report.ChunksRestored, report.Success);
@@ -445,8 +470,3 @@ public class PdfIndexingFunction
             "Memory @ {Stage} — {Chunks} chunks, working set {WorkingSetMb} MB, managed heap {HeapMb} MB",
             stage, chunkCount, Environment.WorkingSet / 1024 / 1024, GC.GetTotalMemory(false) / 1024 / 1024);
 }
-
-public record IndexRequest(bool ForceReindex);
-public record ExtractRequest(bool ForceReindex, string OutputBlob, string InstanceId, DateTimeOffset StartedAt);
-public record ChunkRequest(string InputBlob, string OutputBlob, string InstanceId, DateTimeOffset StartedAt);
-public record EmbedUploadRequest(string ChunksBlob, IReadOnlyList<string> StaleDocumentIds, string InstanceId, DateTimeOffset StartedAt);

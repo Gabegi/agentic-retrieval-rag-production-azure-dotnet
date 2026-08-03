@@ -14,11 +14,8 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 
 // PDF implementation of IExtractionOrchestrator — mirrors CsvExtractionOrchestrator's
 // shape (download -> extract -> clean -> validate -> report -> diff-ready output),
-// adapted to the PDF pipeline. So each file's PDFExtractionResult.Diagnostics
-// (currently always null - nothing populates it since the PdfPig backend was removed)
-// has somewhere to be written as a dev-only report. Extractors stay I/O-free;
-// orchestrators own reporting — same split ExtractionService/CsvExtractionOrchestrator
-// already follow for IRunReportWriter.
+// adapted to the PDF pipeline. Extractors stay I/O-free; orchestrators own reporting —
+// same split ExtractionService/CsvExtractionOrchestrator already follow for IRunReportWriter.
 public class PdfExtractionPipeline : IExtractionOrchestrator
 {
     private readonly BlobContainerClient                _container;
@@ -30,10 +27,9 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     private readonly IPdfPipelineValidator               _validator;
     private readonly IHostEnvironment                    _env;
     private readonly ILogger<PdfExtractionPipeline>  _logger;
+    private readonly TimeSpan                            _corpusWallClockLimit;
 
     public string Source => "pdf";
-
-    private const string StateBlobName = "pdf-extraction-state.json";
 
     // Folder segment namespacing every report blob this orchestrator writes, so it
     // doesn't mix into CsvExtractionOrchestrator's blobs in the same "pipeline-reports" container.
@@ -53,7 +49,9 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // against DI's actual throttling limits before raising it.
     private const int MaxExtractionParallelism = 8;
 
-    private sealed record RunState(int CleanedRecords);
+    private const string StateBlobName = "pdf-extraction-state.json";
+
+    internal sealed record RunState(int CleanedRecords);
 
     public PdfExtractionPipeline(
         BlobContainerClient                container,
@@ -64,7 +62,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         IPdfCleaner                        cleaner,
         IPdfPipelineValidator              validator,
         IHostEnvironment                   env,
-        ILogger<PdfExtractionPipeline> logger)
+        ILogger<PdfExtractionPipeline> logger,
+        TimeSpan?                          corpusWallClockLimit = null)
     {
         _container      = container;
         _stateContainer = stateContainer;
@@ -75,6 +74,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         _validator      = validator;
         _env            = env;
         _logger         = logger;
+        _corpusWallClockLimit = corpusWallClockLimit ?? CorpusWallClockLimit;
     }
 
     public async Task<PdfExtractionOutput> ExtractDocumentsAsync(
@@ -84,55 +84,53 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
         // Captured as the pipeline progresses so the finally block below can always emit
         // telemetry and write a report off whatever got built, regardless of where the try
-        // block throws (the reconciliation-gate abort, SaveRunStateAsync, BuildExtractionOutput).
-        // Nothing to emit if Validate itself never ran (blob listing/cleaning/PreviousRunCount
-        // failed) - there's no report or cleanResult to build either from.
-        List<PdfExtractionDiagnostics> diagnostics = new();
-        PdfValidationReport?           validation  = null;
+        // block throws (the reconciliation-gate abort, BuildExtractionOutput). Nothing to
+        // emit if Validate itself never ran (blob listing/cleaning failed) - there's no
+        // report or cleanResult to build either from.
+        PdfQualityGateResult?           validation  = null;
         PdfCleanResult?                cleanResult = null;
-        List<PDFExtractionResult>?     fileResults = null;
+        List<PdfExtractionResult>?     fileResults = null;
         Exception?                     failure     = null;
 
         try
         {
-            // 1/ Extract Data from PDFs
+            // 1/ Extract Data from PDFs, cleaning each file's pages as soon as its own
+            // extraction finishes (finding #14) rather than waiting for the whole corpus -
+            // see ExtractPdfsFromBlobAsync's per-file cleaning inside the parallel loop.
             Dictionary<string, DateTimeOffset> lastModifiedByBlob;
             Dictionary<string, ZenyaMetadata>  zenyaByBlob;
-            (fileResults, lastModifiedByBlob, zenyaByBlob) = await ExtractPdfsFromBlobAsync(sourceIdsToProcess, ct);
+            (fileResults, cleanResult, lastModifiedByBlob, zenyaByBlob) = await ExtractPdfsFromBlobAsync(sourceIdsToProcess, runAt, ct);
 
-
-            // 2/ Clean pages
-
-            // Filters to successfully-extracted files and flattens their pages into one list
-            // because _cleaner.Clean only needs page content — not the file-level error/warning data that _validator.Validate needs separately from fileResults itself
-            var pages = fileResults.Where(f => f.Ok).SelectMany(f => f.Pages!).ToList();
-            cleanResult = _pdfCleaner.CleanPdf(pages);
-
-            // 3/ Check # of docs processed vs previous run
+            // 3/ Validate results
             var (previousCount, previousETag) = await PreviousRunCount(ct);
-            diagnostics = fileResults.Select(f => f.Diagnostics).OfType<PdfExtractionDiagnostics>().ToList();
+            validation = _validator.Validate(fileResults, cleanResult, previousRunCleanedCount: previousCount);
 
-            // 4/ Validate results
-            validation = _validator.Validate(fileResults, cleanResult, previousCount);
-
-            // 5/ Validation Gate — reconciliation problems only (magnitude-shift is
-            // advisory-only, see PdfPipelineValidator's tiering comment; report.Passed
-            // already excludes it). Only enforced outside Development, so local/dev runs
-            // aren't blocked by reconciliation noise while experimenting. Still surfaced as
-            // a warning either way via EmitValidationTelemetry.
+            // 4/ Validation is reported, not enforced: PdfPipelineValidator.Passed reflects
+            // two independent evaluations (reconciliation problems, and the aggregate error
+            // rate exceeding its threshold), but neither ever aborts the run anymore - both
+            // are surfaced via this warning and via EmitValidationTelemetry/the written
+            // report, and the run always proceeds to indexing.
+            //
+            // The message reports both counts rather than just ReconciliationProblems.Count -
+            // a run can fail with zero reconciliation problems purely on error rate (e.g. a
+            // burst of TextQuality corruption errors), in which case a reconciliation-only
+            // message would read "(0 reconciliation problem(s))" and give no hint what
+            // actually tripped the evaluation.
             if (!validation.Passed)
             {
-                if (_env.IsDevelopment())
-                    _logger.LogWarning(
-                        "PDF validation failed ({Reconciliation} reconciliation problem(s)) " +
-                        "— continuing because we're in Development.",
-                        validation.ReconciliationProblems.Count);
-                else
-                    throw new InvalidOperationException(
-                        $"PDF validation failed ({validation.ReconciliationProblems.Count} reconciliation problem(s)) " +
-                        "— aborting extraction.");
+                var errorIssueCount = validation.Issues.Count(i => i.IsError);
+
+                _logger.LogWarning(
+                    "PDF validation failed ({Reconciliation} reconciliation problem(s), {Errors} error-severity issue(s)) " +
+                    "— continuing (validation no longer aborts a run).",
+                    validation.ReconciliationProblems.Count, errorIssueCount);
             }
 
+            // Becomes the new magnitude-check baseline whether the gate passed outright or
+            // only passed because we're in Development — same reasoning as CSV's "whether
+            // passed normally or via override" comment: the alternative (never saving on a
+            // Development continue) would leave the baseline stuck at whatever the last
+            // Production run saw, permanently mis-sizing every subsequent magnitude check.
             await SaveRunStateAsync(cleanResult.Records.Count, previousETag, ct);
 
             var (errors, warnings, missingTitle) = CountIssues(validation, cleanResult);
@@ -141,9 +139,9 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         catch (Exception ex)
         {
             // Captured (not swallowed - rethrown below) so the finally block can still
-            // write *something* even when the run failed before a PdfValidationReport
-            // ever existed (blob listing, cleaning, PreviousRunCount) - see the
-            // WriteFailureReportAsync branch below.
+            // write *something* even when the run failed before a PdfQualityGateResult
+            // ever existed (blob listing, cleaning) - see the WriteFailureReportAsync
+            // branch below.
             failure = ex;
             throw;
         }
@@ -158,7 +156,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 try
                 {
                     // always send telemetry
-                    EmitValidationTelemetry(validation, cleanResult!);
+                    EmitValidationTelemetry(validation, cleanResult!, fileResults!);
                 }
                 catch (Exception ex)
                 {
@@ -169,7 +167,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 {
                     // must always run - fileResults is never null here: it's assigned in
                     // step 1, before validation (step 4) can be assigned at all.
-                    await WriteReportsAsync(runAt, validation, diagnostics, fileResults!, CancellationToken.None);
+                    await WriteReportsAsync(runAt, validation, fileResults!, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -178,10 +176,10 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             }
             else if (failure is not null)
             {
-                // Nothing made it as far as a PdfValidationReport (blob listing, cleaning,
-                // or PreviousRunCount threw) - write a minimal failure report instead so
-                // this run still leaves something behind, same CancellationToken.None
-                // reasoning as WriteReportsAsync above.
+                // Nothing made it as far as a PdfQualityGateResult (blob listing or cleaning
+                // threw) - write a minimal failure report instead so this run still leaves
+                // something behind, same CancellationToken.None reasoning as
+                // WriteReportsAsync above.
                 try
                 {
                     await WriteFailureReportAsync(runAt, failure, CancellationToken.None);
@@ -196,17 +194,30 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
     // Downloads and extracts every blob in sourceIdsToProcess, up to MaxExtractionParallelism at a
     // time. One file's exception (network blip, an unexpected extractor bug) shouldn't abort
-    // the whole run — it becomes a file-level ExtractionError instead, same treatment
+    // the whole run — it becomes a file-level PipelineIssue instead, same treatment
     // TryOpenAndValidate already gives a corrupt PDF. sourceIdsToProcess already carries each
     // blob's LastModified/ContentLength/Zenya metadata from ExtractionService's own
     // pre-extraction listing/diff, so there's no need to list the container again here —
     // just download and extract whatever's in the set.
-    private async Task<(List<PDFExtractionResult> Results, Dictionary<string, DateTimeOffset> LastModified, Dictionary<string, ZenyaMetadata> Zenya)> ExtractPdfsFromBlobAsync(
-        IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken ct)
+    // Below host.json's durableTask.activityFunctionTimeout (60 minutes, see
+    // AnalyzeBudgetCeiling's own comment for why matching that ceiling matters) - a fixed
+    // margin under it so a file that's already mid-download/mid-analyze when the corpus
+    // wall clock is checked still has room to finish before Durable's own timeout would
+    // redeliver and re-bill the whole activity.
+    private static readonly TimeSpan CorpusWallClockLimit = TimeSpan.FromMinutes(50);
+
+    private async Task<(List<PdfExtractionResult> Results, PdfCleanResult CleanResult, Dictionary<string, DateTimeOffset> LastModified, Dictionary<string, ZenyaMetadata> Zenya)> ExtractPdfsFromBlobAsync(
+        IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, DateTimeOffset runAt, CancellationToken ct)
     {
         // Declares thread-safe collections:
         // One to accumulate per-blob extraction results => ConcurrentBag<T> is a thread-safe, unordered collection, multiple threads can call .Add() on it at once without locking
-        var results      = new ConcurrentBag<PDFExtractionResult>();
+        var results      = new ConcurrentBag<PdfExtractionResult>();
+        // One PdfCleanResult per successfully-extracted file (finding #14: cleaning starts
+        // the moment that file's own extraction finishes, not after the whole corpus does).
+        // Each is built by its own call to _pdfCleaner.CleanPdf, which only ever mutates the
+        // one PdfCleanResult it just created - safe to Add here without further locking, same
+        // as results above. Merged into one run-level PdfCleanResult after the loop.
+        var cleanResults = new ConcurrentBag<PdfCleanResult>();
         var lastModified = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         var zenya        = new ConcurrentDictionary<string, ZenyaMetadata>(StringComparer.OrdinalIgnoreCase);
 
@@ -226,6 +237,46 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 // also cancel the other in-flight tasks, discarding paid DI calls mid-flight.
                 try
                 {
+                    // Corpus-level wall-clock guard (finding #11): a partial run that stops
+                    // submitting new files here completes cleanly well inside Durable's
+                    // activityFunctionTimeout; a run that keeps submitting until that
+                    // timeout fires gets the WHOLE activity redelivered, re-billing every
+                    // already-completed analysis in this run, not just whichever file was
+                    // still in flight. Checked per file (not just once) since this loop runs
+                    // MaxExtractionParallelism-wide and stays open for the whole corpus.
+                    //
+                    // Deliberately not recorded as a PdfExtractionResult/PipelineIssue: this
+                    // is an intentional, graceful stopping point, not a defect - folding it
+                    // into the error-rate gate would mean a large first-time corpus run could
+                    // fail validation (and abort the whole run) purely because it correctly
+                    // stopped early. Simply not extracting this file this run is enough: the
+                    // pre-extraction diff never advances its indexed date, so it's picked up
+                    // as new/updated again on the very next run.
+                    if (DateTimeOffset.UtcNow - runAt > _corpusWallClockLimit)
+                    {
+                        _logger.LogWarning(
+                            "'{Blob}' not submitted - corpus wall-clock limit ({Limit}) reached; stopping new submissions this run so the activity completes cleanly. Will be picked up on the next run.",
+                            name, _corpusWallClockLimit);
+                        return;
+                    }
+
+                    // ContentLength already came from the cheap blob listing (ExtractionService's
+                    // own pre-extraction diff) - rejecting an over-limit file here costs nothing,
+                    // versus downloading up to hundreds of MB just to have
+                    // PdfDocumentValidator.IsPDFSizeOkForDI reject it after the fact. Only acts
+                    // when the length is known; a null ContentLength falls through to the normal
+                    // download-then-validate path, same as today.
+                    if (entry.ContentLength is { } contentLength && contentLength > PdfDocumentValidator.MaxBytes)
+                    {
+                        results.Add(new PdfExtractionResult(false, name, contentLength, null, null, null, null, null, null,
+                            PipelineIssue.Error(
+                                PipelineStage.ParsePages,
+                                name,
+                                $"File is {contentLength / 1024.0 / 1024.0:F1} MB, exceeds the {PdfDocumentValidator.MaxBytes / 1024 / 1024} MB Document Intelligence limit.",
+                                reason: PdfOpenFailureReason.TooLarge)));
+                        return;
+                    }
+
                     var pdfBytes = await _blobStore.DownloadBytesAsync(_container, name, cancellationToken);
 
                     // Computed here, before any backend is invoked, so it applies regardless of
@@ -238,7 +289,15 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                     if (_logger.IsEnabled(LogLevel.Debug))
                         _logger.LogDebug("'{Blob}' content hash: {Hash}", name, ComputeContentHash(pdfBytes));
 
-                    results.Add(await _extractor.ExtractPDFAsync(name, pdfBytes, cancellationToken));
+                    var extracted = await _extractor.ExtractPDFAsync(name, pdfBytes, cancellationToken);
+                    results.Add(extracted);
+
+                    // Clean this file's pages now, while the rest of the corpus is still
+                    // being extracted (finding #14) - instead of flattening every file's
+                    // pages into one list and cleaning it only after the whole
+                    // Parallel.ForEachAsync loop below has finished.
+                    if (extracted.Ok)
+                        cleanResults.Add(_pdfCleaner.CleanPdf(extracted.Pages!));
                 }
                 catch (OperationCanceledException)
                 {
@@ -247,33 +306,32 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Download or extraction failed for '{Blob}'; recording as a file-level error.", name);
-                    results.Add(new PDFExtractionResult(false, name, entry.ContentLength ?? 0, null, null, null, null, null, null,
-                        new ExtractionError(RowNumber: 0, DocumentId: name, Message: ex.Message, Reason: PdfOpenFailureReason.Unknown)));
+                    results.Add(new PdfExtractionResult(false, name, entry.ContentLength ?? 0, null, null, null, null, null, null,
+                        PipelineIssue.Error(PipelineStage.ParsePages, name, ex.Message, reason: PdfOpenFailureReason.Unknown)));
                 }
             });
 
+        var cleanResult = new PdfCleanResult();
+        foreach (var perFile in cleanResults)
+            cleanResult.MergeFrom(perFile);
+
         return (results.ToList(),
+            cleanResult,
             new Dictionary<string, DateTimeOffset>(lastModified, StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, ZenyaMetadata>(zenya, StringComparer.OrdinalIgnoreCase));
     }
 
     // Dev-only (see IRunReportWriter.IsEnabled): the validation report (same shape
     // CsvExtractionOrchestrator writes) plus a second, PDF-only report of what each
-    // extraction step actually produced per file. Currently always empty - diagnostics
-    // is only ever populated by the PdfPig backend, which has been removed; left in place
-    // as a report slot for whichever backend picks that reporting back up.
+    // extraction step actually produced per file.
     private async Task WriteReportsAsync(
-        DateTimeOffset runAt, PdfValidationReport report, List<PdfExtractionDiagnostics> diagnostics,
-        IReadOnlyList<PDFExtractionResult> fileResults, CancellationToken ct)
+        DateTimeOffset runAt, PdfQualityGateResult report,
+        IReadOnlyList<PdfExtractionResult> fileResults, CancellationToken ct)
     {
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
             $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-validation-report.json", report, ct);
-
-        if (diagnostics.Count > 0)
-            await _reportWriter.WriteReportAsync(
-                $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-diagnostics.json", diagnostics, ct);
 
         // PdfPig facts already read off each file's PdfDocument before it was disposed
         // (FileSizeBytes/PdfSpecVersion from PdfDocumentValidator, NativeMetadata from
@@ -289,6 +347,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             f.FileSizeBytes,
             f.PdfSpecVersion,
             f.NativeMetadata,
+            f.EstimatedCostUsd,
         }).ToList();
 
         await _reportWriter.WriteReportAsync(
@@ -299,9 +358,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         DateTimeOffset RunAt, string ExceptionType, string Message, string? StackTrace);
 
     // Dev-only (see IRunReportWriter.IsEnabled), same as WriteReportsAsync above - fallback
-    // for a run that failed before a PdfValidationReport ever existed (blob listing,
-    // cleaning, or PreviousRunCount threw), so there's still something written for that
-    // run instead of silence.
+    // for a run that failed before a PdfQualityGateResult ever existed (blob listing or
+    // cleaning threw), so there's still something written for that run instead of silence.
     private async Task WriteFailureReportAsync(DateTimeOffset runAt, Exception failure, CancellationToken ct)
     {
         if (!_reportWriter.IsEnabled) return;
@@ -314,7 +372,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
     // Maps the validated, cleaned records into the source-agnostic PdfExtractionOutput
     // returned to the caller. Several PdfExtractionOutput fields have no PDF equivalent and
-    // are always null here (not "verified zero") — see PdfValidationReport's own comment:
+    // are always null here (not "verified zero") — see PdfQualityGateResult's own comment:
     // no Zenya attention-flag (StaleDocCount), no version data (MissingVersionCount -
     // nothing parses/populates Version for PDFs), and no folder/department concept
     // (MissingDepartmentCount).
@@ -325,8 +383,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // own checks. FileSizeBytes/PdfSpecVersion/EstimatedCostUsd and PageErrors/Warnings are
     // deliberately not threaded through - see PdfExtractionDocument's own comment for why.
     private static PdfExtractionOutput BuildExtractionOutput(
-        IReadOnlyList<PDFExtractionResult> fileResults,
-        PdfValidationReport                report,
+        IReadOnlyList<PdfExtractionResult> fileResults,
+        PdfQualityGateResult                report,
         PdfCleanResult                      cleanResult,
         int                                 errors,
         int                                 warnings,
@@ -372,9 +430,12 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             })
             .ToList();
 
+        // No projection needed: report.Issues is already the type the output carries.
+        // This used to convert ValidationIssue -> ValidationIssueEntry field by field,
+        // purely to cross an assembly boundary, and needed a null-forgiving ! on
+        // DocumentId because the two types disagreed about its nullability.
         var issues = report.Issues
             .Take(MaxReturnedIssues)
-            .Select(i => new ValidationIssueEntry(i.Stage, i.Severity, i.DocumentId, i.Message))
             .ToList();
 
         var spotCheck = report.SpotCheckSample
@@ -421,7 +482,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // applies to every page of that file, so this is a per-blob lookup, not per-page like
     // PdfPageContext below.
     private static Dictionary<string, DocMetadata> BuildNativeMetadataLookup(
-        IReadOnlyList<PDFExtractionResult> fileResults) =>
+        IReadOnlyList<PdfExtractionResult> fileResults) =>
         fileResults
             .Where(f => f.Ok && f.NativeMetadata is not null)
             .ToDictionary(f => f.BlobName, f => f.NativeMetadata!, StringComparer.OrdinalIgnoreCase);
@@ -430,7 +491,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // - like NativeMetadata above - this is file-level, duplicated across every page's
     // PdfExtractionDocument rather than filtered per page.
     private static Dictionary<string, IReadOnlyList<SectionInfo>> BuildSectionsLookup(
-        IReadOnlyList<PDFExtractionResult> fileResults) =>
+        IReadOnlyList<PdfExtractionResult> fileResults) =>
         fileResults
             .Where(f => f.Ok)
             .ToDictionary(f => f.BlobName, IReadOnlyList<SectionInfo> (f) => f.Structure?.Sections ?? [],
@@ -442,7 +503,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // paragraph detection, which works even when the PDF has no outline at all. List fields
     // default to real empty (DI looked and found none), not "unknown" - only
     // Breadcrumb/Dimensions are genuinely nullable "no data" cases.
-    private sealed record PdfPageContext(
+    internal sealed record PdfPageContext(
         string?                          Breadcrumb,
         IReadOnlyList<Heading>           Headings,
         IReadOnlyList<Heading>           Boilerplate,
@@ -459,8 +520,10 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // with none of them - nothing Structure has any data for at all - is a legitimate
     // "nothing to attach" case the caller handles via PdfPageContext.Empty, not a lookup
     // miss to work around.
-    private static Dictionary<(string BlobName, int PageNumber), PdfPageContext> BuildPageContextLookup(
-        IReadOnlyList<PDFExtractionResult> fileResults)
+    // internal (not private): unit tested directly against hand-built PdfExtractionResult
+    // fixtures, same rationale as PdfDocumentIntelligenceAnalyzer.GetPages/BuildResults.
+    internal static Dictionary<(string BlobName, int PageNumber), PdfPageContext> BuildPageContextLookup(
+        IReadOnlyList<PdfExtractionResult> fileResults)
     {
         var lookup = new Dictionary<(string, int), PdfPageContext>();
 
@@ -524,10 +587,10 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // its own (always-run, finally-block) emission doesn't depend on the success path
     // having reached this call.
     private static (int Errors, int Warnings, int MissingTitle) CountIssues(
-        PdfValidationReport report, PdfCleanResult cleanResult)
+        PdfQualityGateResult report, PdfCleanResult cleanResult)
     {
-        var errors   = report.Issues.Count(i => i.Severity == "Error");
-        var warnings = report.Issues.Count(i => i.Severity != "Error");
+        var errors   = report.Issues.Count(i => i.IsError);
+        var warnings = report.Issues.Count(i => i.IsWarning);
 
         // Metadata completeness — a document only counts as "missing" if EVERY one of
         // its pages lacks that field, matching CsvExtractionOrchestrator's rule.
@@ -542,7 +605,8 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     // validation passed - report.Passed already reflects that (a failed run is still
     // logged and recorded as failed here, not silently dropped because the gate's throw
     // already unwound the try block).
-    private void EmitValidationTelemetry(PdfValidationReport report, PdfCleanResult cleanResult)
+    private void EmitValidationTelemetry(
+        PdfQualityGateResult report, PdfCleanResult cleanResult, IReadOnlyList<PdfExtractionResult> fileResults)
     {
         foreach (var warning in report.MagnitudeWarnings)
             _logger.LogWarning("{Warning}", warning);
@@ -559,7 +623,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
         foreach (var issue in report.Issues.Take(MaxLoggedIssues))
             _logger.Log(
-                issue.Severity == "Error" ? LogLevel.Error : LogLevel.Warning,
+                issue.IsError ? LogLevel.Error : LogLevel.Warning,
                 "[{Stage}] {DocId}: {Message}", issue.Stage, issue.DocumentId, issue.Message);
         if (report.Issues.Count > MaxLoggedIssues)
             _logger.LogWarning("…{More} more issue(s) not logged (see the run report for the full list).",
@@ -576,6 +640,13 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         Instrumentation.DetectedTableCount.Record(report.DetectedTableCount, sourceTag);
 
         Instrumentation.MissingMetadata.Add(missingTitle, sourceTag, new("field", "title"));
+
+        var estimatedCostUsd = fileResults.Sum(f => f.EstimatedCostUsd ?? 0m);
+        if (estimatedCostUsd > 0)
+        {
+            _logger.LogInformation("PDF extraction estimated cost this run: ${Cost:F2}", estimatedCostUsd);
+            Instrumentation.DiEstimatedCostUsd.Add((double)estimatedCostUsd, sourceTag);
+        }
     }
 
     // Stable hash of the PDF's raw bytes, used as a dedup/caching key:

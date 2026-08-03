@@ -38,7 +38,7 @@ public class ExtractionService : IExtractionService
     // Orchestrates the whole step: cheaply list what's available, diff against the current
     // index state BEFORE paying for extraction, extract only what's new/changed, emit
     // telemetry, and assemble the stats returned to the caller.
-    public async Task<(IReadOnlyList<PdfExtractionDocument> Docs, ExtractionResults Stats)> ExtractAsync(
+    public async Task<(IReadOnlyList<PdfExtractionDocument> Docs, ExtractionStageMetrics Stats)> ExtractAsync(
         bool forceReindex, CancellationToken ct = default)
     {
         // What documents exist in blob storage right now - id + LastModified only, no
@@ -48,7 +48,7 @@ public class ExtractionService : IExtractionService
         // What documents are already in the Search index - id + last-indexed date. This is
         // the "target" side. Diffing it against sourceListing below is what lets us skip
         // paying for extraction on anything already indexed and unchanged.
-        var indexedDates = await _indexDocumentService.GetCurrentIndexedDocumentDatesAsync(ct);
+        var indexedDates = await _indexDocumentService.GetCurrentlyIndexedDocsIdsNDatesAsync(ct);
 
         // We extract a document if either:
             // 1. It's new — sourceId isn't in indexedDates at all, or
@@ -93,7 +93,7 @@ public class ExtractionService : IExtractionService
 
         await EmitMetricsAndBuildReport(diff, ct);
 
-        return (diff.ToProcess, BuildStats(diff));
+        return (diff.ToProcess, BuildStats(diff, HighNewDocFractionRedFlag(sourceListing.Count, indexedDates.Count, newCount, forceReindex)));
     }
 
     // Cheap listing of every PDF blob's name + LastModified + ContentLength + Zenya metadata
@@ -111,6 +111,7 @@ public class ExtractionService : IExtractionService
         {
             if (!name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) continue;
 
+            // LastModified is a system property Azure Blob Storage sets automatically (updated whenever the blob's content changes)
             if (lastModified is null)
                 _logger.LogWarning(
                     "'{Blob}' has no LastModified from blob storage — treating as never-modified so it isn't reprocessed every run.",
@@ -171,15 +172,9 @@ public class ExtractionService : IExtractionService
                 continue;
             }
 
-            // Indexed last_modified_date is stored date-only (see
-            // PdfExtractionOrchestrator.BuildExtractionOutput) - truncating lastModified the
-            // same way here keeps this comparison consistent with what's actually indexed;
-            // comparing full blob-timestamp precision against a date-truncated indexed value
-            // would make every unchanged doc look "updated" on every run.
-            var lastModifiedDate = DateTimeOffset.Parse(entry.LastModified.ToString("yyyy-MM-dd"));
-
+        
             // if document is already indexed and not newer, skip adding it to the index
-            if (!forceReindex && lastModifiedDate <= indexedDate)
+            if (!forceReindex && entry.LastModified <= indexedDate)
             {
                 skipped++;
                 continue;
@@ -231,8 +226,30 @@ public class ExtractionService : IExtractionService
             $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-diff.json", report, ct);
     }
 
-    // Assemble ExtractionResults to return to the activity
-    private static ExtractionResults BuildStats(DiffResult diff) => new(
+// SearchDocumentStore.GetCurrentIndexedDocumentDatesAsync = 
+// Give me a list of all distinct source_ids in the index along with their recorded timestamp."
+
+    // Tripwire for finding #4 (SearchDocumentStore.GetCurrentIndexedDocumentDatesAsync
+    // truncating the indexed-dates read): if the index is non-empty and this isn't a forced
+    // reindex, but most of the corpus still reads as "new", that's not a growing corpus -
+    // it's the signature of the diff's target side coming back incomplete. A brand-new
+    // index (indexedCount == 0) is excluded on purpose: everything being new on the very
+    // first run is expected, not a symptom of anything.
+    private const double HighNewDocFractionThreshold = 0.5;
+
+    private static IReadOnlyList<string> HighNewDocFractionRedFlag(
+        int sourceCount, int indexedCount, int newCount, bool forceReindex)
+    {
+        if (forceReindex || indexedCount == 0 || sourceCount == 0) return [];
+
+        var newFraction = (double)newCount / sourceCount;
+        if (newFraction < HighNewDocFractionThreshold) return [];
+
+        return [$"high_new_doc_fraction:{newFraction:P0} ({newCount}/{sourceCount}) despite {indexedCount} already-indexed document(s) - possible truncated index-state read"];
+    }
+
+    // Assemble ExtractionStageMetrics to return to the activity
+    private static ExtractionStageMetrics BuildStats(DiffResult diff, IReadOnlyList<string> extraRedFlags) => new(
         Source:                 diff.Source,
         DocsToProcess:          diff.ToProcess.Count,
         DocsSkipped:            diff.Skipped,
@@ -252,7 +269,7 @@ public class ExtractionService : IExtractionService
         MissingDepartmentCount: diff.Output.MissingDepartmentCount,
         TraceabilityGapCount:   diff.Output.TraceabilityGapCount,
         Issues:                 diff.Output.Issues,
-        RedFlags:               diff.Output.RedFlags,
+        RedFlags:               [.. diff.Output.RedFlags, .. extraRedFlags],
         SpotCheckSample:        diff.Output.SpotCheckSample);
 
     private record DiffResult(

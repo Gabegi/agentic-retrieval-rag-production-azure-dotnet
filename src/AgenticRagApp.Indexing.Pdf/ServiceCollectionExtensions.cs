@@ -35,7 +35,7 @@ public static class ServiceCollectionExtensions
         if (!string.IsNullOrWhiteSpace(config.DocumentIntelligenceEndpoint))
         {
             services.AddSingleton<PdfDocumentIntelligenceAnalyzer>();
-            services.AddSingleton<IPdfExtractor, PDFExtractor>();
+            services.AddSingleton<IPdfExtractor, PdfExtractor>();
         }
         services.AddSingleton<IPdfCleaner,           PdfCleaner>();
         services.AddSingleton<IPdfPipelineValidator, PdfPipelineValidator>();

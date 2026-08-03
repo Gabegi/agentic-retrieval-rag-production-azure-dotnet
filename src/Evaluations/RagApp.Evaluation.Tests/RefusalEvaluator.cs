@@ -16,6 +16,9 @@ public sealed class RefusalEvaluator
     private static readonly Regex ScorePattern = new(@"SCORE:\s*([1-5])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex RationalePattern = new(@"RATIONALE:\s*(.+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Bounds a single judge call - see RagEvaluator.CallTimeout for why.
+    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(90);
+
     private readonly IChatClient _judge;
 
     public RefusalEvaluator(IChatClient judge) => _judge = judge;
@@ -56,24 +59,31 @@ public sealed class RefusalEvaluator
         return (score, rationale);
     }
 
-    // Retries on 429, honouring the retry-after-ms header when present, falling back to
-    // exponential back-off (4 → 8 → 16 → 32 s) — same policy as RagEvaluator.JudgeAsync.
+    // Retries on 429 or a stuck-call timeout, honouring the retry-after-ms header when
+    // present, falling back to exponential back-off (4 → 8 → 16 → 32 s) — same policy as
+    // RagEvaluator.JudgeAsync.
     private async Task<string> JudgeAsync(string prompt, CancellationToken ct)
     {
         const int maxAttempts = 5;
         for (int attempt = 0; ; attempt++)
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(CallTimeout);
             try
             {
                 var response = await _judge.GetResponseAsync(
                     [new ChatMessage(ChatRole.User, prompt)],
-                    cancellationToken: ct);
+                    cancellationToken: cts.Token);
                 return response.Text;
             }
             catch (ClientResultException ex) when (ex.Status == 429 && attempt < maxAttempts - 1)
             {
                 var delay = ParseRetryAfter(ex) ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 2));
                 await Task.Delay(delay, ct);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && attempt < maxAttempts - 1)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt + 2)), ct);
             }
         }
     }

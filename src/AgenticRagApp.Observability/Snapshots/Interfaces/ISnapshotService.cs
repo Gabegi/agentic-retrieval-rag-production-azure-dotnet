@@ -1,8 +1,11 @@
+using AgenticRagApp.Common.Models;
 namespace AgenticRagApp.Observability.Reports;
 
 // Maintains the rolling full-corpus snapshot for one doc-type pipeline
-// (pipeline-artifacts/snapshots/{source}/{instanceId}/full-index.json) — snapshots for
-// different sources (e.g. "pdf", "csv") are stored under separate prefixes and never merged.
+// (pipeline-artifacts/snapshots/{source}/{yyyy}/{MM}/{dd}/{instanceId}/full-index.json) —
+// snapshots for different sources (e.g. "pdf", "csv") are stored under separate prefixes
+// and never merged. Dated like the other artifact/report paths so today's snapshot can be
+// found by browsing without already knowing its instance ID.
 //
 // IMPORTANT operational note: the snapshot only ever gains chunks that actually pass through
 // UpdateAsync (i.e. new/updated docs from a normal incremental run). A document that was
@@ -24,6 +27,7 @@ public interface ISnapshotService
         IReadOnlyList<T>      newChunks,
         IReadOnlyList<string> staleDocumentIds,
         string                instanceId,
+        DateTimeOffset        startedAt,
         CancellationToken     ct = default) where T : ISnapshotSource;
 
     // Reads the single most recent snapshot for a source, for index recovery - the same

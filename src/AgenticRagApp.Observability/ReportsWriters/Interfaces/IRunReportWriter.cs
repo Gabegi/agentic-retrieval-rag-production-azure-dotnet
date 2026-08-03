@@ -2,6 +2,9 @@ namespace AgenticRagApp.Observability.Reports;
 
 public interface IRunReportWriter
 {
+    // Always true today (see RunReportWriter) - kept on the interface so callers have one
+    // place to check rather than each hardcoding "always write", in case a future report
+    // type genuinely needs gating.
     bool IsEnabled { get; }
 
     // Callers build the blob path themselves (e.g. "indexing/{yyyy}/{MM}/{dd}/{id}.json") and

@@ -7,9 +7,9 @@ public interface IPdfPipelineValidator
     // Takes raw per-file results directly - the validator owns flattening them into a
     // page-level batch (and into a per-blob Structure lookup) itself, rather than
     // receiving a pre-aggregated shape a separate class built. See PdfPipelineValidator.
-    PdfValidationReport Validate(
-        IReadOnlyList<PDFExtractionResult> fileResults,
+    PdfQualityGateResult Validate(
+        IReadOnlyList<PdfExtractionResult> fileResults,
         PdfCleanResult                     cleanResult,
-        int?                               previousRunCleanedCount = null,
-        int?                               spotCheckSeed           = null);
+        int?                               spotCheckSeed           = null,
+        int?                               previousRunCleanedCount = null);
 }

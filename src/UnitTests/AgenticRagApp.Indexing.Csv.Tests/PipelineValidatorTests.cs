@@ -24,7 +24,7 @@ public class PipelineValidatorTests
 
     // Builds a clean, all-good pipeline: one page, joined, cleaned, no errors anywhere -
     // the baseline every test below perturbs one piece of.
-    private static (ExtractionResult<PageRecord> Pages, ExtractionResult<IndexRecord> Index, JoinResult Join, CleanResult Clean) HappyPath()
+    private static (ExtractionBatch<PageRecord> Pages, ExtractionBatch<IndexRecord> Index, JoinResult Join, CleanResult Clean) HappyPath()
     {
         var pages = BuildExtractor().ExtractPages(ToStream(
             PagesHeader + "\n" +
@@ -39,13 +39,13 @@ public class PipelineValidatorTests
 
     private static Stream ToStream(string csv) => new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
 
-    // Empty extraction results still need Records/Errors/Warnings set — ExtractionResult<T>
+    // Empty extraction results still need Records/Errors/Warnings set — ExtractionBatch<T>
     // has required init-only members, so a parameterless `new()` no longer compiles.
-    private static ExtractionResult<T> Empty<T>() => new() { Records = [], Errors = [], Warnings = [] };
+    private static ExtractionBatch<T> Empty<T>() => new() { Records = [], Errors = [], Warnings = [] };
 
     // JoinedPageRecord builder for PipelineValidator tests that skip the join step -
     // LastModifiedRaw must be a valid "yyyyMMddHHmmss" value or DataCleaner rejects the
-    // whole record with a CleaningError before PipelineValidator ever sees it.
+    // whole record with an error-severity PipelineIssue before PipelineValidator ever sees it.
     private static JoinedPageRecord JoinedPage(
         string docId, string content, string language = "nl-NL", string attentionFlagsRaw = "") => new()
     {
@@ -94,7 +94,7 @@ public class PipelineValidatorTests
 
         var report = BuildValidator().Validate(pages, index, join, clean);
 
-        Assert.IsTrue(report.Issues.Any(i => i.Stage == "Join" && i.Severity == "Error"));
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == PipelineStage.Join && i.IsError));
     }
 
     [TestMethod]
@@ -171,7 +171,7 @@ public class PipelineValidatorTests
 
         var report = BuildValidator().Validate(pages, index, join, clean);
 
-        Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Error"));
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == PipelineStage.TextQuality && i.IsError));
         Assert.IsFalse(report.Passed);
     }
 
@@ -186,7 +186,7 @@ public class PipelineValidatorTests
 
         var report = BuildValidator().Validate(pages, index, join, clean);
 
-        Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Warning" && i.Message.Contains("en-US")));
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == PipelineStage.TextQuality && i.IsWarning && i.Message.Contains("en-US")));
     }
 
     [TestMethod]
@@ -200,7 +200,7 @@ public class PipelineValidatorTests
 
         var report = BuildValidator().Validate(pages, index, join, clean);
 
-        Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Error" && i.Message.Contains("control/unassigned")));
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == PipelineStage.TextQuality && i.IsError && i.Message.Contains("control/unassigned")));
         Assert.IsFalse(report.Passed);
     }
 
@@ -232,7 +232,7 @@ public class PipelineValidatorTests
 
         var report = BuildValidator().Validate(pages, index, join, clean);
 
-        Assert.IsTrue(report.Issues.Any(i => i.Stage == "TextQuality" && i.Severity == "Warning" && i.Message.Contains("inconsistent column counts")));
+        Assert.IsTrue(report.Issues.Any(i => i.Stage == PipelineStage.TextQuality && i.IsWarning && i.Message.Contains("inconsistent column counts")));
         Assert.AreEqual(1, report.DetectedTableCount);
     }
 

@@ -80,6 +80,13 @@ public static class Instrumentation
     public static readonly Histogram<double> DiAnalyzeDuration =
         Meter.CreateHistogram<double>("indexer.di_analyze_duration_seconds", unit: "s", description: "Wall-clock time for one Document Intelligence analyze call, submit to completion");
 
+    // Sum of PdfExtractionResult.EstimatedCostUsd across a run - for a pipeline whose
+    // dominant operational risk is per-page billing, "how much did this run cost" should
+    // be the easiest number to obtain; previously computed per file and then dropped
+    // entirely (finding #10).
+    public static readonly Counter<double> DiEstimatedCostUsd =
+        Meter.CreateCounter<double>("indexer.di_estimated_cost_usd", unit: "USD", description: "Estimated Document Intelligence cost for this run, summed across all analyzed files");
+
     // ── Chunking ─────────────────────────────────────────────────────────────
     // Tags: strategy (chunking strategy name)
 

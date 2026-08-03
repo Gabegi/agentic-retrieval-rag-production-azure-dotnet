@@ -122,7 +122,7 @@ public class ChunkingServiceTests
 
         var (docs, _) = service.ChunkDocuments([doc]);
 
-        var expectedId = ChunkingUtils.SafeKey("doc1::2", 0);
+        var expectedId = ChunkingHelper.SafeKey("doc1::2", 0);
         Assert.AreEqual(expectedId, docs[0].Id);
     }
 
@@ -224,7 +224,7 @@ public class ChunkingServiceTests
         Assert.AreEqual(modDate, result.ModDate);
         Assert.AreEqual(12, result.PageCount);
         Assert.AreEqual(lastMod, result.LastModifiedDate);
-        Assert.AreEqual(1, result.Tables.Count);
+        Assert.AreEqual(1, result.Structure.Tables.Count);
     }
 
     [TestMethod]

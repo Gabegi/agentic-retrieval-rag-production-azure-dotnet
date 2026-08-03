@@ -47,8 +47,12 @@ public class DocumentIntelligenceExtractorTests
         return Encoding.ASCII.GetBytes(sb.ToString());
     }
 
-    private static PDFExtractor BuildExtractor(IDocumentAnalysisClient diClient) =>
-        new(new PdfDocumentIntelligenceAnalyzer(diClient, NullLogger<PdfDocumentIntelligenceAnalyzer>.Instance));
+    // Instant, no-op delay: SubmitAndPollAsync's retry backoff runs on real (multi-second)
+    // TimeSpan schedules, and a test exercising retry exhaustion would otherwise actually
+    // wait through it in wall-clock time.
+    private static PdfExtractor BuildExtractor(IDocumentAnalysisClient diClient) =>
+        new(new PdfDocumentIntelligenceAnalyzer(
+            diClient, NullLogger<PdfDocumentIntelligenceAnalyzer>.Instance, delay: (_, _) => Task.CompletedTask));
 
     [TestMethod]
     public async Task InvalidPdf_FailsAtPreflight_NeverCallsDocumentIntelligence()
@@ -66,8 +70,11 @@ public class DocumentIntelligenceExtractorTests
     }
 
     [TestMethod]
-    public async Task ValidPdf_DocumentIntelligenceSubmissionFails_ReturnsTypedErrorButKeepsNativeMetadata()
+    public async Task ValidPdf_DocumentIntelligenceSubmissionAlwaysThrottled_RetriesThenReturnsTypedError()
     {
+        // Regression test for finding #7: a sustained 429 on submit must be retried (not
+        // treated as immediately terminal) before finally giving up once the retry budget
+        // is exhausted - 1 initial attempt + BackoffDelays.Length retries.
         var diClient = new Mock<IDocumentAnalysisClient>();
         diClient.Setup(c => c.SubmitAnalyzeAsync(It.IsAny<Azure.AI.DocumentIntelligence.AnalyzeDocumentOptions>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new RequestFailedException(429, "throttled"));
@@ -82,6 +89,32 @@ public class DocumentIntelligenceExtractorTests
         // it doesn't depend on DI succeeding.
         Assert.IsNotNull(result.NativeMetadata);
         Assert.AreEqual(1, result.DocumentIntelligenceDiagnostics.Errors.Count);
+        diClient.Verify(c => c.SubmitAnalyzeAsync(It.IsAny<Azure.AI.DocumentIntelligence.AnalyzeDocumentOptions>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(5));
+    }
+
+    [TestMethod]
+    public async Task ValidPdf_SubmissionThrottledThenRecovers_RetriesAndProceeds()
+    {
+        // A 429/503 on submit was never billed - retrying it costs nothing extra, and DI
+        // recovering on a later attempt must let the run proceed rather than staying failed.
+        var diClient = new Mock<IDocumentAnalysisClient>();
+        var attempts = 0;
+        diClient.Setup(c => c.SubmitAnalyzeAsync(It.IsAny<Azure.AI.DocumentIntelligence.AnalyzeDocumentOptions>(), It.IsAny<CancellationToken>()))
+            .Returns<Azure.AI.DocumentIntelligence.AnalyzeDocumentOptions, CancellationToken>((_, ct) =>
+            {
+                attempts++;
+                if (attempts < 3) throw new RequestFailedException(503, "unavailable");
+                throw new RequestFailedException(400, "bad request"); // distinguishable terminal outcome
+            });
+        var extractor = BuildExtractor(diClient.Object);
+        var pdfBytes  = BuildMinimalPdf();
+
+        var result = await extractor.ExtractPDFAsync("doc.pdf", pdfBytes);
+
+        Assert.IsFalse(result.Ok);
+        Assert.AreEqual(PdfOpenFailureReason.DiServiceError, result.Error!.Reason);
+        Assert.AreEqual(3, attempts);
     }
 
     [TestMethod]

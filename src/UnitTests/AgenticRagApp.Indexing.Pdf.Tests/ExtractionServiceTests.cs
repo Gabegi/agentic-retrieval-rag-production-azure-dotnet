@@ -108,7 +108,7 @@ public class ExtractionServiceTests
     {
         var caseInsensitive = new Dictionary<string, DateTimeOffset>(indexedDates, StringComparer.OrdinalIgnoreCase);
         var mock = new Mock<IIndexDocumentService>();
-        mock.Setup(m => m.GetCurrentIndexedDocumentDatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(caseInsensitive);
+        mock.Setup(m => m.GetCurrentlyIndexedDocsIdsNDatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(caseInsensitive);
         return mock;
     }
 
@@ -184,6 +184,25 @@ public class ExtractionServiceTests
     }
 
     [TestMethod]
+    public async Task ReUploadedLaterTheSameDay_IsCountedAsUpdatedNotSkipped()
+    {
+        // Regression test for finding #6: a re-upload indexed at 09:00, then corrected and
+        // re-uploaded at 14:00 the same calendar day, must be detected as newer - full blob-
+        // timestamp precision, not a same-day comparison that reads them as unchanged.
+        var blobStore    = MockBlobStore(("doc1.pdf", DateTimeOffset.Parse("2024-06-01T14:00:00Z")));
+        var extractor    = MockExtractor();
+        var indexService = MockIndexService(new() { ["doc1.pdf"] = DateTimeOffset.Parse("2024-06-01T09:00:00Z") });
+        var service      = BuildService(blobStore, extractor, indexService, MockReportWriter(isEnabled: false));
+
+        var (docs, stats) = await service.ExtractAsync(forceReindex: false);
+
+        Assert.AreEqual(1, docs.Count);
+        Assert.AreEqual(1, stats.DocsUpdated);
+        Assert.AreEqual(0, stats.DocsSkipped);
+        CollectionAssert.Contains(stats.StaleDocumentIds.ToList(), "doc1.pdf");
+    }
+
+    [TestMethod]
     public async Task ForceReindex_ReprocessesEvenAnUnmodifiedDocument()
     {
         var blobStore    = MockBlobStore(("doc1.pdf", DateTimeOffset.Parse("2024-01-01")));
@@ -196,6 +215,58 @@ public class ExtractionServiceTests
         Assert.AreEqual(1, docs.Count);
         Assert.AreEqual(1, stats.DocsUpdated);
         Assert.AreEqual(0, stats.DocsSkipped);
+    }
+
+    [TestMethod]
+    public async Task HighNewDocFraction_WithExistingIndex_AddsRedFlag()
+    {
+        // Index already has doc1.pdf, but 2 of 3 source docs (doc2/doc3) read as "new" -
+        // exactly the shape a truncated GetCurrentIndexedDocumentDatesAsync read produces
+        // (finding #4): an existing, non-empty index that most of the corpus still misses.
+        var blobStore = MockBlobStore(
+            ("doc1.pdf", DateTimeOffset.Parse("2024-01-01")),
+            ("doc2.pdf", DateTimeOffset.Parse("2024-01-01")),
+            ("doc3.pdf", DateTimeOffset.Parse("2024-01-01")));
+        var extractor    = MockExtractor();
+        var indexService = MockIndexService(new() { ["doc1.pdf"] = DateTimeOffset.Parse("2024-06-01") });
+        var service      = BuildService(blobStore, extractor, indexService, MockReportWriter(isEnabled: false));
+
+        var (_, stats) = await service.ExtractAsync(forceReindex: false);
+
+        Assert.IsTrue(stats.RedFlags.Any(f => f.StartsWith("high_new_doc_fraction")));
+    }
+
+    [TestMethod]
+    public async Task AllNewOnFirstEverRun_NoExistingIndex_DoesNotAddHighNewDocFractionRedFlag()
+    {
+        // Every document being new is expected on a brand-new index (indexedDates empty) -
+        // not a symptom of a truncated read, so this must not flag.
+        var blobStore = MockBlobStore(
+            ("doc1.pdf", DateTimeOffset.Parse("2024-01-01")),
+            ("doc2.pdf", DateTimeOffset.Parse("2024-01-01")));
+        var extractor    = MockExtractor();
+        var indexService = MockIndexService([]);
+        var service      = BuildService(blobStore, extractor, indexService, MockReportWriter(isEnabled: false));
+
+        var (_, stats) = await service.ExtractAsync(forceReindex: false);
+
+        Assert.IsFalse(stats.RedFlags.Any(f => f.StartsWith("high_new_doc_fraction")));
+    }
+
+    [TestMethod]
+    public async Task HighNewDocFraction_OnForceReindex_DoesNotAddRedFlag()
+    {
+        // force=true legitimately reprocesses everything - not a truncation symptom either.
+        var blobStore = MockBlobStore(
+            ("doc1.pdf", DateTimeOffset.Parse("2024-01-01")),
+            ("doc2.pdf", DateTimeOffset.Parse("2024-01-01")));
+        var extractor    = MockExtractor();
+        var indexService = MockIndexService(new() { ["doc1.pdf"] = DateTimeOffset.Parse("2024-06-01") });
+        var service      = BuildService(blobStore, extractor, indexService, MockReportWriter(isEnabled: false));
+
+        var (_, stats) = await service.ExtractAsync(forceReindex: true);
+
+        Assert.IsFalse(stats.RedFlags.Any(f => f.StartsWith("high_new_doc_fraction")));
     }
 
     [TestMethod]

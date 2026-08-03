@@ -12,5 +12,5 @@ public interface IPdfExtractor
 {
     string Name { get; } // "DocumentIntelligence"
 
-    Task<PDFExtractionResult> ExtractPDFAsync(string blobName, byte[] pdfBytes, CancellationToken ct = default);
+    Task<PdfExtractionResult> ExtractPDFAsync(string blobName, byte[] pdfBytes, CancellationToken ct = default);
 }

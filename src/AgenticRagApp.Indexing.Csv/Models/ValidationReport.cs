@@ -16,7 +16,7 @@ public class ValidationReport
     // bypassable, but a magnitude shift can be a legitimate large import.
     public bool     PassedExcludingMagnitude { get; init; }
 
-    public IReadOnlyList<ValidationIssue>   Issues                        { get; init; } = [];
+    public IReadOnlyList<PipelineIssue>   Issues                        { get; init; } = [];
     public IReadOnlyList<string>            ReconciliationProblems        { get; init; } = [];
     public IReadOnlyList<string>            MagnitudeWarnings             { get; init; } = [];
     public IReadOnlyList<string>            RedFlags                      { get; init; } = [];

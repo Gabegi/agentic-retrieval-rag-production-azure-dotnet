@@ -5,6 +5,6 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 
 public interface IExtractionService
 {
-    Task<(IReadOnlyList<PdfExtractionDocument> Docs, ExtractionResults Stats)> ExtractAsync(
+    Task<(IReadOnlyList<PdfExtractionDocument> Docs, ExtractionStageMetrics Stats)> ExtractAsync(
         bool forceReindex, CancellationToken ct = default);
 }

@@ -32,13 +32,14 @@ public class DocumentChunkTests
         Bookmarks             = [new Bookmark("Inleiding", 0, 1, false)],
         Sections              = [new SectionInfo([new SectionSpan(0, 100)], ["/paragraphs/0"])],
         Breadcrumb            = "_Section: Inleiding_",
-        Headings              = [new Heading("Inleiding", "sectionHeading", 0, 0)],
-        Boilerplate           = [new Heading("Pagina 1 van 12", "pageFooter", 50, 0)],
-        Tables                = [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0, null, [], [])],
-        Dimensions            = new PageDimensions(0, 8.27, 11.69, "inch"),
-        SelectionMarks        = [new SelectionMarkInfo(0, "selected", 5, 0.98, [new PolygonPoint(1f, 1f)])],
-        Figures               = [new FigureInfo("Organogram Cordaan", 20, 0, "/figures/0", ["/paragraphs/3"])],
-        Lines                 = [new LineInfo("Gedragscode medewerkers", 0, 0, [new PolygonPoint(0f, 0f)])],
+        Structure             = new ChunkStructure(
+            Headings:       [new Heading("Inleiding", "sectionHeading", 0, 0)],
+            Boilerplate:    [new Heading("Pagina 1 van 12", "pageFooter", 50, 0)],
+            Tables:         [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0, null, [], [])],
+            Dimensions:     new PageDimensions(0, 8.27, 11.69, "inch"),
+            SelectionMarks: [new SelectionMarkInfo(0, "selected", 5, 0.98, [new PolygonPoint(1f, 1f)])],
+            Figures:        [new FigureInfo("Organogram Cordaan", 20, 0, "/figures/0", ["/paragraphs/3"])],
+            Lines:          [new LineInfo("Gedragscode medewerkers", 0, 0, [new PolygonPoint(0f, 0f)])]),
     };
 
     [TestMethod]
@@ -69,17 +70,17 @@ public class DocumentChunkTests
         Assert.AreEqual(original.Bookmarks[0].Title, restored.Bookmarks[0].Title);
         Assert.AreEqual(1, restored.Sections.Count);
         Assert.AreEqual(original.Breadcrumb, restored.Breadcrumb);
-        Assert.AreEqual(1, restored.Headings.Count);
-        Assert.AreEqual(original.Headings[0].Content, restored.Headings[0].Content);
-        Assert.AreEqual(1, restored.Boilerplate.Count);
-        Assert.AreEqual(1, restored.Tables.Count);
-        Assert.AreEqual(original.Tables[0].Cells.Count, restored.Tables[0].Cells.Count);
-        Assert.IsNotNull(restored.Dimensions);
-        Assert.AreEqual(original.Dimensions!.Width, restored.Dimensions!.Width);
-        Assert.AreEqual(1, restored.SelectionMarks.Count);
-        Assert.AreEqual(1, restored.Figures.Count);
-        Assert.AreEqual(original.Figures[0].Caption, restored.Figures[0].Caption);
-        Assert.AreEqual(1, restored.Lines.Count);
+        Assert.AreEqual(1, restored.Structure.Headings.Count);
+        Assert.AreEqual(original.Structure.Headings[0].Content, restored.Structure.Headings[0].Content);
+        Assert.AreEqual(1, restored.Structure.Boilerplate.Count);
+        Assert.AreEqual(1, restored.Structure.Tables.Count);
+        Assert.AreEqual(original.Structure.Tables[0].Cells.Count, restored.Structure.Tables[0].Cells.Count);
+        Assert.IsNotNull(restored.Structure.Dimensions);
+        Assert.AreEqual(original.Structure.Dimensions!.Width, restored.Structure.Dimensions!.Width);
+        Assert.AreEqual(1, restored.Structure.SelectionMarks.Count);
+        Assert.AreEqual(1, restored.Structure.Figures.Count);
+        Assert.AreEqual(original.Structure.Figures[0].Caption, restored.Structure.Figures[0].Caption);
+        Assert.AreEqual(1, restored.Structure.Lines.Count);
 
         // Derived Tier 2 fields must still be correct after round-tripping - this is
         // exactly what was silently zeroed out by the bug (Tables/Figures reset to

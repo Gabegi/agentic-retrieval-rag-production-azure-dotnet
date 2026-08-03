@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>false</IsPackable>
+    <!-- DURABLE2003 false positives: this test project doesn't compile the real
+         activity functions (those live in AgenticRagApp.FunctionApp's IndexingFunctions),
+         it only exercises orchestrators against mocked activity names. -->
+    <NoWarn>$(NoWarn);DURABLE2003</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

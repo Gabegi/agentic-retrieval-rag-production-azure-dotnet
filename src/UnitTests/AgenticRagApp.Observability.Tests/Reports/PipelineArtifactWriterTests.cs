@@ -37,8 +37,11 @@ public class PipelineArtifactWriterTests
     }
 
     [TestMethod]
-    public async Task WriteArtifactAsync_SerializesArtifactAsIndentedJson()
+    public async Task WriteArtifactAsync_SerializesArtifactAsCompactJson()
     {
+        // This artifact writes in every environment, on every run, with no size cap
+        // (whole-corpus content) - see finding #8 - so it's deliberately compact, not
+        // indented, unlike RunReportWriter's small diagnostic reports.
         var blobStore = MockBlobStore();
         var writer    = BuildWriter(blobStore);
         BinaryData? captured = null;
@@ -53,7 +56,7 @@ public class PipelineArtifactWriterTests
         var json = captured!.ToString();
         StringAssert.Contains(json, "\"Foo\"");
         StringAssert.Contains(json, "\"bar\"");
-        StringAssert.Contains(json, "\n");
+        Assert.IsFalse(json.Contains('\n'));
     }
 
     [TestMethod]

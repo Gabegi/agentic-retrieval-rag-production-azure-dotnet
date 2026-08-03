@@ -5,6 +5,6 @@ namespace AgenticRagApp.Indexing.Csv.Services;
 
 public interface ICsvExtractor
 {
-    ExtractionResult<PageRecord>  ExtractPages(Stream stream);
-    ExtractionResult<IndexRecord> ExtractIndex(Stream stream);
+    ExtractionBatch<PageRecord>  ExtractPages(Stream stream);
+    ExtractionBatch<IndexRecord> ExtractIndex(Stream stream);
 }

@@ -32,6 +32,14 @@ public sealed class RagEvaluator
     private const double InputUsdPerMToken  = 2.00;
     private const double OutputUsdPerMToken = 8.00;
 
+    // Bounds any single upstream call (RAG query, judge LLM call). Without this, a stuck
+    // call (e.g. the knowledge base's server-side agentic retrieval looping against a
+    // throttled model deployment) blocks silently until vstest's blame-hang kills the whole
+    // test host - the 2026-07-30 08:23 run stalled for 8+ minutes with zero completions
+    // across all 5 parallel workers, losing every other in-flight result too. This turns
+    // that into one bounded, attributable failure per call instead.
+    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(90);
+
     // ExpectedSources carries free-text notes ("SharePoint: ...") alongside Zenya document
     // URLs — the document GUID embedded in those URLs is the only part that reliably lines
     // up with Citation.DocumentId, so that's what gets matched against.
@@ -56,19 +64,28 @@ public sealed class RagEvaluator
 
     public async Task<EvalRow> RunAsync(
         TestQuery testQuery,
-        Func<string, Task<RagQueryResult>> ragCall,
+        Func<string, CancellationToken, Task<RagQueryResult>> ragCall,
         CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
         RagQueryResult result;
         try
         {
-            result = await ragCall(testQuery.Query);
+            result = await CallWithTimeoutAsync(t => ragCall(testQuery.Query, t), ct);
             sw.Stop();
         }
         catch (Exception ex)
         {
             sw.Stop();
+            // Azure OpenAI's content filter can reject the call outright (prompt- or
+            // output-side, both surface as ClientResultException before the app ever
+            // produces a RagQueryResult) instead of the app declining on its own. For a
+            // Refusal scenario that's a valid refusal, not a broken call — score it as one.
+            // For an Answer scenario it's a genuine over-block of a legitimate question, so
+            // it still counts as a failure.
+            if (testQuery.Type == ScenarioType.Refusal && IsContentFilterBlock(ex))
+                return EvalRow.ForContentFilterRefusal(testQuery, ex.Message, sw.ElapsedMilliseconds);
+
             return EvalRow.ForFailure(testQuery, ex.Message, sw.ElapsedMilliseconds);
         }
 
@@ -109,16 +126,23 @@ public sealed class RagEvaluator
         {
             new RetrievalEvaluatorContext(result.RetrievedContext)
         };
-        // Run evaluators sequentially with 2 s gaps; retry handles residual 429s via Retry-After headers.
-        var groundednessResult = await JudgeAsync(() => _groundedness.EvaluateAsync(messages, chatResponse, _judgeConfig, groundednessCtx, ct).AsTask(), ct);
-        await Task.Delay(2000, ct);
-        var relevanceResult    = await JudgeAsync(() => _relevance.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, ct).AsTask(), ct);
-        await Task.Delay(2000, ct);
-        var coherenceResult    = await JudgeAsync(() => _coherence.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, ct).AsTask(), ct);
-        await Task.Delay(2000, ct);
-        var equivalenceResult  = await JudgeAsync(() => _equivalence.EvaluateAsync(messages, chatResponse, _judgeConfig, equivalenceCtx, ct).AsTask(), ct);
-        await Task.Delay(2000, ct);                                                                                                                           // re-enable with Retrieval
-        var retrievalResult = await JudgeAsync(() => _retrieval.EvaluateAsync(messages, chatResponse, _judgeConfig, retrievalCtx, ct).AsTask(), ct);          // re-enable with Retrieval
+        // Run the 5 judges concurrently (eval deployment capacity 50->200, see
+        // ai_deployments.tf) instead of staggered - evaluators are stateless (no shared
+        // mutable state), so concurrent calls on the same instances are safe. 429s are
+        // absorbed entirely by JudgeAsync's retry/back-off.
+        var groundednessTask = JudgeAsync(t => _groundedness.EvaluateAsync(messages, chatResponse, _judgeConfig, groundednessCtx, t).AsTask(), ct);
+        var relevanceTask    = JudgeAsync(t => _relevance.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, t).AsTask(), ct);
+        var coherenceTask    = JudgeAsync(t => _coherence.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, t).AsTask(), ct);
+        var equivalenceTask  = JudgeAsync(t => _equivalence.EvaluateAsync(messages, chatResponse, _judgeConfig, equivalenceCtx, t).AsTask(), ct);
+        var retrievalTask    = JudgeAsync(t => _retrieval.EvaluateAsync(messages, chatResponse, _judgeConfig, retrievalCtx, t).AsTask(), ct);   // re-enable with Retrieval
+
+        await Task.WhenAll(groundednessTask, relevanceTask, coherenceTask, equivalenceTask, retrievalTask);
+
+        var groundednessResult = await groundednessTask;
+        var relevanceResult    = await relevanceTask;
+        var coherenceResult    = await coherenceTask;
+        var equivalenceResult  = await equivalenceTask;
+        var retrievalResult    = await retrievalTask;
 
         // F1 (token overlap) is only meaningful when the corpus can produce the reference
         // answer. Known-gap scenarios get -1 so dashboards can exclude them from trends.
@@ -167,12 +191,15 @@ public sealed class RagEvaluator
         TestQuery testQuery, RagQueryResult result, List<ChatMessage> messages, ChatResponse chatResponse,
         double costUsd, CancellationToken ct)
     {
-        var relevanceResult = await JudgeAsync(() => _relevance.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, ct).AsTask(), ct);
-        await Task.Delay(2000, ct);
-        var coherenceResult = await JudgeAsync(() => _coherence.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, ct).AsTask(), ct);
-        await Task.Delay(2000, ct);
-        var (refusalScore, refusalRationale) = await _refusal.EvaluateAsync(
-            testQuery.Query, testQuery.RefusalReason, result.Answer, ct);
+        var relevanceTask = JudgeAsync(t => _relevance.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, t).AsTask(), ct);
+        var coherenceTask = JudgeAsync(t => _coherence.EvaluateAsync(messages, chatResponse, _judgeConfig, additionalContext: null, t).AsTask(), ct);
+        var refusalTask   = _refusal.EvaluateAsync(testQuery.Query, testQuery.RefusalReason, result.Answer, ct);
+
+        await Task.WhenAll(relevanceTask, coherenceTask, refusalTask);
+
+        var relevanceResult = await relevanceTask;
+        var coherenceResult = await coherenceTask;
+        var (refusalScore, refusalRationale) = await refusalTask;
 
         return new EvalRow(
             ScenarioName:    testQuery.Name,
@@ -221,23 +248,46 @@ public sealed class RagEvaluator
         return matched / (double)expectedIds.Count;
     }
 
-    // Retries a judge LLM call on 429, honouring the retry-after-ms header when present,
-    // falling back to exponential back-off (4 → 8 → 16 → 32 s).
+    // Retries a judge LLM call on 429 or a stuck-call timeout, honouring the retry-after-ms
+    // header when present, falling back to exponential back-off (4 → 8 → 16 → 32 s).
     private static async Task<EvaluationResult> JudgeAsync(
-        Func<Task<EvaluationResult>> call, CancellationToken ct)
+        Func<CancellationToken, Task<EvaluationResult>> call, CancellationToken ct)
     {
         const int maxAttempts = 5;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                return await call();
+                return await CallWithTimeoutAsync(call, ct);
             }
             catch (ClientResultException ex) when (ex.Status == 429 && attempt < maxAttempts - 1)
             {
                 var delay = ParseRetryAfter(ex) ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 2));
                 await Task.Delay(delay, ct);
             }
+            catch (TimeoutException) when (attempt < maxAttempts - 1)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt + 2)), ct);
+            }
+        }
+    }
+
+    // Races `call` against CallTimeout. A timeout surfaces as TimeoutException, distinct from
+    // the caller's own ct being cancelled (propagated as-is, not retried/wrapped) - only a
+    // stuck call should be treated as retriable, not a deliberate run cancellation.
+    private static async Task<T> CallWithTimeoutAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(CallTimeout);
+        try
+        {
+            return await call(cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Call did not complete within {CallTimeout.TotalSeconds:F0}s - treated as a stuck " +
+                "upstream call, not a normal error (those come back quickly, not as silence).");
         }
     }
 
@@ -254,4 +304,15 @@ public sealed class RagEvaluator
 
         return null;
     }
+
+    // Covers both observed shapes: the chat completion rejecting the prompt outright
+    // ("... content management policy ...", ClientResultException HTTP 400 content_filter)
+    // and the knowledge-base/agentic retrieval call rejecting the generated output ("The
+    // model output was blocked by content filters."). Matched on message text rather than
+    // exception type/status since the two calls go through different clients (OpenAI SDK vs.
+    // the Search knowledge-base SDK) and don't share an exception type.
+    private static bool IsContentFilterBlock(Exception ex) =>
+        ex.Message.Contains("content filter", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("content_filter", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("content management policy", StringComparison.OrdinalIgnoreCase);
 }

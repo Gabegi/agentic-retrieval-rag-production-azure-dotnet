@@ -1,4 +1,5 @@
 using System.Text;
+using System.Xml.Linq;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using AgenticRagApp.Indexing.Pdf.Services;
@@ -88,21 +89,26 @@ public class PdfNativeMetadataExtractorTests
     }
 
     [TestMethod]
-    public void NoAuthor_ProducesWarning()
+    public void NoAuthor_ProducesInfoNotWarning()
     {
+        // Finding #15: Author has no downstream consequence (unlike Title/Producer), so
+        // it's reported as Info, not a Warning that would compete with real defects for
+        // the validation report's truncated Issues budget.
         var metadata = PdfNativeMetadataExtractor.ExtractPdfNativeMetadataAndDispose(OpenPdf(), "doc.pdf", NullLogger.Instance, out var diagnostics);
 
         Assert.IsNull(metadata.Author);
-        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("No native Author")));
+        Assert.IsFalse(diagnostics.Warnings.Any(w => w.Message.Contains("No native Author")));
+        Assert.IsTrue(diagnostics.Info.Any(i => i.Message.Contains("No native Author")));
     }
 
     [TestMethod]
-    public void HasAuthor_NoAuthorWarning()
+    public void HasAuthor_NoAuthorInfoOrWarning()
     {
         var metadata = PdfNativeMetadataExtractor.ExtractPdfNativeMetadataAndDispose(OpenPdf(author: "Jane Doe"), "doc.pdf", NullLogger.Instance, out var diagnostics);
 
         Assert.AreEqual("Jane Doe", metadata.Author);
         Assert.IsFalse(diagnostics.Warnings.Any(w => w.Message.Contains("No native Author")));
+        Assert.IsFalse(diagnostics.Info.Any(i => i.Message.Contains("No native Author")));
     }
 
     [TestMethod]
@@ -217,5 +223,123 @@ public class PdfNativeMetadataExtractorTests
         Assert.AreEqual("HR Policy", present.Subject);
         Assert.AreEqual("gedragscode, hr", present.Keywords);
         Assert.AreEqual("Microsoft Word", present.Creator);
+    }
+
+    [TestMethod]
+    public void PageDimensions_ReadFromMediaBox_InPoints()
+    {
+        // OpenPdf's single page hardcodes /MediaBox [0 0 612 792] - US Letter in points
+        // (612/72 = 8.5in, 792/72 = 11in). Unit is "point" here, never "inch": the
+        // inch conversion happens later, in PageDimensionWarningsHelper.
+        var metadata = PdfNativeMetadataExtractor.ExtractPdfNativeMetadataAndDispose(OpenPdf(), "doc.pdf", NullLogger.Instance, out _);
+
+        Assert.AreEqual(1, metadata.NativePageDimensions!.Count);
+        var page = metadata.NativePageDimensions[0];
+        Assert.AreEqual(1, page.PageNumber);
+        Assert.AreEqual(612.0, page.Width);
+        Assert.AreEqual(792.0, page.Height);
+        Assert.AreEqual("point", page.Unit);
+    }
+
+    // --- AltContainerValue --------------------------------------------------------------
+    // dc:title is an rdf:Alt (language alternatives of one value) - AltContainerValue picks
+    // the x-default item, else the first entry, else falls back to the element's own bare
+    // text for a tool that skips the container entirely. Plain XElement fragments, no PDF
+    // fixture needed - this method never touches PdfPig at all.
+
+    private const string RdfNs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+    [TestMethod]
+    public void AltContainer_WithXDefaultAmongOthers_PicksXDefaultItem()
+    {
+        var element = XElement.Parse($"""
+            <title xmlns:rdf="{RdfNs}" xmlns:xml="http://www.w3.org/XML/1998/namespace">
+              <rdf:Alt>
+                <rdf:li xml:lang="en">English Title</rdf:li>
+                <rdf:li xml:lang="x-default">Default Title</rdf:li>
+                <rdf:li xml:lang="fr">French Title</rdf:li>
+              </rdf:Alt>
+            </title>
+            """);
+
+        var value = PdfNativeMetadataExtractor.AltContainerValue(element);
+
+        Assert.AreEqual("Default Title", value);
+    }
+
+    [TestMethod]
+    public void AltContainer_WithNoXDefault_PicksFirstItem()
+    {
+        var element = XElement.Parse($"""
+            <title xmlns:rdf="{RdfNs}" xmlns:xml="http://www.w3.org/XML/1998/namespace">
+              <rdf:Alt>
+                <rdf:li xml:lang="en">First Title</rdf:li>
+                <rdf:li xml:lang="fr">Second Title</rdf:li>
+              </rdf:Alt>
+            </title>
+            """);
+
+        var value = PdfNativeMetadataExtractor.AltContainerValue(element);
+
+        Assert.AreEqual("First Title", value);
+    }
+
+    [TestMethod]
+    public void AltContainer_SingleItemNoLangAttribute_IsUsed()
+    {
+        var element = XElement.Parse($"""
+            <title xmlns:rdf="{RdfNs}">
+              <rdf:Alt>
+                <rdf:li>Only Title</rdf:li>
+              </rdf:Alt>
+            </title>
+            """);
+
+        var value = PdfNativeMetadataExtractor.AltContainerValue(element);
+
+        Assert.AreEqual("Only Title", value);
+    }
+
+    [TestMethod]
+    public void AltContainer_EmptyRdfAlt_ReturnsNull()
+    {
+        var element = XElement.Parse($"""
+            <title xmlns:rdf="{RdfNs}">
+              <rdf:Alt />
+            </title>
+            """);
+
+        var value = PdfNativeMetadataExtractor.AltContainerValue(element);
+
+        Assert.IsNull(value);
+    }
+
+    [TestMethod]
+    public void BareStringElement_NoContainerAtAll_FallsBackToElementValue()
+    {
+        // A tool that writes dc:title as a plain string instead of an rdf:Alt container -
+        // ContainerItems finds no rdf:li descendants at all, so this falls back to the
+        // element's own text.
+        var element = XElement.Parse("<title>Bare String Title</title>");
+
+        var value = PdfNativeMetadataExtractor.AltContainerValue(element);
+
+        Assert.AreEqual("Bare String Title", value);
+    }
+
+    [TestMethod]
+    public void BareStringElement_WhitespaceOnly_ReturnsNull()
+    {
+        var element = XElement.Parse("<title>   </title>");
+
+        var value = PdfNativeMetadataExtractor.AltContainerValue(element);
+
+        Assert.IsNull(value);
+    }
+
+    [TestMethod]
+    public void NullElement_ReturnsNull()
+    {
+        Assert.IsNull(PdfNativeMetadataExtractor.AltContainerValue(null));
     }
 }

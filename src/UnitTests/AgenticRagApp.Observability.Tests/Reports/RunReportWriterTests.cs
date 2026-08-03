@@ -1,6 +1,5 @@
 using Azure;
 using Azure.Storage.Blobs;
-using Microsoft.Extensions.Hosting;
 using Moq;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Observability.Reports;
@@ -10,32 +9,19 @@ namespace RagApp.UnitTests.Observability;
 [TestClass]
 public class RunReportWriterTests
 {
-    private static Mock<IHostEnvironment> MockEnvironment(bool isDevelopment)
-    {
-        var mock = new Mock<IHostEnvironment>();
-        mock.SetupGet(e => e.EnvironmentName).Returns(isDevelopment ? Environments.Development : Environments.Production);
-        return mock;
-    }
-
     private static Mock<IBlobStore> MockBlobStore() => new();
 
-    private static RunReportWriter BuildWriter(Mock<IBlobStore> blobStore, bool isDevelopment = true) =>
-        new(blobStore.Object, new Mock<BlobContainerClient>().Object, MockEnvironment(isDevelopment).Object);
+    private static RunReportWriter BuildWriter(Mock<IBlobStore> blobStore) =>
+        new(blobStore.Object, new Mock<BlobContainerClient>().Object);
 
     [TestMethod]
-    public void IsEnabled_TrueInDevelopment()
+    public void IsEnabled_AlwaysTrue_RegardlessOfEnvironment()
     {
-        var writer = BuildWriter(MockBlobStore(), isDevelopment: true);
+        // Regression test for finding #8: reports must write in every environment
+        // (production included), not just Development.
+        var writer = BuildWriter(MockBlobStore());
 
         Assert.IsTrue(writer.IsEnabled);
-    }
-
-    [TestMethod]
-    public void IsEnabled_FalseOutsideDevelopment()
-    {
-        var writer = BuildWriter(MockBlobStore(), isDevelopment: false);
-
-        Assert.IsFalse(writer.IsEnabled);
     }
 
     [TestMethod]

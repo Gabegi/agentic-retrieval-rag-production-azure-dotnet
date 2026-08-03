@@ -107,4 +107,32 @@ public class BlobStoreTests
 
         Assert.IsFalse(saved);
     }
+
+    // Regression test for finding #17: Azure Blob Storage treats metadata key names as
+    // case-insensitive, but the SDK hands back item.Metadata as an ordinal-comparer
+    // dictionary. A manual upload setting "Zenya_Document_Id" must still be found by a
+    // lookup for "zenya_document_id" (ZenyaMetadata.FromBlobMetadata), not silently read
+    // as "not set".
+    [TestMethod]
+    public async Task ListBlobsAsync_MetadataLookupIsCaseInsensitive()
+    {
+        var container = new Mock<BlobContainerClient>();
+        var items = new[]
+        {
+            BlobsModelFactory.BlobItem(
+                name: "doc1.pdf",
+                properties: BlobsModelFactory.BlobItemProperties(accessTierInferred: false),
+                metadata: new Dictionary<string, string> { ["Zenya_Document_Id"] = "abc123" }),
+        };
+        var page = Page<BlobItem>.FromValues(items, continuationToken: null, response: Mock.Of<Response>());
+        container.Setup(c => c.GetBlobsAsync(BlobTraits.Metadata, BlobStates.None, null, It.IsAny<CancellationToken>()))
+            .Returns(AsyncPageable<BlobItem>.FromPages([page]));
+        var store = new BlobStore(NullLogger<BlobStore>.Instance);
+
+        var blobs = await store.ListBlobsAsync(container.Object);
+
+        Assert.AreEqual(1, blobs.Count);
+        Assert.IsTrue(blobs[0].Metadata.TryGetValue("zenya_document_id", out var value));
+        Assert.AreEqual("abc123", value);
+    }
 }

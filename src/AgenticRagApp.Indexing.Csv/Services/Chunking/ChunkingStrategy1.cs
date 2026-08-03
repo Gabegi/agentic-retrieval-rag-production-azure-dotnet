@@ -15,7 +15,7 @@ namespace AgenticRagApp.Indexing.Csv.Services;
 //   the nearest preceding sentence — that sentence begins the next chunk, so facts near a
 //   split boundary appear in both adjacent chunks.
 // • Repeat until the remaining text is shorter than maxChars, then emit it as the final chunk.
-public class ChunkingStrategy1 : IChunkingStrategy
+public class ChunkingStrategy1 : ICsvChunkingStrategy
 {
     private readonly int _maxChars;
     private readonly int _overlapChars;

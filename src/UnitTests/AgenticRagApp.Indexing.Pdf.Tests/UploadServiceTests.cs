@@ -142,7 +142,7 @@ public class UploadServiceTests
             statsException: new OperationCanceledException());
         var service = BuildService(indexService);
 
-        await Assert.ThrowsExceptionAsync<OperationCanceledException>(
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => service.UploadDocumentsAsync([Document("d1")], staleDocumentIds: []));
     }
 }
