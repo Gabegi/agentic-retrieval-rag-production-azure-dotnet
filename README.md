@@ -45,3 +45,26 @@ Requires `SEARCH_ENDPOINT`, `OPENAI_ENDPOINT`, `OPENAI_GPT_DEPLOYMENT`, etc. as 
 - `2-scrape-protocols.yml` — runs the scraper.
 - `3-deploy-application.yml` — deploys the Function App.
 - `4-evaluate-rag.yml` — runs the golden eval suite against live infra.
+
+## Branching
+
+Branch fresh from `main` for each feature; changes land via PR (no direct pushes to `main`); delete the branch once its PR merges.
+
+## Operations
+
+### Post-deployment
+
+- **Run one `force=true` reindex after deploying the rolling-snapshot feature.** The snapshot only accumulates chunks touched by normal runs, so a document indexed before this feature existed (and never updated since) won't appear in it otherwise. Until that first full run, vector-cache eviction may delete still-live vectors it can't yet see in a snapshot — safe, just an avoidable re-embed later, not a correctness issue.
+
+### Recovery when the index is suspected corrupt/incomplete
+
+(e.g. a schema change like a field's `Sortable`/`Filterable` flag can't be applied in place, since Azure AI Search only picks that up on index creation, not update)
+
+1. Call `StartRestore` (`POST /api/index/restore`). This runs `RecreateIndexActivity` (drops and recreates the index with the current schema, picking up `id`'s sortable flag) followed by `RestoreFromSnapshotActivity` (repopulates from the rolling full-corpus snapshot, re-embedding only chunks missing a vector) — built for exactly this "index suspected corrupt/incomplete" case, and cheaper than a full re-extraction.
+2. Check the restore report at `restore/{date}/{instanceId}.json` — confirm `Success: true` and a sane non-zero `ChunksRestored`.
+3. If the snapshot turns out empty/missing, fall back to `StartIndexing?force=true` for a full re-extraction through Document Intelligence.
+4. Re-run the eval suite once the index is repopulated.
+
+## Blob storage layout — reports, artifacts & snapshots
+
+See [`src/AgenticRagApp.Observability/Reports.md`](src/AgenticRagApp.Observability/Reports.md) for the full table of everything the pipelines write to blob storage, by container.
