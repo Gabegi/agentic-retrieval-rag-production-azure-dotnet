@@ -24,7 +24,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // Explicitly out of scope:
 //   - Duplicate (BlobName, PageNumber) pages - that's an extractor invariant
 //     violation, asserted once in PdfPipelineValidator, not here.
-//   - Header/footer/boilerplate stripping - Cordaan's PDF conventions aren't
+//   - Header/footer/boilerplate stripping - Contoso's PDF conventions aren't
 //     confirmed yet, and a wrong regex here silently deletes real content, which is
 //     worse for RAG than leaving a repeated footer in. Add once real sample PDFs
 //     confirm the patterns. Document Intelligence can already exclude

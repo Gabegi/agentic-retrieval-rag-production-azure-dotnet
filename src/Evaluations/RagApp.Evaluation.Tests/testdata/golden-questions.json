@@ -4,7 +4,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Op welke punten moet ik spoelvloeistof controleren voordat ik een wond spoel?",
     "ExpectedAnswer": "Controleer naam en geboortedatum van de cliënt, de vervaldatum/houdbaarheid en de temperatuur van de vloeistof. Vergelijk de spoelvloeistof met de toedienlijst.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/wondspoelen?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/wondspoelen?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -14,7 +14,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Hoelang mag ik een neustampon erin laten?",
     "ExpectedAnswer": "Volg advies behandelaar/fabrikant over hoelang de neustampon mag blijven zitten.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/neustamponverwijderen?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/neustamponverwijderen?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -24,7 +24,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Wat zijn de geschikte injectiegebieden voor subcutaan injecteren?",
     "ExpectedAnswer": "Geschikte injectiegebieden voor subcutane injecties zijn onder andere de boven-/buitenkant van het bovenbeen. Houd een handbreedte afstand van de knie.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/subcutaneinjectietechniek?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/subcutaneinjectietechniek?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -54,7 +54,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Moet ik beschermingsmiddelen gebruiken bij het vernevelen met antibiotica?",
     "ExpectedAnswer": "Bij het vernevelen met antibiotica kan de zorgverlener ervoor kiezen om persoonlijke beschermingsmiddelen te gebruiken.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/antibiotica-vernevelen?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/antibiotica-vernevelen?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -64,7 +64,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Welke aandachtspunten zijn er bij het verzorgen van een wonddrain?",
     "ExpectedAnswer": "Er zijn verschillen in de werkwijze per organisatie op het gebied van verzorgen. In deze werkinstructie wordt voor het desinfecteren van de insteekopening gebruik gemaakt van chloorhexidine in alcohol 70%.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/wond-of-redondrainverzorgen?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/werkinstructie/wond-of-redondrainverzorgen?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -74,7 +74,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Wat is een gesloten systeem?",
     "ExpectedAnswer": "Een gesloten systeem is een systeem dat geen of weinig uitwisseling heeft met zijn omgeving. Het wordt gebruikt bij het uitvoeren van voorbehouden en risicovolle handelingen.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/geslotensysteem?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/geslotensysteem?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -84,7 +84,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Wat is de inloopsnelheid van erytrocyten?",
     "ExpectedAnswer": "De inloopsnelheid is afhankelijk van de conditie van de cliënt. Er is een gangbare toediensnelheid bij een stabiele volwassen cliënt.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/toedienen-bloedproducten-(bloedtransfusie)?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/toedienen-bloedproducten-(bloedtransfusie)?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -94,7 +94,7 @@
     "Department": "Vilans Protocollen",
     "Query": "Hoelang mag een fentanyl pleister op de huid blijven?",
     "ExpectedAnswer": "Kijk in de bijsluiter hoe lang een pleister kan blijven zitten en welke plakplaatsen geschikt zijn.",
-    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/transdermale-toedieningssystemen-(geneesmiddelenpl?policy=B2C_1_Cordaan_B2B_extern",
+    "ExpectedSources": "https://www.vilansprotocollen.nl/achtergrondinformatie/transdermale-toedieningssystemen-(geneesmiddelenpl?policy=B2C_1_Contoso_B2B_extern",
     "Difficulty": "",
     "Value": "",
     "Category": "protocol"
@@ -136,9 +136,9 @@
     "RefusalReason": "CAO/arbeidsvoorwaardenvraag buiten de scope van de zorgprotocollen-kennisbron."
   },
   {
-    "Name": "vilans-14-cordaanwerkt-contactpersoon",
+    "Name": "vilans-14-contosowerkt-contactpersoon",
     "Department": "Vilans Protocollen",
-    "Query": "Wie is de contactpersoon voor CordaanWerkt?",
+    "Query": "Wie is de contactpersoon voor ContosoWerkt?",
     "ExpectedAnswer": "Hier kan ik geen antwoord op geven. Vraag dit na bij je leidinggevende.",
     "ExpectedSources": "",
     "Difficulty": "",
@@ -804,8 +804,8 @@
   {
     "Name": "gq-dni-001-cultuur-diversiteitsmeting-privacy",
     "Department": "D&I",
-    "Query": "Hoe wil Cordaan de cultuur- en diversiteitsmeting uitvoeren zonder de privacy te schenden?",
-    "ExpectedAnswer": "Cordaan zal de culturele diversiteit elke drie jaar in kaart brengen via de Barometer van het CBS. Een interne meting via een enquête brengt namelijk aanzienlijke uitdagingen met betrekking tot privacy-eisen met zich mee.",
+    "Query": "Hoe wil Contoso de cultuur- en diversiteitsmeting uitvoeren zonder de privacy te schenden?",
+    "ExpectedAnswer": "Contoso zal de culturele diversiteit elke drie jaar in kaart brengen via de Barometer van het CBS. Een interne meting via een enquête brengt namelijk aanzienlijke uitdagingen met betrekking tot privacy-eisen met zich mee.",
     "ExpectedSources": "Kader voor Diversiteit en Inclusie binnen het HR-b.pdf",
     "Difficulty": "",
     "Value": "",
@@ -815,7 +815,7 @@
     "Name": "gq-dni-002-standaardtekst-vacatures-diversiteit",
     "Department": "D&I",
     "Query": "Welke standaardtekst wordt er aan vacatures toegevoegd om diversiteit te stimuleren?",
-    "ExpectedAnswer": "Er wordt een tekst toegevoegd waarin onder andere staat dat Cordaan een inclusief werving- en selectiebeleid belangrijk vindt en zich inspant voor een goede representatie van medewerkers en leidinggevenden met verschillende achtergronden.",
+    "ExpectedAnswer": "Er wordt een tekst toegevoegd waarin onder andere staat dat Contoso een inclusief werving- en selectiebeleid belangrijk vindt en zich inspant voor een goede representatie van medewerkers en leidinggevenden met verschillende achtergronden.",
     "ExpectedSources": "Kader voor Diversiteit en Inclusie binnen het HR-b.pdf",
     "Difficulty": "",
     "Value": "",
@@ -824,7 +824,7 @@
   {
     "Name": "gq-dni-003-gelijke-kansen-management-traineeship",
     "Department": "D&I",
-    "Query": "Hoe zorgt Cordaan voor gelijke kansen bij het Management Traineeship?",
+    "Query": "Hoe zorgt Contoso voor gelijke kansen bij het Management Traineeship?",
     "ExpectedAnswer": "Er worden laagdrempelige inloopbijeenkomsten georganiseerd, er worden assessments gebruikt die getest zijn op bias, en de selectiecommissie hanteert een objectieve selectiemethode.",
     "ExpectedSources": "Kader voor Diversiteit en Inclusie binnen het HR-b.pdf",
     "Difficulty": "",
@@ -869,7 +869,7 @@
     "Name": "gq-ged-002-datalek-vermoeden-actie",
     "Department": "Gedragscode",
     "Query": "Wat is de juiste actie als ik vermoed dat ik per ongeluk een datalek heb veroorzaakt?",
-    "ExpectedAnswer": "Meld dit direct via het Servicepunt: Datalek melden: Cordaan. Zo kan er op tijd gekeken worden wat er moet gebeuren en of dit aan de toezichthouder gemeld moet worden.",
+    "ExpectedAnswer": "Meld dit direct via het Servicepunt: Datalek melden: Contoso. Zo kan er op tijd gekeken worden wat er moet gebeuren en of dit aan de toezichthouder gemeld moet worden.",
     "ExpectedSources": "Gedragscode medewerkers (Versie 2).pdf",
     "Difficulty": "",
     "Value": "",
@@ -879,7 +879,7 @@
     "Name": "gq-ged-003-verborgen-camera-familieleden",
     "Department": "Gedragscode",
     "Query": "Wat zijn de regels als familieleden van een cliënt een verborgen camera willen ophangen?",
-    "ExpectedAnswer": "Cordaan verzoekt cliënten en hun sociale netwerk niet zelf een verborgen camera op te hangen of stiekem een geluidsopname te maken. Als je hiermee te maken krijgt, verzoeken we je om contact op te nemen met je leidinggevende.",
+    "ExpectedAnswer": "Contoso verzoekt cliënten en hun sociale netwerk niet zelf een verborgen camera op te hangen of stiekem een geluidsopname te maken. Als je hiermee te maken krijgt, verzoeken we je om contact op te nemen met je leidinggevende.",
     "ExpectedSources": "Gedragscode medewerkers (Versie 2).pdf",
     "Difficulty": "",
     "Value": "",

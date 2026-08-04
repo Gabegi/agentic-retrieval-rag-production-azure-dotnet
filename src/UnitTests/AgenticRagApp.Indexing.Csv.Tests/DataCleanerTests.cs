@@ -142,21 +142,21 @@ public class DataCleanerTests
     }
 
     [TestMethod]
-    public void CordaanLogoLine_IsStrippedFromContent()
+    public void ContosoLogoLine_IsStrippedFromContent()
     {
-        var result = BuildCleaner().Clean([Page(content: "Intro text\ncordaan\nMore text")]);
+        var result = BuildCleaner().Clean([Page(content: "Intro text\ncontoso\nMore text")]);
 
-        StringAssert.DoesNotMatch(result.Records[0].PageContent, new System.Text.RegularExpressions.Regex("^cordaan$", System.Text.RegularExpressions.RegexOptions.Multiline));
+        StringAssert.DoesNotMatch(result.Records[0].PageContent, new System.Text.RegularExpressions.Regex("^contoso$", System.Text.RegularExpressions.RegexOptions.Multiline));
         StringAssert.Contains(result.Records[0].PageContent, "Intro text");
         StringAssert.Contains(result.Records[0].PageContent, "More text");
     }
 
     [TestMethod]
-    public void CordaanWordWithinProse_IsNotStripped()
+    public void ContosoWordWithinProse_IsNotStripped()
     {
-        var result = BuildCleaner().Clean([Page(content: "Welcome to Cordaan, our organisation.")]);
+        var result = BuildCleaner().Clean([Page(content: "Welcome to Contoso, our organisation.")]);
 
-        StringAssert.Contains(result.Records[0].PageContent, "Cordaan");
+        StringAssert.Contains(result.Records[0].PageContent, "Contoso");
     }
 
     [TestMethod]

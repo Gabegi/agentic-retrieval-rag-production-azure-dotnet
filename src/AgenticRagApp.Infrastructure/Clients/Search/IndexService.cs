@@ -80,12 +80,12 @@ public class IndexService : IIndexService
     private SearchIndex BuildIndexDefinition(VectorSearch vectorSearch, SemanticSearch semanticSearch) =>
         new SearchIndex(_config.SearchIndexName)
         {
-            Description = "Internal knowledge base for Cordaan (Dutch elderly and disability care " +
+            Description = "Internal knowledge base for Contoso (Dutch elderly and disability care " +
               "organization). Contains the full text of organizational documents: care and " +
               "quality protocols, work instructions, job descriptions (functiebeschrijvingen), " +
               "HR policies, facility and safety plans, financial procedures, privacy/security " +
               "policies, and software manuals (e.g. ONS/ECD, CIS). Use this index for questions " +
-              "about Cordaan's internal policies, procedures, role responsibilities, and " +
+              "about Contoso's internal policies, procedures, role responsibilities, and " +
               "care-related instructions.",
             VectorSearch   = vectorSearch,
             SemanticSearch = semanticSearch,
@@ -112,7 +112,7 @@ public class IndexService : IIndexService
                 // CSV-only — from FOLDER_MINI_FULL_PATH, bounded set of department/category
                 // values (HR, Kwaliteit, Facilitaire zaken, ...). Null for PDF rows.
                 new SearchableField("department")                                          { IsFilterable = true, IsFacetable = true },
-                // CSV-only — from QUICK_CODE, Cordaan's internal document code. Null for PDF rows.
+                // CSV-only — from QUICK_CODE, Contoso's internal document code. Null for PDF rows.
                 new SimpleField("quick_code",         SearchFieldDataType.String)         { IsFilterable = true },
                 // CSV-only — from RELATIVE_PATH, path back to the original source file.
                 // Structured provenance metadata, not free-text search material. Null for PDF rows.

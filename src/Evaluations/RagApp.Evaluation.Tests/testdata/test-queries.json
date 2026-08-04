@@ -11,7 +11,7 @@
   {
     "Name": "hr-beeldschermbril-vergoeding",
     "Department": "HR",
-    "Query": "Een medewerker heeft oogklachten van beeldschermwerk en vraagt of Cordaan een bril vergoedt. Wat is de procedure en hoeveel wordt vergoed?",
+    "Query": "Een medewerker heeft oogklachten van beeldschermwerk en vraagt of Contoso een bril vergoedt. Wat is de procedure en hoeveel wordt vergoed?",
     "ExpectedAnswer": "Ja, mits vast dienstverband en meer dan 2 uur/dag beeldschermwerk (zie stroomschema). Vergoeding is €200 netto, eens in de 3 jaar. Medewerker en leidinggevende vullen samen het formulier 'Vergoeding Beeldschermbril' in, medewerker gaat naar eigen opticien en declareert de factuur via Youforce.",
     "ExpectedSources": "Regeling Beeldschermbril",
     "Difficulty": "Medium",
@@ -47,7 +47,7 @@
   {
     "Name": "ons-geen-account-tijdelijk",
     "Department": "ONS/ECD",
-    "Query": "Een zorgmedewerker heeft voor een avonddienst nog geen actief Cordaan-account en dus geen toegang tot ONS en Meddy. Hoe komt deze medewerker toch aan de benodigde cliëntinformatie?",
+    "Query": "Een zorgmedewerker heeft voor een avonddienst nog geen actief Contoso-account en dus geen toegang tot ONS en Meddy. Hoe komt deze medewerker toch aan de benodigde cliëntinformatie?",
     "ExpectedAnswer": "Volg de alternatieve werkinstructie: een collega print de looplijst uit ONS (inclusief sleutelkluiscode) en het spoedoverzicht/medicatielijst uit Meddy. De medewerker krijgt mondelinge overdracht bij start dienst en noteert rapportages/wijzigingen op de papieren looplijst. Aan het einde van de dienst levert hij/zij deze in zodat een teamlid alles verwerkt in ONS en Meddy; de papieren lijst wordt daarna veilig vernietigd in een vergrendelde container.",
     "ExpectedSources": "Alternatieve werkinstructie bij GEEN account - Zorg in de Wijk",
     "Difficulty": "Medium",
@@ -56,8 +56,8 @@
   {
     "Name": "ict-authenticator-iphone-installeren",
     "Department": "ICT",
-    "Query": "Een medewerker wil Microsoft Authenticator op zijn eigen (privé) iPhone installeren voor toegang tot Cordaan. Hoe doet hij dat?",
-    "ExpectedAnswer": "Installeer 'Microsoft Authenticator' via de App Store, open de app en kies 'Werk- of schoolaccount toevoegen' > 'QR-code scannen'. Ga op een ander apparaat (laptop/tablet) naar google.nl, zoek op 'aka.ms mfa setup', log in met Cordaan-gegevens en scan de getoonde QR-code met de iPhone. Voer daarna de code in die op het andere apparaat verschijnt en bevestig. Daarna is Authenticator klaar voor gebruik.",
+    "Query": "Een medewerker wil Microsoft Authenticator op zijn eigen (privé) iPhone installeren voor toegang tot Contoso. Hoe doet hij dat?",
+    "ExpectedAnswer": "Installeer 'Microsoft Authenticator' via de App Store, open de app en kies 'Werk- of schoolaccount toevoegen' > 'QR-code scannen'. Ga op een ander apparaat (laptop/tablet) naar google.nl, zoek op 'aka.ms mfa setup', log in met Contoso-gegevens en scan de getoonde QR-code met de iPhone. Voer daarna de code in die op het andere apparaat verschijnt en bevestig. Daarna is Authenticator klaar voor gebruik.",
     "ExpectedSources": "Apple 01 Microsoft Authenticator installeren op een iPhone",
     "Difficulty": "Low",
     "Value": "Veelgestelde BYOD-onboardingvraag van nieuwe of tijdelijke medewerkers."
@@ -66,7 +66,7 @@
     "Name": "ict-servicepunt-locatie-openingstijden",
     "Department": "ICT",
     "Query": "Een medewerker bij Hof van Sloten heeft een ICT-probleem en wil weten of er een Servicepunt op locatie is en hoe laat dat open is.",
-    "ExpectedAnswer": "Ja, Hof van Sloten (Nieuw West) heeft een Servicepunt op locatie, open van 11:00 tot 16:00 uur op de geplande dagen. Voor de exacte data verwijst men naar het overzicht 'Servicepunten 2026'; voor overige vragen kan altijd contact opgenomen worden met de Cordaan servicedesk.",
+    "ExpectedAnswer": "Ja, Hof van Sloten (Nieuw West) heeft een Servicepunt op locatie, open van 11:00 tot 16:00 uur op de geplande dagen. Voor de exacte data verwijst men naar het overzicht 'Servicepunten 2026'; voor overige vragen kan altijd contact opgenomen worden met de Contoso servicedesk.",
     "ExpectedSources": "Servicepunten 2026",
     "Difficulty": "Low",
     "Value": "Veelgestelde logistieke vraag; helpt medewerkers snel naar het juiste fysieke steunpunt te routeren."
@@ -84,7 +84,7 @@
     "Name": "financien-externe-factuur-indienen",
     "Department": "Financiën",
     "Query": "Een locatie heeft een dienst geleverd aan een externe partij en wil hiervoor een factuur opstellen. Waar moet dit naartoe gestuurd worden?",
-    "ExpectedAnswer": "Het ingevulde 'Externe Factuur'-formulier (concept factuur) moet gemaild worden naar opbrengstfacturen@cordaan.nl, met eventuele bijlagen gescand toegevoegd en het domein vermeld in het onderwerp. Voor vragen: afdeling Debiteuren via hetzelfde e-mailadres of 020-8866100.",
+    "ExpectedAnswer": "Het ingevulde 'Externe Factuur'-formulier (concept factuur) moet gemaild worden naar opbrengstfacturen@contoso.nl, met eventuele bijlagen gescand toegevoegd en het domein vermeld in het onderwerp. Voor vragen: afdeling Debiteuren via hetzelfde e-mailadres of 020-8866100.",
     "ExpectedSources": "Externe factuur - aanvraagformulier",
     "Difficulty": "Low",
     "Value": "Terugkerende financiële adminvraag; juiste mailbox voorkomt vertraging in facturatie."
@@ -129,7 +129,7 @@
     "Name": "kwaliteit-moreel-beraad-aanvragen",
     "Department": "Kwaliteit",
     "Query": "Een team heeft een moreel dilemma over een cliëntsituatie en wil hierover in gesprek met een gespreksleider. Hoe vraag je een moreel beraad aan?",
-    "ExpectedAnswer": "Stuur een mail naar moreelberaad@cordaan.nl, of neem voor overleg vooraf contact op met een lid van het ethieknetwerk (terug te vinden in Outlook). Een moreel beraad is een begeleid groepsgesprek (1-2 uur) over een dilemma en staat open voor elk team binnen Cordaan.",
+    "ExpectedAnswer": "Stuur een mail naar moreelberaad@contoso.nl, of neem voor overleg vooraf contact op met een lid van het ethieknetwerk (terug te vinden in Outlook). Een moreel beraad is een begeleid groepsgesprek (1-2 uur) over een dilemma en staat open voor elk team binnen Contoso.",
     "ExpectedSources": "Werkinstructie aanvragen moreel beraad",
     "Difficulty": "Low",
     "Value": "Ethische ondersteuning; agents moeten de juiste mailbox/contactroute weten, vaak gevraagd door teamleads."
@@ -138,7 +138,7 @@
     "Name": "kwaliteit-medimo-inzage-amo",
     "Department": "Kwaliteit",
     "Query": "Hoe print je een actueel medicatieoverzicht (AMO) uit Medimo via de inzageversie?",
-    "ExpectedAnswer": "Log in via WijCordaan > Applicaties > zoek 'Medimo'. Kies in het Medimo hoofdmenu 'Status', zoek de cliënt op (naam of geboortedatum) en selecteer de cliëntregel, klik onderin op de blauwe knop 'AMO(/BMG)'. Medimo genereert een PDF die je met Ctrl+P kunt printen.",
+    "ExpectedAnswer": "Log in via WijContoso > Applicaties > zoek 'Medimo'. Kies in het Medimo hoofdmenu 'Status', zoek de cliënt op (naam of geboortedatum) en selecteer de cliëntregel, klik onderin op de blauwe knop 'AMO(/BMG)'. Medimo genereert een PDF die je met Ctrl+P kunt printen.",
     "ExpectedSources": "Instructie inloggen inzageversie Medimo",
     "Difficulty": "Low",
     "Value": "Veelgevraagde stap-voor-stap lookup voor zorgmedewerkers die snel een medicatieoverzicht nodig hebben."
@@ -147,7 +147,7 @@
     "Name": "kwaliteit-wondverpleegkundige-inschakelen",
     "Department": "Kwaliteit",
     "Query": "Een hoofdbehandelaar wil een wondverpleegkundige laten meekijken bij een cliënt die niet in zorg is bij het wijkteam. Hoe schakel je deze in?",
-    "ExpectedAnswer": "Verwijs door naar het CSB: (020) 229 06 02, bereikbaar maandag t/m vrijdag 08:30-17:00, of mail naar zorgbemiddeling@cordaan.nl.",
+    "ExpectedAnswer": "Verwijs door naar het CSB: (020) 229 06 02, bereikbaar maandag t/m vrijdag 08:30-17:00, of mail naar zorgbemiddeling@contoso.nl.",
     "ExpectedSources": "Inschakelen wondverpleegkundige - Zorg in de Wijk",
     "Difficulty": "Low",
     "Value": "Snelle triage/verwijsvraag; juiste contactgegevens voorkomen dat de verkeerde afdeling gebeld wordt."

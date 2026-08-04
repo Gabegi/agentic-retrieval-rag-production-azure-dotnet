@@ -25,7 +25,7 @@ public class DocumentChunkTests
         PageNumber            = 0,
         ChunkIndex            = 0,
         ContentVector         = [0.1f, 0.2f, 0.3f],
-        Author                = "Cordaan P&O",
+        Author                = "Contoso P&O",
         CreatedAt             = DateTimeOffset.Parse("2018-02-01T00:00:00Z"),
         ModDate               = DateTimeOffset.Parse("2023-06-15T00:00:00Z"),
         PageCount             = 12,
@@ -38,7 +38,7 @@ public class DocumentChunkTests
             Tables:         [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0, null, [], [])],
             Dimensions:     new PageDimensions(0, 8.27, 11.69, "inch"),
             SelectionMarks: [new SelectionMarkInfo(0, "selected", 5, 0.98, [new PolygonPoint(1f, 1f)])],
-            Figures:        [new FigureInfo("Organogram Cordaan", 20, 0, "/figures/0", ["/paragraphs/3"])],
+            Figures:        [new FigureInfo("Organogram Contoso", 20, 0, "/figures/0", ["/paragraphs/3"])],
             Lines:          [new LineInfo("Gedragscode medewerkers", 0, 0, [new PolygonPoint(0f, 0f)])]),
     };
 
@@ -87,7 +87,7 @@ public class DocumentChunkTests
         // defaults -> these computed from nothing).
         Assert.AreEqual(1, restored.TableCount);
         Assert.IsTrue(restored.HasTable);
-        CollectionAssert.AreEqual(new[] { "Organogram Cordaan" }, restored.FigureCaptions.ToList());
+        CollectionAssert.AreEqual(new[] { "Organogram Contoso" }, restored.FigureCaptions.ToList());
     }
 
     [TestMethod]
@@ -119,7 +119,7 @@ public class DocumentChunkTests
 
         Assert.AreEqual(1, upload.TableCount);
         Assert.IsTrue(upload.HasTable);
-        CollectionAssert.AreEqual(new[] { "Organogram Cordaan" }, upload.FigureCaptions.ToList());
+        CollectionAssert.AreEqual(new[] { "Organogram Contoso" }, upload.FigureCaptions.ToList());
     }
 
     [TestMethod]
