@@ -39,6 +39,10 @@ dotnet test src/Evaluations/RagApp.Evaluation.Tests/RagApp.Evaluation.Tests.cspr
 
 Requires `SEARCH_ENDPOINT`, `OPENAI_ENDPOINT`, `OPENAI_GPT_DEPLOYMENT`, etc. as environment variables (see `src/Evaluations/RagApp.Evaluation.Tests/.env.example` for the full list) and an Azure identity with Search/OpenAI access.
 
+## Prerequisites
+
+.NET 8 SDK, an Azure subscription, and Terraform for provisioning the infrastructure in `infra/`.
+
 ## CI
 
 - `1-deploy-infrastructure.yml` — `terraform apply`.
