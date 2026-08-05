@@ -41,7 +41,7 @@ Requires `SEARCH_ENDPOINT`, `OPENAI_ENDPOINT`, `OPENAI_GPT_DEPLOYMENT`, etc. as 
 
 ## Prerequisites
 
-.NET 8 SDK, an Azure subscription, and Terraform for provisioning the infrastructure in `infra/`.
+.NET 10 SDK, an Azure subscription, and Terraform for provisioning the infrastructure in `infra/`.
 
 ## CI
 
