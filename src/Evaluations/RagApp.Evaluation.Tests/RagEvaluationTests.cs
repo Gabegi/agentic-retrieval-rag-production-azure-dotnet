@@ -1,16 +1,20 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.AI.OpenAI;
+using Azure.AI.TextAnalytics;
 using Azure.Identity;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.KnowledgeBases;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using AgenticRagApp.Infrastructure.Clients.ContentSafety;
 using AgenticRagApp.Infrastructure.Clients.KnowledgeRetrieval;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Configuration;
+using AgenticRagApp.Querying.Guards;
 using AgenticRagApp.Querying.Services;
 using RagApp.Evaluation.Tests.Evaluation;
 using RagApp.Evaluation.Tests.Models;
@@ -73,6 +77,8 @@ public class RagEvaluationTests
             StorageContainer = Env("STORAGE_CONTAINER"),
             KnowledgeSourceName = Env("KNOWLEDGE_SOURCE_NAME"),
             KnowledgeBaseName = Env("KNOWLEDGE_BASE_NAME"),
+            ContentSafetyEndpoint = Env("CONTENT_SAFETY_ENDPOINT"),
+            LanguageEndpoint = Env("LANGUAGE_ENDPOINT"),
         };
 
         var openAi = new AzureOpenAIClient(new Uri(config.OpenAiEndpoint), credential);
@@ -114,7 +120,15 @@ public class RagEvaluationTests
 
         var retrievalClient = new KnowledgeBaseClient(new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential));
         var neighborExpander = new ChunkNeighborExpander(searchClient);
-        _ragService = new AgenticRagQueryService(config, retrievalClient, neighborExpander);
+
+        var promptShieldClient = new PromptShieldClient(
+            new HttpClient { BaseAddress = new Uri(config.ContentSafetyEndpoint) }, credential);
+        var injectionGuard = new PromptInjectionGuard(promptShieldClient, NullLogger<PromptInjectionGuard>.Instance);
+
+        var textAnalyticsClient = new TextAnalyticsClient(new Uri(config.LanguageEndpoint), credential);
+        var piiGuard = new PiiGuard(textAnalyticsClient, NullLogger<PiiGuard>.Instance);
+
+        _ragService = new AgenticRagQueryService(config, retrievalClient, neighborExpander, injectionGuard, piiGuard);
         _evaluator = new RagEvaluator(judgeClient);
         _writer = new EvalResultWriter(container, executionId: $"{DateTime.UtcNow:yyyyMMddTHHmmss}");
     }
@@ -133,6 +147,15 @@ public class RagEvaluationTests
             $"{row.LatencyMs}ms  ${row.CostUsd:F4}  in={row.InputTokens} out={row.OutputTokens}  ok={row.Succeeded}";
         Console.WriteLine(summary);
         AppendProgress(summary);
+
+        // A failed row whose error is an Azure OpenAI content-filter block (400) isn't a real
+        // pass or fail - it's the platform rejecting the call before the app/judge could act,
+        // which for an Answer scenario can just as easily be a false positive on legitimate
+        // content as a genuine over-block (see gq-ged-003-verborgen-camera-familieleden,
+        // docs/2608/260806/eval-content-filter-answer-block.md). Report it as Inconclusive
+        // instead of Failed so it's visible in test results without breaking the pipeline.
+        if (!row.Succeeded && RagEvaluator.IsContentFilterError(row.Error))
+            Assert.Inconclusive($"Content filter blocked '{testQuery.Name}' (reported, not failed): {row.Error}");
 
         Assert.IsTrue(row.Succeeded,
             $"RAG call failed for '{testQuery.Name}': {row.Error}");

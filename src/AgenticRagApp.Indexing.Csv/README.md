@@ -2,10 +2,18 @@
 
 CSV indexing pipeline: extract → chunk → embed → upload to Azure AI Search.
 
-- `Services/ExtractionService.cs` — reads and validates source CSVs, joins related page records
-- `Services/ChunkingService.cs` / `Utils/ChunkingUtils.cs` — splits joined records into search-sized chunks
-- `Services/EmbeddingService.cs` — generates embeddings for each chunk
-- `Services/UploadService.cs` — uploads embedded chunks to the Search index
+- `Services/Extraction/` (`CsvExtractor.cs`, `CsvJoiner.cs`, `DataCleaner.cs`, `PipelineValidator.cs`) — reads and validates source CSVs, joins related page records
+- `Services/CsvExtractionService.cs` — extraction pipeline entry point
+- `Services/Chunking/ChunkingStrategy1.cs`, `Services/CsvChunkingService.cs` / `Utils/CsvChunkingUtils.cs` — splits joined records into search-sized chunks
+- `Services/CsvEmbeddingService.cs` — generates embeddings for each chunk
+- `Services/CsvUploadService.cs` — uploads embedded chunks to the Search index
+- `CsvServiceCollectionExtensions.cs` — registers this project's services with the DI container
 - `Models/` — page/join/chunk/validation data contracts
 
-Orchestrated by `AgenticRagApp.FunctionApp`'s `CsvIndexingFunction`. Reports written per run — see the root [ReadMe.md](../../ReadMe.md#blob-storage-layout--reports-artifacts--snapshots) blob storage layout.
+## Integration
+
+Not yet wired to `AgenticRagApp.FunctionApp` — the pipeline is complete but no Function calls it (see [FunctionApp/README.md](../AgenticRagApp.FunctionApp/README.md)).
+
+## See also
+
+- root [ReadMe.md](../../ReadMe.md#blob-storage-layout--reports-artifacts--snapshots) — blob storage layout for reports written per run

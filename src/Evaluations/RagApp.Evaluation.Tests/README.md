@@ -13,4 +13,9 @@ RAG quality evaluation harness — runs golden queries against a live environmen
 1. Copy `.env.example` to `.env` and fill in the environment's resource names (auth is via `DefaultAzureCredential` — no keys needed, just an identity with Search/OpenAI access)
 2. `dotnet test src/Evaluations/RagApp.Evaluation.Tests`
 
-Re-run this suite after any restore/reindex — see the root [ReadMe.md](../../../ReadMe.md#post-deployment-steps) post-deployment steps.
+Re-run this suite after any restore/reindex.
+
+## See also
+
+- [Rbac.md](Rbac.md) — which identity the eval suite runs as, what roles it needs, and known gaps
+- root [ReadMe.md](../../../ReadMe.md#post-deployment-steps) — post-deployment steps

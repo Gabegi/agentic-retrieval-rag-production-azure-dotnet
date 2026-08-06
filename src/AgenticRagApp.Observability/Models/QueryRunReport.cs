@@ -15,6 +15,7 @@ public record QueryRunReport(
     string                 ConversationId,
     string                 Model,
     string                 FinishReason,
+    string?                Category,
     long                   LatencyMs,
     long                   InputTokens,
     long                   OutputTokens,

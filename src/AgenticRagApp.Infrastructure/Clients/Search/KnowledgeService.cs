@@ -103,7 +103,29 @@ public class KnowledgeService : IKnowledgeService
             AnswerInstructions = "Provide a complete and accurate answer based on the document content. " +
                                  "Always mention which document the information comes from. " +
                                  "Do not summarize or omit steps from procedures or guidelines. " +
-                                 "If multiple documents are relevant, discuss each one separately.",
+                                 "If multiple documents are relevant, discuss each one separately. " +
+                                 "Write the answer in Dutch, at CEFR C1 level: clear, well-structured, " +
+                                 "professional register, no unexplained jargon. " +
+                                 "State only what the source documents say - never give a personal or " +
+                                 "subjective opinion. If asked for one, say explicitly that you can only " +
+                                 "share what the documentation says, not an opinion. " +
+                                 // Real Dutch copy from the golden-questions dataset (2026-08-06) - see
+                                 // docs/2608/260806/po-open-questions.md. This is the wording-only half of
+                                 // criterion 6; hard enforcement (AgenticRagQueryService.AskAsync's
+                                 // initialChunks.Count == 0 check) is separate and covers the case this
+                                 // instruction might miss.
+                                 "If none of the retrieved documents actually answer the question, say so " +
+                                 "plainly rather than guessing or padding the answer: respond with " +
+                                 "\"Hier kan ik geen antwoord op geven. Vraag dit na bij je leidinggevende.\" " +
+                                 // Criterion 2 - distinct text from the one above, matched to the dataset's
+                                 // medisch_advies category. Instruction-only: no code-level guard for this
+                                 // one (see po-open-questions.md's open questions on whether one is wanted).
+                                 "If the question asks for medical advice - a diagnosis, a treatment or " +
+                                 "medication decision for a specific client, or a triage/urgency judgment - " +
+                                 "do not answer it, even if a protocol document seems to touch on the topic. " +
+                                 "Respond with: \"Deze vraag kan ik niet beantwoorden. Ik geef alleen " +
+                                 "informatie over zorgprotocollen en geen medisch advies. Neem bij twijfel " +
+                                 "over een cliënt altijd contact op met een zorgprofessional.\"",
 
             OutputMode               = KnowledgeRetrievalOutputMode.AnswerSynthesis,
             RetrievalReasoningEffort = new KnowledgeRetrievalMediumReasoningEffort(),

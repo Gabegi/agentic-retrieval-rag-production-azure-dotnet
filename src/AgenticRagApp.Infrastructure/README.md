@@ -10,6 +10,10 @@ Thin clients around Azure services, plus the DI registration that wires them up 
 - `Configuration/` — strongly-typed config (`IndexerConfig`)
 - `Clients/ServiceCollectionExtensions.cs` — registers all of the above with the DI container
 
+## Integration
+
 Consumed by the indexing, querying, and observability projects — this project has no app logic of its own.
 
-See [Clients.md](Clients.md) for the full table of every client and its methods.
+## See also
+
+- [Clients.md](Clients.md) — full table of every client and its methods

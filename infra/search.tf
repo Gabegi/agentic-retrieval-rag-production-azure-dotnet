@@ -4,6 +4,14 @@ resource "azurerm_search_service" "main" {
   resource_group_name = data.azurerm_resource_group.data.name
   sku                 = "standard"
 
+  # Enables semantic ranker - required by the knowledge base / agentic
+  # retrieval queries in KnowledgeService.cs, which always request semantic
+  # ranking regardless of the index's own semantic configuration. Without
+  # this, every query fails with "Semantic Search is not enabled for this
+  # service" (FeatureNotSupportedInService). "standard" (not "free") to
+  # match the standard search service tier - free caps at 1,000 queries/month.
+  semantic_search_sku = "standard"
+
   # Only flips to true when local.dev_direct_access_ips has entries (development
   # only) - allowed_ips below still restricts inbound to just those IPs.
   public_network_access_enabled = length(local.dev_direct_access_ips) > 0 ? true : false

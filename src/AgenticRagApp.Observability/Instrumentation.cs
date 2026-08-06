@@ -171,4 +171,13 @@ public static class Instrumentation
 
     public static readonly Histogram<long> IndexStorageSizeBytes =
         Meter.CreateHistogram<long>("indexer.index_storage_size_bytes", unit: "bytes", description: "Total storage size of the Azure Search index after this run's upload");
+
+    // ── Querying ─────────────────────────────────────────────────────────────
+    // Tags: reason (RagQueryResult.FinishReason - blocked_injection|blocked_pii|
+    // no_relevant_answer|stop). Answers a "how often does this block" question without
+    // needing to grep logs - see docs/2608/260806/remaining-acceptance-criteria-plan.md,
+    // item 6.
+
+    public static readonly Counter<long> QueryFinishReason =
+        Meter.CreateCounter<long>("querying.finish_reason", description: "AskAsync results by FinishReason, including guard blocks");
 }

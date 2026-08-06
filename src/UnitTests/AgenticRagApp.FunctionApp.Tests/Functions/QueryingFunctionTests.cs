@@ -24,6 +24,7 @@ public class QueryingFunctionTests
         ConversationId:      "conv-1",
         Model:               "gpt-model",
         FinishReason:        "stop",
+        Category:            null,
         LatencyMs:           123,
         InputTokens:         10,
         OutputTokens:        20,

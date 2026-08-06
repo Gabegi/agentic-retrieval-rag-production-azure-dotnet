@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
+using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 using AgenticRagApp.Querying.Services;
 
@@ -57,9 +58,13 @@ public class QueryingFunction
             var timestamp = DateTimeOffset.UtcNow;
             var result    = await _ragService.AskAsync(body.Question, context.CancellationToken);
 
+            Instrumentation.QueryFinishReason.Add(1,
+                new KeyValuePair<string, object?>("reason", result.FinishReason),
+                new KeyValuePair<string, object?>("category", result.Category ?? "none"));
+
             _logger.LogInformation(
-                "Query telemetry: {LatencyMs}ms, in={In} tokens, out={Out} tokens",
-                result.LatencyMs, result.InputTokens, result.OutputTokens);
+                "Query telemetry: {LatencyMs}ms, in={In} tokens, out={Out} tokens, reason={FinishReason}, category={Category}",
+                result.LatencyMs, result.InputTokens, result.OutputTokens, result.FinishReason, result.Category);
 
             if (_reportWriter.IsEnabled)
                 await _reportWriter.WriteReportAsync(
@@ -79,6 +84,7 @@ public class QueryingFunction
                         ConversationId:     result.ConversationId,
                         Model:              result.Model,
                         FinishReason:       result.FinishReason,
+                        Category:           result.Category,
                         LatencyMs:          result.LatencyMs,
                         InputTokens:        result.InputTokens,
                         OutputTokens:       result.OutputTokens,
@@ -98,6 +104,14 @@ public class QueryingFunction
             await response.WriteAsJsonAsync(new
             {
                 answer    = result.Answer,
+                category  = result.Category,
+                // Criterion 7: "[Title] - p.(page number)" — the acceptance criterion's own
+                // example (`[Vilans protocollen voor neustampon] - p.2`) has no parentheses
+                // around the page number despite its prose header reading "p.(page number)";
+                // built to match the example. Both the pre-formatted label and the raw
+                // title/page fields are sent, since no frontend exists in this repo to confirm
+                // which one is expected to do the formatting - see
+                // docs/2608/260806/remaining-acceptance-criteria-plan.md, item 4.
                 sources   = result.Citations.Select(c => new
                 {
                     document_id   = c.DocumentId,
@@ -108,6 +122,10 @@ public class QueryingFunction
                     page_count    = c.PageCount,
                     created_at    = c.CreatedAt,
                     mod_date      = c.ModDate,
+                    label         = c.Title is not null && c.Page is not null
+                        ? $"[{c.Title}] - p.{c.Page}"
+                        : c.Title,
+                    url           = c.ZenyaUrl,
                 }),
                 telemetry = new
                 {

@@ -54,3 +54,14 @@ resource "azurerm_role_assignment" "dev_eval_spn_openai_user" {
   role_definition_name = "Cognitive Services OpenAI User"
   principal_id         = var.dev_eval_service_principal_object_id
 }
+
+# Mirrors eval_access.tf's eval_cognitive_services_user - see that resource's
+# comment. Needed here too since the eval pipeline's identity when it's NOT
+# the one running apply (the common case) only gets fixed grants from this
+# file, not eval_access.tf's data.azurerm_client_config.current-based ones.
+resource "azurerm_role_assignment" "dev_eval_spn_cognitive_services_user" {
+  count                = local.dev_eval_spn_needs_fixed_grant ? 1 : 0
+  scope                = data.azurerm_cognitive_account.foundry.id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = var.dev_eval_service_principal_object_id
+}

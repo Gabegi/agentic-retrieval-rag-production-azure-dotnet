@@ -20,6 +20,8 @@ public class ServiceCollectionExtensionsTests
         ["SEARCH_INDEX_NAME"]                         = "my-index",
         ["KNOWLEDGE_SOURCE_NAME"]                     = "my-knowledge-source",
         ["KNOWLEDGE_BASE_NAME"]                       = "my-knowledge-base",
+        ["CONTENT_SAFETY_ENDPOINT"]                   = "https://content-safety.example.com",
+        ["LANGUAGE_ENDPOINT"]                         = "https://language.example.com",
         ["APPLICATIONINSIGHTS_CONNECTION_STRING"]     = "InstrumentationKey=00000000-0000-0000-0000-000000000000",
         ["AzureWebJobsStorage:accountName"]            = "myaccount",
     };
@@ -51,6 +53,8 @@ public class ServiceCollectionExtensionsTests
         Assert.AreEqual("my-index", config.SearchIndexName);
         Assert.AreEqual("my-knowledge-source", config.KnowledgeSourceName);
         Assert.AreEqual("my-knowledge-base", config.KnowledgeBaseName);
+        Assert.AreEqual("https://content-safety.example.com", config.ContentSafetyEndpoint);
+        Assert.AreEqual("https://language.example.com", config.LanguageEndpoint);
     }
 
     [TestMethod]

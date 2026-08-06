@@ -31,10 +31,22 @@ resource "azurerm_role_assignment" "eval_openai_user" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
+# RagEvaluationTests.cs builds a real AgenticRagQueryService including
+# PromptInjectionGuard/PiiGuard, which call Content Safety (Prompt Shields) and
+# AI Language (PII) on the same Foundry account - "Cognitive Services OpenAI
+# User" above only covers the OpenAI/*.action data actions, not
+# ContentSafety/*.action or Language/*.action, so a separate, broader grant is
+# needed. "Cognitive Services User"'s dataActions is the wildcard
+# Microsoft.CognitiveServices/* - confirmed via `az role definition list`.
+resource "azurerm_role_assignment" "eval_cognitive_services_user" {
+  scope                = data.azurerm_cognitive_account.foundry.id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
 # EvalResultWriter (RagApp.Evaluation.Tests) appends JSONL results as blobs
-# under an "eval-results/" prefix in azurerm_storage_account.data, creating
-# the container itself on first run (CreateIfNotExistsAsync) - no
-# azurerm_storage_container resource needed for it up front.
+# into azurerm_storage_container.eval_results (storage.tf) - this grants the
+# data-plane access needed to write to it.
 resource "azurerm_role_assignment" "eval_storage_blob_data_contributor" {
   scope                = azurerm_storage_account.data.id
   role_definition_name = "Storage Blob Data Contributor"

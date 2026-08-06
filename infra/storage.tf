@@ -119,6 +119,16 @@ resource "azurerm_storage_container" "test_questions" {
   container_access_type = "private"
 }
 
+# Written by EvalResultWriter (RagApp.Evaluation.Tests) during the Evaluate pipeline
+# stage - one JSONL blob per eval run. Previously left unmanaged on the assumption
+# the writer would lazily create it (see eval_access.tf), but it never did, so every
+# eval run 404'd with ContainerNotFound.
+resource "azurerm_storage_container" "eval_results" {
+  name                  = "eval-results"
+  storage_account_id    = azurerm_storage_account.data.id
+  container_access_type = "private"
+}
+
 # Azure Storage only permits one group Id per private endpoint for this
 # account ("OnlyOneGroupIdPermitted... first-party resource"), so blob/queue/
 # table each need their own private endpoint rather than one bundled PE.

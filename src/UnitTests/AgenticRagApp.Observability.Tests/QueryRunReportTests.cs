@@ -29,6 +29,7 @@ public class QueryRunReportTests
         ConversationId:     "conv-1",
         Model:              "gpt-4.1",
         FinishReason:       "stop",
+        Category:           null,
         LatencyMs:          1234,
         InputTokens:        100,
         OutputTokens:       50,

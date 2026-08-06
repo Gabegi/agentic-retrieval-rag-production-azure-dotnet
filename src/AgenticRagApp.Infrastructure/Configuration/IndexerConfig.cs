@@ -15,6 +15,11 @@ public class IndexerConfig
     [Required(ErrorMessage = "KNOWLEDGE_BASE_NAME is required")]           public string KnowledgeBaseName { get; init; } = default!;
     [Required(ErrorMessage = "OPENAI_GPT_DEPLOYMENT is required")]         public string OpenAiGptDeployment { get; init; } = default!;
     [Required(ErrorMessage = "OPENAI_GPT_MODEL_NAME is required")]         public string OpenAiGptModelName { get; init; } = default!;
+    // Required by AgenticRagQueryService's guard checks (acceptance criteria 4 & 5) -
+    // unlike DocumentIntelligenceEndpoint below, there's no code path that works without
+    // these, so they can't be left optional/empty.
+    [Required(ErrorMessage = "CONTENT_SAFETY_ENDPOINT is required")]      public string ContentSafetyEndpoint { get; init; } = default!;
+    [Required(ErrorMessage = "LANGUAGE_ENDPOINT is required")]            public string LanguageEndpoint { get; init; } = default!;
     // Below all have a fallback applied at construction time (see ServiceCollectionExtensions),
     // so they're never actually null/empty in practice - not [Required].
     public string StorageContainer             { get; init; } = "protocols";

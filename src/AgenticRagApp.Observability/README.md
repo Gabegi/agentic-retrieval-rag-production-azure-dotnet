@@ -9,4 +9,6 @@ Cross-cutting reporting, snapshotting, and telemetry used by both indexing pipel
 - `Snapshots/SnapshotService.cs` — maintains the rolling full-corpus snapshot used to rebuild the index if it's ever wiped/corrupted
 - `Models/` — report and snapshot data contracts (`PdfIndexRunReport`, `CsvIndexRunReport`, `QueryRunReport`, `PdfRestoreRunReport`, etc.)
 
-See [Reports.md](Reports.md) for exactly what gets written where.
+## See also
+
+- [Reports.md](Reports.md) — exactly what gets written where

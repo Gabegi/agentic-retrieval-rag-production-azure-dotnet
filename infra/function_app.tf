@@ -111,15 +111,37 @@ resource "azurerm_windows_function_app" "indexer" {
     # setting this is what flips DocumentIntelligenceExtractor from unregistered
     # to active in program.cs (config.DocumentIntelligenceEndpoint gate).
     "DOCUMENT_INTELLIGENCE_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
-    "SEARCH_INDEX_NAME"              = var.search_index_name
-    "KNOWLEDGE_SOURCE_NAME"          = var.knowledge_source_name
-    "KNOWLEDGE_BASE_NAME"            = var.knowledge_base_name
+    # Same account/endpoint again - Content Safety (Prompt Shields) and AI Language
+    # (PII detection) are both exposed on this one AIServices-kind multi-service
+    # account, confirmed live via direct REST calls (2026-08-06): both
+    # text:shieldPrompt and language/:analyze-text return "PermissionDenied" (RBAC),
+    # not 404, so no separate Content Safety/Language resource is needed. RBAC is
+    # already covered too - func_document_intelligence_user in
+    # document_intelligence.tf grants "Cognitive Services User" on this same
+    # account, whose dataActions is the wildcard Microsoft.CognitiveServices/*.
+    "CONTENT_SAFETY_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
+    "LANGUAGE_ENDPOINT"       = data.azurerm_cognitive_account.foundry.endpoint
+    "SEARCH_INDEX_NAME"       = var.search_index_name
+    "KNOWLEDGE_SOURCE_NAME"   = var.knowledge_source_name
+    "KNOWLEDGE_BASE_NAME"     = var.knowledge_base_name
   }
 
   tags = local.common_tags
+
+  # Azure auto-links App Insights whenever it sees APPLICATIONINSIGHTS_CONNECTION_STRING
+  # in app_settings above - it injects the "hidden-link: /app-insights-resource-id" tag and
+  # site_config.application_insights_connection_string on the live resource itself, neither
+  # of which is declared here. Without this, every plan sees Azure's own auto-linking as
+  # drift and proposes removing it, only for Azure to re-add it right after apply.
+  lifecycle {
+    ignore_changes = [
+      tags["hidden-link: /app-insights-resource-id"],
+      site_config[0].application_insights_connection_string,
+    ]
+  }
 }
 
-#  need this on any EP1 Function App 
+#  need this on any EP1 Function App
 resource "azurerm_storage_share" "func_content" {
   name               = "cor-func-idx-cap-${local.env}-${local.region}-${local.instance}"
   storage_account_id = azurerm_storage_account.func.id

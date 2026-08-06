@@ -89,6 +89,122 @@ public class PdfIndexingFunction
         return client.CreateCheckStatusResponse(req, instanceId);
     }
 
+    // How far back GetIndexingStatus looks when no instanceId is given, and how many
+    // instances it will page through before giving up. Durable's query API can't filter by
+    // orchestration name, so the name filter is client-side and the scan is capped rather
+    // than unbounded - a status check must stay cheap even once the task hub has a long
+    // history behind it.
+    private const int LatestRunLookbackDays = 14;
+    private const int MaxInstancesScanned   = 500;
+
+    // Progress for a run in flight, without needing the instance ID or the Durable
+    // statusQueryGetUri handed back by StartIndexing - "is it still going, which stage, how
+    // long has it been there". Defaults to the most recent indexing run; pass ?instanceId= to
+    // pin a specific one (including a restore run, whose stage vocabulary differs but whose
+    // status payload is the same shape).
+    //
+    // Resolution is stage-level only: extraction is a single long activity, so a run sits on
+    // "extracting" for however long extraction takes. See IndexingProgress for why finer
+    // progress needs more than custom status.
+    [Function("GetIndexingStatus")]
+    public async Task<HttpResponseData> GetIndexingStatus(
+        [HttpTrigger(AuthorizationLevel.Function, "get", Route = "index/status")] HttpRequestData req,
+        [DurableClient] DurableTaskClient client)
+    {
+        var ct         = req.FunctionContext.CancellationToken;
+        var instanceId = req.Query["instanceId"];
+
+        // getInputsAndOutputs/FetchInputsAndOutputs is what makes the custom status payload
+        // come back at all - without it the stage would always read as unknown.
+        var metadata = string.IsNullOrWhiteSpace(instanceId)
+            ? await FindLatestIndexingRunAsync(client, ct)
+            : await client.GetInstanceAsync(instanceId, getInputsAndOutputs: true, ct);
+
+        if (metadata is null)
+        {
+            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
+            await notFound.WriteAsJsonAsync(new
+            {
+                message = string.IsNullOrWhiteSpace(instanceId)
+                    ? $"No indexing run found in the last {LatestRunLookbackDays} days."
+                    : $"No orchestration found with instance ID '{instanceId}'.",
+            });
+            return notFound;
+        }
+
+        var progress = ReadProgress(metadata);
+        var running  = metadata.RuntimeStatus is OrchestrationRuntimeStatus.Running
+                                              or OrchestrationRuntimeStatus.Pending
+                                              or OrchestrationRuntimeStatus.Suspended;
+
+        // LastUpdatedAt is the finish time only once the run is terminal; while it's still
+        // going it's just the last checkpoint, so elapsed has to run against the wall clock.
+        DateTimeOffset? finishedAt = running ? null : metadata.LastUpdatedAt;
+        var elapsed = (finishedAt ?? DateTimeOffset.UtcNow) - metadata.CreatedAt;
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        await response.WriteAsJsonAsync(new
+        {
+            instanceId     = metadata.InstanceId,
+            orchestration  = metadata.Name,
+            runtimeStatus  = metadata.RuntimeStatus.ToString(),
+            // "starting" covers the window between scheduling and the orchestrator's first
+            // SetCustomStatus, where there is genuinely no stage yet.
+            stage          = progress?.Stage ?? "starting",
+            startedAt      = metadata.CreatedAt,
+            finishedAt,
+            elapsed        = elapsed.ToString(@"hh\:mm\:ss"),
+            // Null until the stage that measures them completed - "not measured yet", not zero,
+            // the same distinction PdfIndexRunReport draws.
+            docsExtracted  = progress?.DocsExtracted,
+            chunksProduced = progress?.ChunksProduced,
+            docsUploaded   = progress?.DocsUploaded,
+            error          = metadata.FailureDetails?.ErrorMessage,
+        });
+        return response;
+    }
+
+    private static async Task<OrchestrationMetadata?> FindLatestIndexingRunAsync(
+        DurableTaskClient client, CancellationToken ct)
+    {
+        var query = new OrchestrationQuery
+        {
+            CreatedFrom           = DateTimeOffset.UtcNow.AddDays(-LatestRunLookbackDays),
+            FetchInputsAndOutputs = true,
+        };
+
+        OrchestrationMetadata? latest = null;
+        var scanned = 0;
+
+        await foreach (var instance in client.GetAllInstancesAsync(query).WithCancellation(ct))
+        {
+            if (++scanned > MaxInstancesScanned) break;
+            if (instance.Name != "IndexingOrchestrator") continue;
+            // Ordering isn't guaranteed by the query API, so pick the newest explicitly
+            // rather than trusting the first result.
+            if (latest is null || instance.CreatedAt > latest.CreatedAt) latest = instance;
+        }
+
+        return latest;
+    }
+
+    // Custom status is absent before the orchestrator's first SetCustomStatus, and could be
+    // an older shape for a run still in flight across a deployment - neither is worth failing
+    // a status check over, so both degrade to "stage unknown" rather than throwing.
+    private static IndexingProgress? ReadProgress(OrchestrationMetadata metadata)
+    {
+        if (string.IsNullOrWhiteSpace(metadata.SerializedCustomStatus)) return null;
+
+        try
+        {
+            return metadata.ReadCustomStatusAs<IndexingProgress>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     // Manual-upload path (Zenya source connection isn't live yet) - the timer provides the
     // cadence, ExtractAsync's own new/updated diff is the "check for changes" step, so no
     // separate polling logic is needed here. Fixed instance ID makes this a singleton: a run
@@ -135,10 +251,23 @@ public class PdfIndexingFunction
         bool    success = false;
         string? error   = null;
 
+        // Stage-boundary progress, readable while the run is in flight via GET /api/index/status
+        // (or the raw statusQueryGetUri's "customStatus"). SetCustomStatus is replay-safe -
+        // Durable overwrites the value rather than accumulating, so a replayed orchestration
+        // just rewrites the same sequence. Counts are carried forward from the stage that
+        // measured them, so a terminal run's status still shows what it produced.
+        context.SetCustomStatus(new IndexingProgress(IndexingProgress.Extracting, startedAt));
+
         try
         {
             extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new PdfExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
+            context.SetCustomStatus(new IndexingProgress(IndexingProgress.Chunking, startedAt,
+                DocsExtracted: extractResults.DocsToProcess));
+
             chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new PdfChunkRequest(docsBlob, chunksBlob, context.InstanceId, startedAt));
+            context.SetCustomStatus(new IndexingProgress(IndexingProgress.EmbedAndUpload, startedAt,
+                DocsExtracted: extractResults.DocsToProcess, ChunksProduced: chunkResults.ChunksProduced));
+
             embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new PdfEmbedUploadRequest(chunksBlob, staleIdsBlob, context.InstanceId, startedAt));
             success      = true;
         }
@@ -146,6 +275,12 @@ public class PdfIndexingFunction
         {
             error = ex.ToString();
         }
+
+        context.SetCustomStatus(new IndexingProgress(
+            success ? IndexingProgress.Completed : IndexingProgress.Failed, startedAt,
+            DocsExtracted:  extractResults?.DocsToProcess,
+            ChunksProduced: chunkResults?.ChunksProduced,
+            DocsUploaded:   embedResults?.DocsUploaded));
 
         // Always call the activity — checking _reportWriter.IsEnabled here would be an
         // injected-dependency read inside orchestrator code, which Durable Functions'
@@ -315,6 +450,8 @@ public class PdfIndexingFunction
     [Function("SaveIndexReportActivity")]
     public async Task SaveIndexReportActivity([ActivityTrigger] PdfIndexRunReport report, FunctionContext context)
     {
+        LogRunSummary(report);
+
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
@@ -322,6 +459,36 @@ public class PdfIndexingFunction
         _logger.LogInformation(
             "Index run report saved — instance={InstanceId}, docs={Docs}, chunks={Chunks}, success={Success}",
             report.InstanceId, report.DocsToProcess, report.ChunksProduced, report.Success);
+    }
+
+    // One greppable, alertable line per run, emitted from the final activity so it lands
+    // exactly once (orchestrator-body logging would repeat on every replay). Deliberately
+    // ahead of the IsEnabled guard above: the run finished either way, and the fact that it
+    // finished shouldn't depend on report writing being switched on.
+    //
+    // Logged at Error on failure so an App Insights alert rule can key off severity rather
+    // than having to parse success= out of the message.
+    private void LogRunSummary(PdfIndexRunReport report)
+    {
+        const string template =
+            "INDEXING RUN FINISHED — instance={InstanceId} success={Success} duration={DurationSeconds}s " +
+            "force={ForceReindex} docs={Docs} chunks={Chunks} uploaded={Uploaded} failed={Failed} " +
+            "redFlags={RedFlags} error={Error}";
+
+        var duration = (report.Run.FinishedAt - report.Run.StartedAt).TotalSeconds;
+        // Both stages' red flags, since either can be null when that stage never ran.
+        var redFlags = (report.Extraction?.RedFlags.Count ?? 0) + (report.Embedding?.RedFlags.Count ?? 0);
+        var failed   = report.Embedding?.DocsFailed ?? 0;
+
+        if (report.Success)
+            _logger.LogInformation(template,
+                report.InstanceId, true, duration, report.Run.ForceReindex,
+                report.DocsToProcess, report.ChunksProduced, report.DocsUploaded, failed, redFlags, null);
+        else
+            _logger.LogError(template,
+                report.InstanceId, false, duration, report.Run.ForceReindex,
+                report.DocsToProcess, report.ChunksProduced, report.DocsUploaded, failed, redFlags,
+                report.ErrorMessage);
     }
 
     // Recovery entrypoint, distinct from StartIndexing/force=true: wipes the index outright
@@ -347,9 +514,13 @@ public class PdfIndexingFunction
         bool           success = false;
         string?        error   = null;
 
+        context.SetCustomStatus(new IndexingProgress(IndexingProgress.RecreatingIndex, startedAt));
+
         try
         {
             await context.CallActivityAsync("RecreateIndexActivity");
+            context.SetCustomStatus(new IndexingProgress(IndexingProgress.Restoring, startedAt));
+
             result  = await context.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity");
             success = true;
         }
@@ -357,6 +528,10 @@ public class PdfIndexingFunction
         {
             error = ex.ToString();
         }
+
+        context.SetCustomStatus(new IndexingProgress(
+            success ? IndexingProgress.Completed : IndexingProgress.Failed, startedAt,
+            DocsUploaded: result?.ChunksRestored));
 
         await context.CallActivityAsync("SaveRestoreReportActivity",
             BuildRestoreReport(context, startedAt, result, success, error));

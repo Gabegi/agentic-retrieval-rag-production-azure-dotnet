@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using Azure.AI.DocumentIntelligence;
 using Azure.AI.OpenAI;
+using Azure.AI.TextAnalytics;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Search.Documents;
@@ -16,6 +17,7 @@ using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Clients.KnowledgeRetrieval;
 using AgenticRagApp.Infrastructure.Clients.DocumentIntelligence;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
+using AgenticRagApp.Infrastructure.Clients.ContentSafety;
 
 namespace AgenticRagApp.Infrastructure;
 
@@ -55,6 +57,8 @@ public static class ServiceCollectionExtensions
             OpenAiGptModelName           = configuration["OPENAI_GPT_MODEL_NAME"]!,
             OpenAiExtractionDeployment   = configuration["OPENAI_EXTRACTION_DEPLOYMENT"] ?? "gpt-41-extraction",
             DocumentIntelligenceEndpoint = configuration["DOCUMENT_INTELLIGENCE_ENDPOINT"] ?? "",
+            ContentSafetyEndpoint        = configuration["CONTENT_SAFETY_ENDPOINT"]!,
+            LanguageEndpoint             = configuration["LANGUAGE_ENDPOINT"]!,
             StorageAccountUrl            = configuration["STORAGE_ACCOUNT_URL"]!,
             StorageContainer             = configuration["STORAGE_CONTAINER"] ?? "protocols",
             SearchIndexName              = configuration["SEARCH_INDEX_NAME"]!,
@@ -128,6 +132,16 @@ public static class ServiceCollectionExtensions
                 new DocumentIntelligenceClient(new Uri(config.DocumentIntelligenceEndpoint), credential));
             services.AddSingleton<IDocumentAnalysisClient, DocumentAnalysisClient>();
         }
+
+        // Prompt Shields has no .NET SDK wrapper (see PromptShieldClient's comment), so this
+        // is a typed HttpClient instead of an Azure SDK client registration like the others
+        // here. Unlike Document Intelligence above, this one isn't optional - Querying's
+        // AgenticRagQueryService requires IPromptInjectionGuard unconditionally.
+        services.AddHttpClient<IPromptShieldClient, PromptShieldClient>(client =>
+            client.BaseAddress = new Uri(config.ContentSafetyEndpoint));
+
+        services.AddSingleton(_ =>
+            new TextAnalyticsClient(new Uri(config.LanguageEndpoint), credential));
 
         // Generic wrappers — every raw client above is only ever consumed through one of
         // these from here on. No caller outside this project holds a raw SDK client.
