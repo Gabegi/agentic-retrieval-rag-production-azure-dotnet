@@ -1,3 +1,5 @@
+using Azure.Communication.Email;
+using Azure.Identity;
 using Azure.Storage.Blobs;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.OpenTelemetry;
@@ -10,6 +12,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using AgenticRagApp.Functions.ReportEmail;
 using AgenticRagApp.Infrastructure;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Indexing.Pdf;
@@ -115,6 +118,51 @@ var host = new HostBuilder()
         // PDF indexing pipeline — extraction, chunking, embedding, upload, index. See
         // AgenticRagApp.Indexing.Pdf/ServiceCollectionExtensions.cs for what this wires in.
         services.AddPdfIndexing(config);
+
+        // ── Per-run report email ─────────────────────────────────────────────
+        // One indexing/restore run -> one email. See ReportEmail/ and
+        // docs/2608/260807/pipeline-run-email-report.md.
+        var reportEmailOptions = new ReportEmailOptions();
+        Microsoft.Extensions.Configuration.ConfigurationBinder.Bind(
+            ctx.Configuration.GetSection(ReportEmailOptions.SectionName), reportEmailOptions);
+        services.AddSingleton(reportEmailOptions);
+
+        services.AddSingleton<RunEmailRenderer>();
+        services.AddSingleton<RunAnalysisAgent>();
+
+        services.AddSingleton(sp => new RunReportAssembler(
+            sp.GetRequiredService<IBlobStore>(),
+            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
+            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(config.StorageContainer),
+            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("eval-results"),
+            reportEmailOptions,
+            sp.GetRequiredService<ILogger<RunReportAssembler>>()));
+
+        // Registered even when the feature is disabled or unconfigured: the Functions host
+        // resolves a function's constructor dependencies before the function body runs, so a
+        // missing registration would fail the invocation rather than letting the body no-op
+        // with the informational log it's written to emit.
+        services.AddSingleton<IReportEmailSender>(sp =>
+        {
+            if (string.IsNullOrWhiteSpace(reportEmailOptions.AcsEndpoint))
+                return new NoOpReportEmailSender(sp.GetRequiredService<ILogger<NoOpReportEmailSender>>());
+
+            return new AcsEmailSender(
+                new EmailClient(new Uri(reportEmailOptions.AcsEndpoint), new DefaultAzureCredential()),
+                reportEmailOptions,
+                sp.GetRequiredService<ILogger<AcsEmailSender>>());
+        });
+
+        // No registration for SendReportEmailActivity itself here, deliberately - a
+        // services.AddSingleton<SendReportEmailActivity>(...) was tried first and had no
+        // effect in production (2026-08-07): the isolated-worker Functions host activates
+        // [Function] classes via ActivatorUtilities.CreateInstance(scopedProvider, type), which
+        // resolves each CONSTRUCTOR PARAMETER from the container directly and never consults a
+        // registration for the class type itself. The actual fix is on the class - its
+        // constructor now takes BlobServiceClient (registered above, in
+        // AddAgenticRagAppInfrastructure) and derives the "pipeline-reports" container itself,
+        // instead of asking for an unkeyed BlobContainerClient that nothing here ever supplies.
+        // See SendReportEmailActivity's constructor comment for the full explanation.
     })
     .Build();
 

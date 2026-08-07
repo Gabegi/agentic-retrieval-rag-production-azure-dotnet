@@ -2,6 +2,7 @@ using System.Linq;
 using Azure;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
@@ -72,11 +73,27 @@ public class PdfExtractionPipelineTests
     private static PdfExtractionPipeline BuildPipeline(
         Mock<IBlobStore> blobStore, Mock<IRunReportWriter> reportWriter,
         Mock<IPdfExtractor> extractor, Mock<IPdfCleaner> cleaner, Mock<IPdfPipelineValidator> validator,
-        Mock<IHostEnvironment> env, TimeSpan? corpusWallClockLimit = null) =>
+        Mock<IHostEnvironment> env, TimeSpan? corpusWallClockLimit = null,
+        ILogger<PdfExtractionPipeline>? logger = null) =>
         new(
             new Mock<BlobContainerClient>().Object, new Mock<BlobContainerClient>().Object,
             blobStore.Object, reportWriter.Object, extractor.Object, cleaner.Object, validator.Object,
-            env.Object, NullLogger<PdfExtractionPipeline>.Instance, corpusWallClockLimit);
+            env.Object, logger ?? NullLogger<PdfExtractionPipeline>.Instance, corpusWallClockLimit);
+
+    // Captures formatted log messages so tests can assert on what a warning actually said.
+    // Needed because validation no longer aborts the run - the content of the warning is the
+    // only remaining observable for "what tripped the quality gate".
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
 
     private static Mock<IPdfExtractor> MockExtractor(params string[] blobNames)
     {
@@ -241,11 +258,15 @@ public class PdfExtractionPipelineTests
     }
 
     [TestMethod]
-    public async Task ValidationFailed_OnErrorRateAlone_MessageReportsErrorCount()
+    public async Task ValidationFailed_OnErrorRateAlone_WarningReportsErrorCount()
     {
-        // Regression test for finding #19: a run can fail purely on error rate, with zero
-        // reconciliation problems - the abort message must say so, not just report a
+        // Regression test for finding #19: a run can fail validation purely on error rate, with
+        // zero reconciliation problems - the message must say so, not just report a
         // misleadingly-reassuring "(0 reconciliation problem(s))".
+        //
+        // Validation is reported, not enforced (PdfExtractionPipeline step 4), so this asserts
+        // the warning's content and that the run continued. It previously asserted an abort;
+        // that expectation outlived the behaviour change.
         var blobStore    = MockBlobStore();
         var reportWriter = MockReportWriter();
         var extractor    = MockExtractor("doc1.pdf");
@@ -259,20 +280,29 @@ public class PdfExtractionPipelineTests
                 ReconciliationProblems = [],
                 Issues = [PipelineIssue.Error(PipelineStage.TextQuality, "doc1.pdf", "corrupted content")],
             });
-        var env = MockEnvironmentImpl("Production");
+        var env    = MockEnvironmentImpl("Production");
+        var logger = new CapturingLogger<PdfExtractionPipeline>();
 
-        var pipeline = BuildPipeline(blobStore, reportWriter, extractor, cleaner, validator, env);
+        var pipeline = BuildPipeline(blobStore, reportWriter, extractor, cleaner, validator, env, logger: logger);
 
-        var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExtractDocumentsAsync(Entries("doc1.pdf")));
+        var output = await pipeline.ExtractDocumentsAsync(Entries("doc1.pdf"));
 
-        StringAssert.Contains(ex.Message, "0 reconciliation problem(s)");
-        StringAssert.Contains(ex.Message, "1 error-severity issue(s)");
+        // The run proceeds to indexing regardless - validation informs, it does not gate.
+        Assert.IsNotNull(output);
+
+        var warning = logger.Entries.SingleOrDefault(e => e.Level == LogLevel.Warning
+                                                       && e.Message.Contains("PDF validation failed"));
+        Assert.IsNotNull(warning.Message, "expected a validation-failed warning to be logged");
+        StringAssert.Contains(warning.Message, "0 reconciliation problem(s)");
+        StringAssert.Contains(warning.Message, "1 error-severity issue(s)");
     }
 
     [TestMethod]
-    public async Task ValidationFailed_NotDevelopment_Throws()
+    public async Task ValidationFailed_NotDevelopment_ContinuesAndStillWritesReport()
     {
+        // Outside Development used to abort the run. It no longer does: validation is reported,
+        // not enforced, in every environment (PdfExtractionPipeline step 4). What must still
+        // hold is that the failure is recorded rather than swallowed - hence the report assert.
         var blobStore    = MockBlobStore();
         var reportWriter = MockReportWriter();
         var extractor    = MockExtractor("doc1.pdf");
@@ -281,12 +311,17 @@ public class PdfExtractionPipelineTests
         var validator = new Mock<IPdfPipelineValidator>();
         validator.Setup(v => v.Validate(It.IsAny<IReadOnlyList<PdfExtractionResult>>(), It.IsAny<PdfCleanResult>(), It.IsAny<int?>(), It.IsAny<int?>()))
             .Returns(new PdfQualityGateResult { Passed = false, ReconciliationProblems = ["mismatch"] });
-        var env = MockEnvironmentImpl("Production");
+        var env    = MockEnvironmentImpl("Production");
+        var logger = new CapturingLogger<PdfExtractionPipeline>();
 
-        var pipeline = BuildPipeline(blobStore, reportWriter, extractor, cleaner, validator, env);
+        var pipeline = BuildPipeline(blobStore, reportWriter, extractor, cleaner, validator, env, logger: logger);
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExtractDocumentsAsync(Entries("doc1.pdf")));
+        var output = await pipeline.ExtractDocumentsAsync(Entries("doc1.pdf"));
+
+        Assert.IsNotNull(output);
+        Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains("PDF validation failed")));
+        reportWriter.Verify(w => w.WriteReportAsync(
+            It.Is<string>(p => p.Contains("validation-report")), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]

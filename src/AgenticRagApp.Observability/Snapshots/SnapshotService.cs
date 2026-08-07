@@ -48,8 +48,11 @@ public class SnapshotService : ISnapshotService
             .ToList();
 
         var path = $"{prefix}{startedAt:yyyy/MM/dd}/{instanceId}/{FileName}";
-        await _blobStore.EnsureContainerExistsAsync(_container, ct);
-        await _blobStore.UploadJsonAsync(_container, path, merged, ct);
+        await _blobStore.AssertContainerExistsAsync(_container, ct);
+        // Streamed - by far the largest payload in the system (the whole corpus's snapshot,
+        // growing unboundedly over time) going through the double-buffering write path this
+        // OOM'd on elsewhere in production. See IBlobStore.UploadJsonAsync.
+        await _blobStore.UploadJsonAsync(_container, path, merged, ct: ct);
         _logger.LogInformation("Snapshot written — source '{Source}', {Count} chunks → {Path}", source, merged.Count, path);
 
         var prunedCount = await PruneAsync(existing, ct);

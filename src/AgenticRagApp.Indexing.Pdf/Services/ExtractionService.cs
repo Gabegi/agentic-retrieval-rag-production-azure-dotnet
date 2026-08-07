@@ -39,7 +39,7 @@ public class ExtractionService : IExtractionService
     // index state BEFORE paying for extraction, extract only what's new/changed, emit
     // telemetry, and assemble the stats returned to the caller.
     public async Task<(IReadOnlyList<PdfExtractionDocument> Docs, ExtractionStageMetrics Stats)> ExtractAsync(
-        bool forceReindex, CancellationToken ct = default)
+        bool forceReindex, string? instanceId = null, CancellationToken ct = default)
     {
         // What documents exist in blob storage right now - id + LastModified only, no
         // download or content yet. This is the "source" side of the diff.
@@ -69,7 +69,7 @@ public class ExtractionService : IExtractionService
         // the orchestrator never has to list the container a second time.
         var entriesToProcess = sourceIdsToProcess.ToDictionary(
             id => id, id => sourceListing[id], StringComparer.OrdinalIgnoreCase);
-        var extractionOutput = await _extractor.ExtractDocumentsAsync(entriesToProcess, ct);
+        var extractionOutput = await _extractor.ExtractDocumentsAsync(entriesToProcess, instanceId, ct);
 
         // A document slated for update (sourceIdsToProcess) is only safe to mark stale if
         // this run's extraction actually produced replacement content for it. Extraction
@@ -91,7 +91,7 @@ public class ExtractionService : IExtractionService
         var diff = new DiffResult(
             _extractor.Source, extractionOutput, extractionOutput.Docs.ToList(), removedSourceIds, staleDocumentIds, newCount, updated, skipped);
 
-        await EmitMetricsAndBuildReport(diff, ct);
+        await EmitMetricsAndBuildReport(diff, instanceId, ct);
 
         return (diff.ToProcess, BuildStats(diff, HighNewDocFractionRedFlag(sourceListing.Count, indexedDates.Count, newCount, forceReindex)));
     }
@@ -200,7 +200,7 @@ public class ExtractionService : IExtractionService
     // Emit instrumentation metrics from the diff result, and (dev-only) write a
     // diagnostic report blob - source IDs only, never the full PdfExtractionDocument
     // content, so this stays small regardless of corpus size.
-    private async Task EmitMetricsAndBuildReport(DiffResult diff, CancellationToken ct)
+    private async Task EmitMetricsAndBuildReport(DiffResult diff, string? instanceId, CancellationToken ct)
     {
         Instrumentation.DocsExtracted.Add(diff.Output.Docs.Count);
         Instrumentation.DocsSkipped.Add(diff.Skipped);
@@ -223,7 +223,7 @@ public class ExtractionService : IExtractionService
         };
 
         await _reportWriter.WriteReportAsync(
-            $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-diff.json", report, ct);
+            StageReportPath.Build(ReportFolder, runAt, instanceId, "diff"), report, ct);
     }
 
 // SearchDocumentStore.GetCurrentIndexedDocumentDatesAsync = 

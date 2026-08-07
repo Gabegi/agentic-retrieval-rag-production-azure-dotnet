@@ -1,3 +1,4 @@
+using System.IO.Pipelines;
 using System.Text.Json;
 using Azure;
 using Azure.Storage.Blobs;
@@ -12,8 +13,11 @@ public class BlobStore : IBlobStore
 
     public BlobStore(ILogger<BlobStore> logger) => _logger = logger;
 
-    public async Task EnsureContainerExistsAsync(BlobContainerClient container, CancellationToken ct = default) =>
-        await container.CreateIfNotExistsAsync(cancellationToken: ct);
+    public async Task AssertContainerExistsAsync(BlobContainerClient container, CancellationToken ct = default)
+    {
+        if (!await container.ExistsAsync(ct))
+            throw new ContainerNotDeclaredException(container.Name);
+    }
 
     public async Task<byte[]> DownloadBytesAsync(BlobContainerClient container, string blobName, CancellationToken ct = default)
     {
@@ -55,11 +59,44 @@ public class BlobStore : IBlobStore
         return download.Value.Content.ToObjectFromJson<T>()!;
     }
 
-    public async Task UploadJsonAsync<T>(BlobContainerClient container, string blobName, T value, CancellationToken ct = default)
+    public async Task UploadJsonAsync<T>(
+        BlobContainerClient container, string blobName, T value, JsonSerializerOptions? options = null, CancellationToken ct = default)
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(value);
-        using var stream = new MemoryStream(json);
-        await container.GetBlobClient(blobName).UploadAsync(stream, overwrite: true, cancellationToken: ct);
+        // A System.IO.Pipelines.Pipe connects a writer and a reader running concurrently, with
+        // a small bounded internal buffer - the writer blocks (backpressure) once the reader
+        // falls behind, rather than the writer racing ahead and accumulating the whole payload
+        // in memory the way a MemoryStream would. JsonSerializer writes progressively into one
+        // end while BlobClient.UploadAsync reads from the other and stages blocks to the
+        // service; at no point does either side hold the complete serialized payload at once.
+        //
+        // Both sides run as one Task each so a slow/large upload doesn't block the CPU-bound
+        // serialize step, and vice versa.
+        var pipe = new Pipe();
+
+        var writeTask = WriteAsync();
+        var uploadTask = container.GetBlobClient(blobName).UploadAsync(pipe.Reader.AsStream(), overwrite: true, ct);
+        await Task.WhenAll(writeTask, uploadTask);
+
+        async Task WriteAsync()
+        {
+            Exception? failure = null;
+            try
+            {
+                await JsonSerializer.SerializeAsync(pipe.Writer.AsStream(), value, options, ct);
+            }
+            catch (Exception ex)
+            {
+                // Propagated to the reader side below, so a serialization failure faults the
+                // upload task too instead of leaving it waiting forever on data that will never
+                // arrive.
+                failure = ex;
+                throw;
+            }
+            finally
+            {
+                await pipe.Writer.CompleteAsync(failure);
+            }
+        }
     }
 
     public async Task<(T? Value, ETag? ETag)> TryReadJsonWithETagAsync<T>(

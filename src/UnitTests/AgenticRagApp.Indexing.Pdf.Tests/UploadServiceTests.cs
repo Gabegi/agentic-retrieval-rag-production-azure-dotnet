@@ -35,11 +35,14 @@ public class UploadServiceTests
         return mock;
     }
 
-    private static Mock<IIndexStatsMonitor> MockIndexStatsMonitor(IReadOnlyList<string>? driftRedFlags = null)
+    private static Mock<IIndexStatsMonitor> MockIndexStatsMonitor(
+        IReadOnlyList<string>? driftRedFlags = null,
+        long? previousDocumentCount = null,
+        long? previousStorageSizeBytes = null)
     {
         var mock = new Mock<IIndexStatsMonitor>();
         mock.Setup(m => m.RecordAndCheckDriftAsync(It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(driftRedFlags ?? []);
+            .ReturnsAsync(new IndexDriftCheck(driftRedFlags ?? [], previousDocumentCount, previousStorageSizeBytes));
         return mock;
     }
 

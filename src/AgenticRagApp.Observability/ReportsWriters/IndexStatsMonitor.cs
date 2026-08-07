@@ -17,7 +17,7 @@ public class IndexStatsMonitor : IIndexStatsMonitor
         _logger       = logger;
     }
 
-    public async Task<IReadOnlyList<string>> RecordAndCheckDriftAsync(
+    public async Task<IndexDriftCheck> RecordAndCheckDriftAsync(
         string source, long documentCount, long storageSizeBytes, CancellationToken ct = default)
     {
         Instrumentation.IndexDocumentCount.Record(documentCount);
@@ -36,7 +36,14 @@ public class IndexStatsMonitor : IIndexStatsMonitor
             }
         }
 
+        // Read before this line, returned after it: SaveLastIndexStatsAsync overwrites the
+        // baseline blob with this run's numbers, so `previous` is the only surviving copy of
+        // what the previous run left behind. See IndexDriftCheck.
         await _reportWriter.SaveLastIndexStatsAsync(source, documentCount, storageSizeBytes, ct);
-        return redFlags;
+
+        return new IndexDriftCheck(
+            RedFlags:                 redFlags,
+            PreviousDocumentCount:    previous?.DocumentCount,
+            PreviousStorageSizeBytes: previous?.StorageSizeBytes);
     }
 }

@@ -49,7 +49,12 @@ public class PdfIndexRunReportTests
         Band1500Plus:       2,
         CoherentChunks:     18,
         HeadingsDetected:   19,
-        Strategy:           "SentenceAwareSlidingWindow");
+        Strategy:           "SentenceAwareSlidingWindow",
+        ZeroChunkDocumentIds: ["doc-with-no-chunks.pdf"],
+        SampleChunks:         [],
+        SmallestChunk:        null,
+        LargestChunk:         null,
+        DuplicateSamples:     []);
 
     private static EmbedUploadStageMetrics EmbedUpload(IReadOnlyList<string>? redFlags = null) => new(
         DocsUploaded:                  20,
@@ -62,7 +67,10 @@ public class PdfIndexRunReportTests
         TotalEmbeddingDurationMs:      1234,
         IndexDocumentCountSnapshot:    1000,
         IndexStorageSizeBytesSnapshot: 2_000_000,
-        RedFlags:                     redFlags ?? ["upload flag"]);
+        RedFlags:                     redFlags ?? ["upload flag"],
+        ChunksEvicted:                 7,
+        PreviousIndexDocumentCount:    950,
+        PreviousIndexStorageSizeBytes: 1_900_000);
 
     private static PdfIndexRunReport Build(
         ExtractionStageMetrics? ext = null,

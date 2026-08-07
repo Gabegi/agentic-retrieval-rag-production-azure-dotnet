@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Azure.Storage.Blobs;
 using Moq;
 using AgenticRagApp.Infrastructure.Clients.Blob;
@@ -21,9 +22,12 @@ public class PipelineArtifactWriterTests
 
         await writer.WriteArtifactAsync("some/path.json", new { Foo = "bar" });
 
-        blobStore.Verify(s => s.EnsureContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.AssertContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // Writes now go through IBlobStore.UploadJsonAsync (streamed - see that interface member's
+    // own comment) rather than the writer building a string/BinaryData itself and calling
+    // UploadAsync directly - see PipelineArtifactWriter.WriteArtifactAsync.
     [TestMethod]
     public async Task WriteArtifactAsync_UploadsSerializedArtifactToTheGivenPath()
     {
@@ -32,8 +36,9 @@ public class PipelineArtifactWriterTests
 
         await writer.WriteArtifactAsync("some/path.json", new { Foo = "bar" });
 
-        blobStore.Verify(s => s.UploadAsync(
-            It.IsAny<BlobContainerClient>(), "some/path.json", It.IsAny<BinaryData>(), true, It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), "some/path.json", It.IsAny<object>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -44,30 +49,36 @@ public class PipelineArtifactWriterTests
         // indented, unlike RunReportWriter's small diagnostic reports.
         var blobStore = MockBlobStore();
         var writer    = BuildWriter(blobStore);
-        BinaryData? captured = null;
+        JsonSerializerOptions? captured = null;
         blobStore
-            .Setup(s => s.UploadAsync(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<BinaryData>(), true, It.IsAny<CancellationToken>()))
-            .Callback<BlobContainerClient, string, BinaryData, bool, CancellationToken>((_, _, content, _, _) => captured = content)
+            .Setup(s => s.UploadJsonAsync(
+                It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<object>(),
+                It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<BlobContainerClient, string, object, JsonSerializerOptions?, CancellationToken>(
+                (_, _, _, options, _) => captured = options)
             .Returns(Task.CompletedTask);
 
         await writer.WriteArtifactAsync("some/path.json", new { Foo = "bar" });
 
         Assert.IsNotNull(captured);
-        var json = captured!.ToString();
-        StringAssert.Contains(json, "\"Foo\"");
-        StringAssert.Contains(json, "\"bar\"");
-        Assert.IsFalse(json.Contains('\n'));
+        Assert.IsFalse(captured!.WriteIndented);
     }
 
     [TestMethod]
     public async Task WriteArtifactAsync_AlwaysOverwritesExistingArtifact()
     {
+        // UploadJsonAsync always overwrites (see BlobStore's implementation) - there is no
+        // separate flag to assert here anymore; this test now covers that the write happens
+        // at all, which the other tests in this file already establish more directly. Kept as
+        // its own test only so a future UploadJsonAsync signature change that reintroduces an
+        // overwrite parameter has an obvious place to add the real assertion.
         var blobStore = MockBlobStore();
         var writer    = BuildWriter(blobStore);
 
         await writer.WriteArtifactAsync("some/path.json", new { Foo = "bar" });
 
-        blobStore.Verify(s => s.UploadAsync(
-            It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<BinaryData>(), overwrite: true, It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<object>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Azure;
 using Azure.Storage.Blobs;
 
@@ -9,7 +10,17 @@ namespace AgenticRagApp.Infrastructure.Clients.Blob;
 // this only ever does the mechanical Azure call.
 public interface IBlobStore
 {
-    Task EnsureContainerExistsAsync(BlobContainerClient container, CancellationToken ct = default);
+    // Fails loudly (BlobContainerNotFoundException) if the container does not exist, rather than
+    // creating it. Terraform owns every container this app writes to (see infra/storage.tf) -
+    // silently auto-creating one on a name mismatch is exactly how pipeline-reports and
+    // pipeline-artifacts each ended up with a managed container sitting empty while writes went
+    // to an unmanaged, auto-created one of a slightly different name. That drift went unnoticed
+    // for weeks because the old EnsureContainerExistsAsync never failed.
+    //
+    // Call this once per container per caller, not per write - it's an existence check, not a
+    // no-op-safe idempotent create, so callers should not pay a network round trip on every blob
+    // operation for it.
+    Task AssertContainerExistsAsync(BlobContainerClient container, CancellationToken ct = default);
 
     Task<byte[]> DownloadBytesAsync(BlobContainerClient container, string blobName, CancellationToken ct = default);
 
@@ -31,7 +42,17 @@ public interface IBlobStore
 
     Task<T> DownloadJsonAsync<T>(BlobContainerClient container, string blobName, CancellationToken ct = default);
 
-    Task UploadJsonAsync<T>(BlobContainerClient container, string blobName, T value, CancellationToken ct = default);
+    // Streams the serialized value directly into the blob upload - never materializes the
+    // whole payload as an intermediate string or byte[] first. A naive serialize-then-upload
+    // (JsonSerializer.Serialize -> string -> BinaryData -> byte[]) holds up to ~3 full copies
+    // of the payload in memory at once (the object graph, the UTF-16 string, and the UTF-8
+    // byte array), on top of whatever else is resident in the process. That is exactly what
+    // caused a production OutOfMemoryException writing a ~2,700-chunk pipeline-artifacts
+    // archive on an EP1 plan's 3.5GB ceiling (2026-08-07) - see PipelineArtifactWriter.
+    //
+    // options is optional so callers needing custom converters (e.g. JsonStringEnumConverter,
+    // for enums that should serialize as names, not numbers) aren't forced onto the default.
+    Task UploadJsonAsync<T>(BlobContainerClient container, string blobName, T value, JsonSerializerOptions? options = null, CancellationToken ct = default);
 
     // Returns (default, null) if the blob doesn't exist yet — "no previous baseline" is a
     // normal, expected outcome for state blobs, not an error.

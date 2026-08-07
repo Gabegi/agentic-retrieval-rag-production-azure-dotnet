@@ -101,7 +101,7 @@ public class PdfIndexingFunctionTests
         var deps  = new Deps();
         var docs  = new List<PdfExtractionDocument> { Doc("doc1.pdf") };
         var stats = ExtractStats();
-        deps.ExtractionService.Setup(s => s.ExtractAsync(false, It.IsAny<CancellationToken>())).ReturnsAsync((docs, stats));
+        deps.ExtractionService.Setup(s => s.ExtractAsync(false, It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync((docs, stats));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -110,16 +110,16 @@ public class PdfIndexingFunctionTests
 
         Assert.AreEqual(stats, result);
         deps.IndexService.Verify(s => s.EnsureIndexAsync(), Times.Once);
-        deps.BlobStore.Verify(b => b.EnsureContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
-        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<CancellationToken>()), Times.Once);
-        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.AssertContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<IReadOnlyList<string>>(), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
     public async Task ExtractActivity_ExtractionServiceThrows_WrapsInInvalidOperationException()
     {
         var deps = new Deps();
-        deps.ExtractionService.Setup(s => s.ExtractAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+        deps.ExtractionService.Setup(s => s.ExtractAsync(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("boom"));
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -134,7 +134,7 @@ public class PdfIndexingFunctionTests
     public async Task ExtractActivity_OperationCanceled_PropagatesWithoutWrapping()
     {
         var deps = new Deps();
-        deps.ExtractionService.Setup(s => s.ExtractAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+        deps.ExtractionService.Setup(s => s.ExtractAsync(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -163,7 +163,7 @@ public class PdfIndexingFunctionTests
 
         Assert.AreEqual(stats, result);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()), Times.Once);
-        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.Is<IReadOnlyList<DocumentChunk>>(l => l.Count == 1), It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.Is<IReadOnlyList<DocumentChunk>>(l => l.Count == 1), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -469,5 +469,6 @@ public class PdfIndexingFunctionTests
     private static EmbedUploadStageMetrics EmbedStats() => new(
         DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunksTruncated: 0, EmbeddingRetries: 0,
         VectorDimErrors: 0, VectorCacheHits: 0, TotalEmbeddingDurationMs: 10, IndexDocumentCountSnapshot: 10,
-        IndexStorageSizeBytesSnapshot: 100, RedFlags: []);
+        IndexStorageSizeBytesSnapshot: 100, RedFlags: [], ChunksEvicted: 0,
+        PreviousIndexDocumentCount: null, PreviousIndexStorageSizeBytes: null);
 }

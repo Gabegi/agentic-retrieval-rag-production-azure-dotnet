@@ -100,7 +100,13 @@ public class ChunkingService : IChunkingService
             }
         }
 
-        var stats = ChunkingStageMetrics.Compute(result, Name);
+        // Input document IDs, not the produced chunks' - a document that produced nothing has
+        // no chunk to derive its ID from, so deriving the input set from the output made
+        // DocsWithZeroChunks structurally always 0. SourceId is the chunking boundary and
+        // repeats across a document's pages, hence Distinct.
+        var sourceDocumentIds = docs.Select(d => d.SourceId).Distinct(StringComparer.Ordinal).ToList();
+
+        var stats = ChunkingStageMetrics.Compute(result, Name, sourceDocumentIds);
         EmitChunkMetrics(stats, result);
 
         _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks ({Strategy})",

@@ -63,8 +63,10 @@ public class RunReportWriter : IRunReportWriter
 
     private async Task WriteAsync<T>(string path, T data, CancellationToken ct)
     {
-        await _blobStore.EnsureContainerExistsAsync(_container, ct);
-        var json = JsonSerializer.Serialize(data, s_opts);
-        await _blobStore.UploadAsync(_container, path, BinaryData.FromString(json), overwrite: true, ct);
+        await _blobStore.AssertContainerExistsAsync(_container, ct);
+        // Streamed, same reasoning as PipelineArtifactWriter - these reports are usually small,
+        // but a run report carries an unbounded-length Issues/SpotCheckSample list, so "usually
+        // small" isn't a safe assumption to build the write path on.
+        await _blobStore.UploadJsonAsync(_container, path, data, s_opts, ct);
     }
 }

@@ -113,6 +113,45 @@ resource "azurerm_storage_container" "pipeline_reports" {
   container_access_type = "private"
 }
 
+# Written by IPipelineArtifactWriter (Observability/PipelineArtifactWriter.cs) -
+# the full-content per-stage archive (extraction/chunking/embedding.json), plus
+# SnapshotService's rolling corpus snapshots and VectorCache's cached vectors.
+#
+# THIS CONTAINER ALREADY EXISTS IN AZURE, auto-created at runtime by
+# Program.cs's GetBlobContainerClient("pipeline-artifacts") before it was ever
+# declared here. That is the point of declaring it: it currently exists only by
+# runtime accident, which is the same class of bug documented for
+# pipeline_reports below - a managed container sitting empty while writes went
+# to an unmanaged, auto-created one.
+#
+# A `data` source was considered and rejected: nothing in the configuration
+# references this container's ID (the function's blob RBAC is account-scoped),
+# so a data block would be dead config that documents the drift without fixing
+# it. A resource puts lifecycle under Terraform and is what a retention policy
+# would attach to later, as azurerm_storage_management_policy.func already does
+# for the function account.
+#
+# Because it already exists, a plain apply would fail on a name conflict - the
+# import block below adopts it into state on the next apply instead.
+#
+# Do NOT resolve a conflict by destroying and recreating: RestoreService rebuilds
+# a wiped index from the snapshots in this container, so destroying it discards
+# the only recovery path the pipeline has.
+resource "azurerm_storage_container" "pipeline_artifacts" {
+  name                  = "pipeline-artifacts"
+  storage_account_id    = azurerm_storage_account.data.id
+  container_access_type = "private"
+}
+
+# Resource-manager ID, not the https://<account>.blob.core.windows.net/<name>
+# data-plane URL - azurerm v4 moved azurerm_storage_container to ARM IDs along
+# with the storage_account_name -> storage_account_id change. The old URL form
+# fails to import against this provider version.
+import {
+  to = azurerm_storage_container.pipeline_artifacts
+  id = "${azurerm_storage_account.data.id}/blobServices/default/containers/pipeline-artifacts"
+}
+
 resource "azurerm_storage_container" "test_questions" {
   name                  = "test-questions"
   storage_account_id    = azurerm_storage_account.data.id

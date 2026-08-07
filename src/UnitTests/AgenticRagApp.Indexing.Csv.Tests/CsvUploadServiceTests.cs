@@ -40,7 +40,7 @@ public class UploadServiceTests
     {
         var mock = new Mock<IIndexStatsMonitor>();
         mock.Setup(m => m.RecordAndCheckDriftAsync(It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(driftRedFlags ?? []);
+            .ReturnsAsync(new IndexDriftCheck(driftRedFlags ?? [], PreviousDocumentCount: null, PreviousStorageSizeBytes: null));
         return mock;
     }
 

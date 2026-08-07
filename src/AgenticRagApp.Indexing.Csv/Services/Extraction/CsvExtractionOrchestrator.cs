@@ -93,8 +93,12 @@ public class CsvExtractionOrchestrator : ICsvExtractionOrchestrator
         // Write report in blob
         if (_reportWriter.IsEnabled)
         {
+            // instanceId is null: the CSV pipeline is dormant (its ProjectReference is commented
+            // out) and no orchestration passes one in, so this keeps today's timestamp-only
+            // naming. Routed through StageReportPath anyway so reviving CSV means supplying an
+            // ID here, not rediscovering the naming rule. See StageReportPath.
             await _reportWriter.WriteReportAsync(
-                $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-validation-report.json", report, ct);
+                StageReportPath.Build(ReportFolder, runAt, instanceId: null, "validation-report"), report, ct);
         }
 
         var (effectivePassed, errors, warnings, missingTitle, missingVersion, missingDepartment) =

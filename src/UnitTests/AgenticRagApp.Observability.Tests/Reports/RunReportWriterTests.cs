@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Azure;
 using Azure.Storage.Blobs;
 using Moq;
@@ -32,8 +33,11 @@ public class RunReportWriterTests
 
         await writer.WriteReportAsync("some/path.json", new { Foo = "bar" });
 
-        blobStore.Verify(s => s.UploadAsync(
-            It.IsAny<BlobContainerClient>(), "some/path.json", It.IsAny<BinaryData>(), true, It.IsAny<CancellationToken>()), Times.Once);
+        // Streamed via IBlobStore.UploadJsonAsync now, not a string/BinaryData built by the
+        // writer itself - see RunReportWriter.WriteAsync.
+        blobStore.Verify(s => s.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), "some/path.json", It.IsAny<object>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -56,8 +60,9 @@ public class RunReportWriterTests
 
         await writer.SaveLastIndexStatsAsync("pdf", 100, 2048);
 
-        blobStore.Verify(s => s.UploadAsync(
-            It.IsAny<BlobContainerClient>(), "indexing/_last-stats-pdf.json", It.IsAny<BinaryData>(), true, It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), "indexing/_last-stats-pdf.json", It.IsAny<object>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -69,9 +74,11 @@ public class RunReportWriterTests
         await writer.SaveLastIndexStatsAsync("pdf", 100, 2048);
         await writer.SaveLastIndexStatsAsync("csv", 50, 1024);
 
-        blobStore.Verify(s => s.UploadAsync(
-            It.IsAny<BlobContainerClient>(), "indexing/_last-stats-pdf.json", It.IsAny<BinaryData>(), true, It.IsAny<CancellationToken>()), Times.Once);
-        blobStore.Verify(s => s.UploadAsync(
-            It.IsAny<BlobContainerClient>(), "indexing/_last-stats-csv.json", It.IsAny<BinaryData>(), true, It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), "indexing/_last-stats-pdf.json", It.IsAny<object>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), "indexing/_last-stats-csv.json", It.IsAny<object>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

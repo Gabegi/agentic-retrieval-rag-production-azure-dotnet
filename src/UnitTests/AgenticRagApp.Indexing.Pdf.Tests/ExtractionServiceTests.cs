@@ -85,8 +85,8 @@ public class ExtractionServiceTests
     {
         var mock = new Mock<IExtractionOrchestrator>();
         mock.SetupGet(m => m.Source).Returns(source);
-        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlyDictionary<string, PdfBlobInfo>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken _) => BuildOutput(sourceIdsToProcess.Keys.Select(Doc)));
+        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlyDictionary<string, PdfBlobInfo>>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, string? _, CancellationToken __) => BuildOutput(sourceIdsToProcess.Keys.Select(Doc)));
         return mock;
     }
 
@@ -96,7 +96,7 @@ public class ExtractionServiceTests
     {
         var mock = new Mock<IExtractionOrchestrator>();
         mock.SetupGet(m => m.Source).Returns(source);
-        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlyDictionary<string, PdfBlobInfo>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(m => m.ExtractDocumentsAsync(It.IsAny<IReadOnlyDictionary<string, PdfBlobInfo>>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(output);
         return mock;
     }

@@ -6,6 +6,7 @@ using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using AgenticRagApp.Functions.ReportEmail;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Infrastructure.Clients.Blob;
@@ -296,6 +297,37 @@ public class PdfIndexingFunction
                 Embedding  = embedResults,
             });
 
+        // Same reasoning as above - ReportEmailOptions.Enabled is checked inside the activity,
+        // not here. Called on success and failure alike, same as the report write it follows:
+        // a run that died in extraction still gets an email saying so.
+        //
+        // A retry policy, not the unbounded default: this must not hold the orchestration open
+        // indefinitely over a mail problem, and the activity itself already logs+returns rather
+        // than throwing on most failure paths - retries here catch only what does throw
+        // (a transient exception before that point), few attempts, short backoff.
+        //
+        // Wrapped in its own try/catch, deliberately separate from the try/catch above: this
+        // call sits after `success`/`error` are already decided, and nothing about a failed
+        // email may change that outcome or overwrite `error`. Without this catch, an activity
+        // failure here (retries exhausted) propagates as the ORCHESTRATION's own unhandled
+        // exception, which does two things wrong at once - it can turn an otherwise-successful
+        // indexing run into a "Failed" orchestration over a mail problem, and it overwrites
+        // Durable's own `output` field with the email failure text, hiding whatever `error`
+        // this run actually had. Confirmed happening in production 2026-08-07: a genuine
+        // ChunkActivity OutOfMemoryException was masked by exactly this for hours before being
+        // found via full instance history rather than the top-level status.
+        try
+        {
+            await context.CallActivityAsync("SendReportEmailActivity",
+                new SendReportEmailRequest(RunReportKind.Index, context.InstanceId, startedAt),
+                TaskOptions.FromRetryPolicy(new RetryPolicy(
+                    maxNumberOfAttempts: 3, firstRetryInterval: TimeSpan.FromSeconds(10))));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "SendReportEmailActivity failed for {InstanceId} - the indexing run's own outcome is unaffected", context.InstanceId);
+        }
+
         if (!success)
             throw new InvalidOperationException(error ?? "Indexing pipeline failed");
     }
@@ -321,8 +353,10 @@ public class PdfIndexingFunction
         try
         {
             await _indexService.EnsureIndexAsync();
+            // req.InstanceId threaded through so this run's validation/file-facts/diff/failure
+            // reports are named by instance, not just by wall clock - see StageReportPath.
             var (docs, stats) = await _extractionService.ExtractAsync(
-                req.ForceReindex, context.CancellationToken);
+                req.ForceReindex, req.InstanceId, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, docs, context.CancellationToken);
             await WriteBlobAsync(req.StaleIdsBlob, stats.StaleDocumentIds, context.CancellationToken);
 
@@ -438,7 +472,10 @@ public class PdfIndexingFunction
                 TotalEmbeddingDurationMs:      sw.ElapsedMilliseconds,
                 IndexDocumentCountSnapshot:    uploadResult.IndexDocumentCountSnapshot,
                 IndexStorageSizeBytesSnapshot: uploadResult.IndexStorageSizeBytesSnapshot,
-                RedFlags:                      uploadResult.RedFlags);
+                RedFlags:                      uploadResult.RedFlags,
+                ChunksEvicted:                 evictedCount,
+                PreviousIndexDocumentCount:    uploadResult.PreviousIndexDocumentCount,
+                PreviousIndexStorageSizeBytes: uploadResult.PreviousIndexStorageSizeBytes);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -454,8 +491,12 @@ public class PdfIndexingFunction
 
         if (!_reportWriter.IsEnabled) return;
 
+        // Path built by RunReportPath, which also owns the parser the email trigger uses to
+        // recognise this blob - writer and reader must agree exactly, so they share one file.
+        // Historical reports stay at the old indexing/{date}/ prefix; nothing migrates them.
         await _reportWriter.WriteReportAsync(
-            $"indexing/{report.Run.StartedAt:yyyy/MM/dd}/{report.Run.InstanceId}.json", report, context.CancellationToken);
+            RunReportPath.Build(RunReportKind.Index, report.Run.StartedAt, report.Run.InstanceId),
+            report, context.CancellationToken);
         _logger.LogInformation(
             "Index run report saved — instance={InstanceId}, docs={Docs}, chunks={Chunks}, success={Success}",
             report.InstanceId, report.DocsToProcess, report.ChunksProduced, report.Success);
@@ -536,6 +577,24 @@ public class PdfIndexingFunction
         await context.CallActivityAsync("SaveRestoreReportActivity",
             BuildRestoreReport(context, startedAt, result, success, error));
 
+        // Same activity as the index run's email - restore is manual/rare, so this is the
+        // single run most worth an email about (companion doc §6 risk 5).
+        //
+        // Own try/catch, same reasoning as IndexingOrchestrator's call: an email failure must
+        // never become the orchestration's own unhandled exception and overwrite `error`/mask
+        // the real restore failure. See that call site for the production incident this fixes.
+        try
+        {
+            await context.CallActivityAsync("SendReportEmailActivity",
+                new SendReportEmailRequest(RunReportKind.Restore, context.InstanceId, startedAt),
+                TaskOptions.FromRetryPolicy(new RetryPolicy(
+                    maxNumberOfAttempts: 3, firstRetryInterval: TimeSpan.FromSeconds(10))));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "SendReportEmailActivity failed for {InstanceId} - the restore run's own outcome is unaffected", context.InstanceId);
+        }
+
         if (!success)
             throw new InvalidOperationException(error ?? "Index restore failed");
     }
@@ -583,8 +642,13 @@ public class PdfIndexingFunction
     {
         if (!_reportWriter.IsEnabled) return;
 
+        // Under runs/ for the same reason as the index run report above, so one Event Grid
+        // subject filter covers both. The restore/ segment keeps the two distinguishable -
+        // the email handler branches on it to pick the renderer, since a restore has no
+        // extraction/chunking/embedding stages to report.
         await _reportWriter.WriteReportAsync(
-            $"restore/{report.StartedAt:yyyy/MM/dd}/{report.InstanceId}.json", report, context.CancellationToken);
+            RunReportPath.Build(RunReportKind.Restore, report.StartedAt, report.InstanceId),
+            report, context.CancellationToken);
         _logger.LogInformation(
             "Index restore report saved — instance={InstanceId}, restored={Restored}, success={Success}",
             report.InstanceId, report.ChunksRestored, report.Success);
@@ -625,8 +689,8 @@ public class PdfIndexingFunction
 
     private async Task WriteBlobAsync<T>(string blobPath, T data, CancellationToken ct)
     {
-        await _blobStore.EnsureContainerExistsAsync(_pipelineContainer, ct);
-        await _blobStore.UploadJsonAsync(_pipelineContainer, blobPath, data, ct);
+        await _blobStore.AssertContainerExistsAsync(_pipelineContainer, ct);
+        await _blobStore.UploadJsonAsync(_pipelineContainer, blobPath, data, ct: ct);
     }
 
     private Task<T> ReadBlobAsync<T>(string blobPath, CancellationToken ct) =>

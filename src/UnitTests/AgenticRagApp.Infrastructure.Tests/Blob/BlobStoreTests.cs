@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
@@ -21,6 +22,39 @@ public class BlobStoreTests
         container.Setup(c => c.GetBlobClient(BlobName)).Returns(blob.Object);
         var store = new BlobStore(NullLogger<BlobStore>.Instance);
         return (store, container, blob);
+    }
+
+    // AssertContainerExistsAsync replaced the old EnsureContainerExistsAsync (CreateIfNotExistsAsync)
+    // deliberately: Terraform owns every container this app writes to, and silently auto-creating
+    // one on a name mismatch is exactly how pipeline-reports and pipeline-artifacts each ended up
+    // with a managed container sitting empty while writes went to an unmanaged, differently-named
+    // one. See ContainerNotDeclaredException.
+    [TestMethod]
+    public async Task AssertContainerExistsAsync_ContainerExists_DoesNotThrow()
+    {
+        var container = new Mock<BlobContainerClient>();
+        container.Setup(c => c.ExistsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Response.FromValue(true, Mock.Of<Response>()));
+        var store = new BlobStore(NullLogger<BlobStore>.Instance);
+
+        await store.AssertContainerExistsAsync(container.Object);
+    }
+
+    [TestMethod]
+    public async Task AssertContainerExistsAsync_ContainerMissing_ThrowsNamingTheContainer()
+    {
+        var container = new Mock<BlobContainerClient>();
+        container.Setup(c => c.Name).Returns("pipeline-artifacts");
+        container.Setup(c => c.ExistsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Response.FromValue(false, Mock.Of<Response>()));
+        var store = new BlobStore(NullLogger<BlobStore>.Instance);
+
+        var ex = await Assert.ThrowsExactlyAsync<ContainerNotDeclaredException>(
+            () => store.AssertContainerExistsAsync(container.Object));
+
+        Assert.AreEqual("pipeline-artifacts", ex.ContainerName);
+        StringAssert.Contains(ex.Message, "pipeline-artifacts");
+        StringAssert.Contains(ex.Message, "storage.tf");
     }
 
     [TestMethod]
@@ -65,6 +99,112 @@ public class BlobStoreTests
 
         Assert.AreEqual(100, value!.CleanedRecords);
         Assert.AreEqual(etag, returnedEtag);
+    }
+
+    // UploadJsonAsync streams via System.IO.Pipelines rather than building an intermediate
+    // string/byte[] - see IBlobStore.UploadJsonAsync's own comment for the production
+    // OutOfMemoryException this replaced. These tests exercise that streaming path directly
+    // rather than mocking it away, since the whole point is what actually reaches the wire.
+    [TestMethod]
+    public async Task UploadJsonAsync_StreamedContent_RoundTripsCorrectly()
+    {
+        var (store, container, blob) = BuildStore();
+        byte[]? captured = null;
+        blob.Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Stream s, bool _, CancellationToken ct) =>
+            {
+                using var buffer = new MemoryStream();
+                await s.CopyToAsync(buffer, ct);
+                captured = buffer.ToArray();
+                return (Response<BlobContentInfo>)null!;
+            });
+
+        await store.UploadJsonAsync(container.Object, BlobName, new RunState(42));
+
+        Assert.IsNotNull(captured);
+        var roundTripped = JsonSerializer.Deserialize<RunState>(captured);
+        Assert.AreEqual(42, roundTripped!.CleanedRecords);
+    }
+
+    [TestMethod]
+    public async Task UploadJsonAsync_WithOptions_UsesTheGivenSerializerOptions()
+    {
+        var (store, container, blob) = BuildStore();
+        byte[]? captured = null;
+        blob.Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Stream s, bool _, CancellationToken ct) =>
+            {
+                using var buffer = new MemoryStream();
+                await s.CopyToAsync(buffer, ct);
+                captured = buffer.ToArray();
+                return (Response<BlobContentInfo>)null!;
+            });
+
+        var opts = new JsonSerializerOptions { WriteIndented = true };
+
+        await store.UploadJsonAsync(container.Object, BlobName, new RunState(1), opts);
+
+        Assert.IsNotNull(captured);
+        // WriteIndented=true means the serialized bytes contain a newline - proof the options
+        // parameter actually reached the serializer, not just accepted and ignored.
+        StringAssert.Contains(System.Text.Encoding.UTF8.GetString(captured), "\n");
+    }
+
+    // A large payload is exactly what this streaming rewrite exists for - assert it round-trips
+    // correctly rather than just trusting the plumbing on a 20-byte record. Not a memory-ceiling
+    // test (that needs a real process, not a unit test), but it exercises many pipe segments
+    // rather than one, which a tiny payload never would.
+    [TestMethod]
+    public async Task UploadJsonAsync_LargePayload_RoundTripsCorrectly()
+    {
+        var (store, container, blob) = BuildStore();
+        byte[]? captured = null;
+        blob.Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Stream s, bool _, CancellationToken ct) =>
+            {
+                using var buffer = new MemoryStream();
+                await s.CopyToAsync(buffer, ct);
+                captured = buffer.ToArray();
+                return (Response<BlobContentInfo>)null!;
+            });
+
+        var large = Enumerable.Range(0, 50_000).Select(i => new RunState(i)).ToList();
+
+        await store.UploadJsonAsync(container.Object, BlobName, large);
+
+        Assert.IsNotNull(captured);
+        var roundTripped = JsonSerializer.Deserialize<List<RunState>>(captured);
+        Assert.AreEqual(50_000, roundTripped!.Count);
+        Assert.AreEqual(49_999, roundTripped[^1].CleanedRecords);
+    }
+
+    [TestMethod]
+    public async Task UploadJsonAsync_SerializationFails_FaultsRatherThanHangs()
+    {
+        var (store, container, blob) = BuildStore();
+        blob.Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Stream s, bool _, CancellationToken ct) =>
+            {
+                // Drains the reader side, same as the real SDK would - proves the writer's
+                // failure propagates through the pipe rather than the upload task waiting
+                // forever on a writer that already gave up.
+                using var buffer = new MemoryStream();
+                await s.CopyToAsync(buffer, ct);
+                return (Response<BlobContentInfo>)null!;
+            });
+
+        // A type System.Text.Json cannot serialize (a raw, unsupported reference cycle-free but
+        // deliberately broken converter target isn't easy to construct inline, so use a
+        // pre-cancelled token instead - simplest reliable way to force SerializeAsync to throw
+        // partway through without depending on serializer internals).
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // TaskCanceledException, not the base OperationCanceledException - that's what a
+        // pre-cancelled token actually produces here, and it's still a genuine fault rather
+        // than a hang, which is what this test exists to prove.
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(
+            () => store.UploadJsonAsync(container.Object, BlobName, new RunState(1), ct: cts.Token));
     }
 
     [TestMethod]

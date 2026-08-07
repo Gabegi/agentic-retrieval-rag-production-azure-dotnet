@@ -31,8 +31,10 @@ public class PipelineArtifactWriter : IPipelineArtifactWriter
 
     public async Task WriteArtifactAsync<T>(string path, T artifact, CancellationToken ct = default)
     {
-        await _blobStore.EnsureContainerExistsAsync(_container, ct);
-        var json = JsonSerializer.Serialize(artifact, s_opts);
-        await _blobStore.UploadAsync(_container, path, BinaryData.FromString(json), overwrite: true, ct);
+        await _blobStore.AssertContainerExistsAsync(_container, ct);
+        // Streamed - never buffers the whole (potentially whole-corpus-sized) payload as an
+        // intermediate string or byte[]. This is what OOM'd in production on 2026-08-07; see
+        // IBlobStore.UploadJsonAsync.
+        await _blobStore.UploadJsonAsync(_container, path, artifact, s_opts, ct);
     }
 }

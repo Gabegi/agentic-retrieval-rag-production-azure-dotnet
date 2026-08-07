@@ -78,7 +78,9 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
     }
 
     public async Task<PdfExtractionOutput> ExtractDocumentsAsync(
-        IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess, CancellationToken ct = default)
+        IReadOnlyDictionary<string, PdfBlobInfo> sourceIdsToProcess,
+        string? instanceId = null,
+        CancellationToken ct = default)
     {
         var runAt = DateTimeOffset.UtcNow;
 
@@ -167,7 +169,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 {
                     // must always run - fileResults is never null here: it's assigned in
                     // step 1, before validation (step 4) can be assigned at all.
-                    await WriteReportsAsync(runAt, validation, fileResults!, CancellationToken.None);
+                    await WriteReportsAsync(runAt, instanceId, validation, fileResults!, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -182,7 +184,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 // WriteReportsAsync above.
                 try
                 {
-                    await WriteFailureReportAsync(runAt, failure, CancellationToken.None);
+                    await WriteFailureReportAsync(runAt, instanceId, failure, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -321,17 +323,20 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             new Dictionary<string, ZenyaMetadata>(zenya, StringComparer.OrdinalIgnoreCase));
     }
 
-    // Dev-only (see IRunReportWriter.IsEnabled): the validation report (same shape
-    // CsvExtractionOrchestrator writes) plus a second, PDF-only report of what each
-    // extraction step actually produced per file.
+    // The validation report (same shape CsvExtractionOrchestrator writes) plus a second,
+    // PDF-only report of what each extraction step actually produced per file.
+    //
+    // Written in every environment - IRunReportWriter.IsEnabled is unconditionally true now,
+    // on the principle that the one environment where you can't attach a debugger shouldn't
+    // also be the one with no reports. The guard is kept as the single place that decides.
     private async Task WriteReportsAsync(
-        DateTimeOffset runAt, PdfQualityGateResult report,
+        DateTimeOffset runAt, string? instanceId, PdfQualityGateResult report,
         IReadOnlyList<PdfExtractionResult> fileResults, CancellationToken ct)
     {
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-validation-report.json", report, ct);
+            StageReportPath.Build(ReportFolder, runAt, instanceId, "validation-report"), report, ct);
 
         // PdfPig facts already read off each file's PdfDocument before it was disposed
         // (FileSizeBytes/PdfSpecVersion from PdfDocumentValidator, NativeMetadata from
@@ -351,21 +356,21 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         }).ToList();
 
         await _reportWriter.WriteReportAsync(
-            $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-file-facts.json", fileFacts, ct);
+            StageReportPath.Build(ReportFolder, runAt, instanceId, "file-facts"), fileFacts, ct);
     }
 
     private sealed record PdfExtractionFailureReport(
         DateTimeOffset RunAt, string ExceptionType, string Message, string? StackTrace);
 
-    // Dev-only (see IRunReportWriter.IsEnabled), same as WriteReportsAsync above - fallback
-    // for a run that failed before a PdfQualityGateResult ever existed (blob listing or
-    // cleaning threw), so there's still something written for that run instead of silence.
-    private async Task WriteFailureReportAsync(DateTimeOffset runAt, Exception failure, CancellationToken ct)
+    // Same write-everywhere note as WriteReportsAsync above - fallback for a run that failed
+    // before a PdfQualityGateResult ever existed (blob listing or cleaning threw), so there's
+    // still something written for that run instead of silence.
+    private async Task WriteFailureReportAsync(DateTimeOffset runAt, string? instanceId, Exception failure, CancellationToken ct)
     {
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-failure-report.json",
+            StageReportPath.Build(ReportFolder, runAt, instanceId, "failure-report"),
             new PdfExtractionFailureReport(runAt, failure.GetType().FullName ?? failure.GetType().Name, failure.Message, failure.StackTrace),
             ct);
     }

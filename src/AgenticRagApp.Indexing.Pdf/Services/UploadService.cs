@@ -65,12 +65,12 @@ public class UploadService : IUploadService
         // Stats snapshot taken after upload. Azure Search stats lag live writes by minutes —
         // use for corpus drift checks only, not for "did this run add N chunks" (use succeeded/failed).
         long? indexDocCount = null, indexStorageBytes = null;
-        var redFlags = new List<string>();
+        var drift = IndexDriftCheck.None;
         try
         {
             var (docCount, storageBytes) = await _indexDocumentService.GetStatisticsAsync(ct);
             (indexDocCount, indexStorageBytes) = (docCount, storageBytes);
-            redFlags.AddRange(await _indexStatsMonitor.RecordAndCheckDriftAsync(Source, docCount, storageBytes, ct));
+            drift = await _indexStatsMonitor.RecordAndCheckDriftAsync(Source, docCount, storageBytes, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -84,6 +84,8 @@ public class UploadService : IUploadService
             ChunksRemoved:                 chunksRemoved,
             IndexDocumentCountSnapshot:    indexDocCount,
             IndexStorageSizeBytesSnapshot: indexStorageBytes,
-            RedFlags:                      redFlags);
+            RedFlags:                      drift.RedFlags,
+            PreviousIndexDocumentCount:    drift.PreviousDocumentCount,
+            PreviousIndexStorageSizeBytes: drift.PreviousStorageSizeBytes);
     }
 }

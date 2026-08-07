@@ -17,9 +17,17 @@
 # properties.allowProjectManagement = true on the account. Without it ARM
 # rejects project creation. That flag is owned by the landing-zone team, not
 # this config.
+#
+# Development-only, via count - same gate and same reasoning as dev_access.tf
+# and dev_allowed_ips. The sandbox exists so people can experiment against
+# models without touching the app's own project or deployments; there is no
+# version of that which belongs on the production account. The deployment and
+# role grants that go with it are in ai_sandbox.tf and gate identically.
 # ---------------------------------------------------------------------------
 
 resource "azapi_resource" "sandbox" {
+  count = var.environment == "development" ? 1 : 0
+
   type = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
 
   # Deliberately follows the naming of the project the landing-zone team
@@ -30,7 +38,12 @@ resource "azapi_resource" "sandbox" {
   name      = "cor-cap-sandbox-${local.env}"
   parent_id = data.azurerm_cognitive_account.foundry.id
   location  = var.location
-  tags      = local.common_tags
+
+  # purpose=sandbox marks this and its deployment (ai_sandbox.tf) as the one
+  # scope on this account that untrusted experimentation runs in - so a future
+  # reader can tell at a glance which resources are deliberately outside the
+  # app's data boundary.
+  tags = merge(local.common_tags, { purpose = "sandbox" })
 
   # The project gets its own principal, separate from the account's. Note that
   # Cognitive Services RBAC does not inherit upward from a project to its

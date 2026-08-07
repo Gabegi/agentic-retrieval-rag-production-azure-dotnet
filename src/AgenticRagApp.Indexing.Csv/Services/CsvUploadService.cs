@@ -64,7 +64,11 @@ public class CsvUploadService : ICsvUploadService
         {
             var (docCount, storageBytes) = await _indexDocumentService.GetStatisticsAsync(ct);
             (indexDocCount, indexStorageBytes) = (docCount, storageBytes);
-            redFlags.AddRange(await _indexStatsMonitor.RecordAndCheckDriftAsync(Source, docCount, storageBytes, ct));
+            // Only the red flags are consumed here: CsvUploadResult has no Previous* fields,
+            // since the CSV pipeline is dormant (its ProjectReference is commented out) and
+            // nothing renders a CSV run report today. Add them alongside the PDF ones if it
+            // is ever revived - IndexDriftCheck already carries the values.
+            redFlags.AddRange((await _indexStatsMonitor.RecordAndCheckDriftAsync(Source, docCount, storageBytes, ct)).RedFlags);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -8,18 +8,33 @@ folder to find a given run without already knowing its instance ID.
 
 | Path | Written by | Content |
 |---|---|---|
-| `indexing/{yyyy}/{MM}/{dd}/{instanceId}.json` | PDF/CSV `IndexingOrchestrator` (end of run) | Full run report (`PdfIndexRunReport`/`CsvIndexRunReport`) — docs processed/skipped/new/updated, validation errors/warnings, chunk size distribution, embedding + upload stats, index size snapshot |
-| `restore/{yyyy}/{MM}/{dd}/{instanceId}.json` | `RestoreOrchestrator` | `PdfRestoreRunReport` — index-wiped-and-rebuilt-from-snapshot report: which snapshot generation was used, chunks restored, chunks missing a cached vector |
+| `runs/{yyyy}/{MM}/{dd}/{instanceId}.json` | `IndexingOrchestrator` → `SaveIndexReportActivity` (end of run) | Full run report (`PdfIndexRunReport`) — docs processed/skipped/new/updated, validation errors/warnings, chunk size distribution + samples, embedding + upload stats, index size snapshot |
+| `runs/restore/{yyyy}/{MM}/{dd}/{instanceId}.json` | `RestoreOrchestrator` → `SaveRestoreReportActivity` | `PdfRestoreRunReport` — index-wiped-and-rebuilt-from-snapshot report: which snapshot generation was used, chunks restored, chunks missing a cached vector |
 | `queries/{yyyy}/{MM}/{dd}/{HH-mm-ss}.json` | `QueryingFunction` (every `/api/query` call) | `QueryRunReport` — question, answer, retrieved context, model/latency/token telemetry. One file per query |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-validation-report.json` | `PdfExtractionPipeline` | PDF extraction validation report (errors/warnings, spot-check sample) |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-file-facts.json` | `PdfExtractionPipeline` | Per-file PDF facts — size, spec version, native metadata (Producer/Creator/Subject/Keywords), estimated cost |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-diagnostics.json` | `PdfExtractionPipeline` | Per-file extraction diagnostics (only written if non-empty; currently always empty — populated by the removed PdfPig backend, kept as a slot for a future backend) |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-failure-report.json` | `PdfExtractionPipeline` | Fallback report for a run that failed *before* a validation report existed (e.g. blob listing/cleaning threw) |
-| `indexing/csv-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-validation-report.json` | `CsvExtractionOrchestrator` | CSV extraction validation report |
-| `indexing/extraction-diff/{yyyy}/{MM}/{dd}/{HHmmssfff}-diff.json` | `ExtractionService` (PDF & CSV) | New/updated/deleted document diff for the run |
-| `indexing/_last-stats-{source}.json` | `RunReportWriter.SaveLastIndexStatsAsync` | Last known index document count/storage size, keyed by source (`pdf`/`csv`) — single rolling baseline for drift detection, **not** per-run history |
+| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-validation-report.json` | `PdfExtractionPipeline` | PDF extraction validation report (errors/warnings, spot-check sample, per-transform cleaning counts) |
+| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-file-facts.json` | `PdfExtractionPipeline` | Per-file PDF facts — size, spec version, native metadata (Producer/Creator/Subject/Keywords), estimated cost |
+| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-failure-report.json` | `PdfExtractionPipeline` | Fallback report for a run that failed *before* a validation report existed (e.g. blob listing/cleaning threw) |
+| `indexing/csv-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-validation-report.json` | `CsvExtractionOrchestrator` | CSV extraction validation report. No `{instanceId}` — CSV is dormant and no orchestration supplies one |
+| `indexing/extraction-diff/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-diff.json` | `ExtractionService` (PDF; CSV writes the same folder without an instance ID) | New/updated/deleted document diff for the run, including the document IDs |
+| `indexing/_last-stats-{source}.json` | `RunReportWriter.SaveLastIndexStatsAsync` | Last known index document count/storage size, keyed by source (`pdf`/`csv`) — single rolling baseline for drift detection, **not** per-run history. Overwritten *during* the run by `IndexStatsMonitor`; the value it replaced is carried forward on `EmbedUploadStageMetrics.PreviousIndexDocumentCount` |
 
-All of the above (except the drift baseline) are written on every run in every environment — see `IRunReportWriter.IsEnabled`.
+All of the above (except the drift baseline) are written on every run in **every** environment —
+`IRunReportWriter.IsEnabled` is unconditionally `true`.
+
+### Two naming rules worth knowing
+
+**The run report lives under `runs/`, not `indexing/`.** Blob-trigger binding expressions and
+Event Grid subject filters are both greedy across `/`, so a pattern like
+`indexing/{y}/{m}/{d}/{instance}.json` also matches
+`indexing/pdf-extraction/2026/08/06/103000123-file-facts.json`. Nothing else writes under
+`runs/`, which makes `subjectBeginsWith` an exact gate. Reports written before this change stay
+at the old `indexing/{date}/` prefix — nothing migrates them.
+
+**Stage reports carry the instance ID *in addition to* the timestamp** (`StageReportPath`).
+Timestamp-only naming could not be attributed to a run: overlapping runs interleave in one
+folder, and a run starting at 23:58 writes its extraction reports into the next day's folder.
+The date folder and `HHmmssfff` prefix are kept so browsing and chronological sorting work
+exactly as before.
 
 ## Container: `pipeline-artifacts`
 

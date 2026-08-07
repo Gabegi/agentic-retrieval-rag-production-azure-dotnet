@@ -124,6 +124,39 @@ resource "azurerm_windows_function_app" "indexer" {
     "SEARCH_INDEX_NAME"       = var.search_index_name
     "KNOWLEDGE_SOURCE_NAME"   = var.knowledge_source_name
     "KNOWLEDGE_BASE_NAME"     = var.knowledge_base_name
+
+    # ---------------------------------------------------------------------
+    # Pipeline run report email (SendReportEmailActivity)
+    # ---------------------------------------------------------------------
+    # No separate storage connection needed: this is a Durable activity called
+    # directly by IndexingOrchestrator/RestoreOrchestrator, not a blob-triggered
+    # function, so it reads through the same BlobServiceClient (STORAGE_ACCOUNT_URL
+    # above) every other in-process client already uses. An earlier version of
+    # this feature was Event-Grid/blob-triggered and needed its own cross-account
+    # connection setting plus a reconciliation timer to detect it silently not
+    # firing - both are gone now that the orchestrator calls the activity
+    # directly. See docs/2608/260807/pipeline-run-email-report.md.
+
+    "ReportEmail__Enabled"    = tostring(var.report_email_enabled)
+    "ReportEmail__Recipients" = var.report_email_recipients
+    # VERIFY ON FIRST PLAN. An Azure-managed domain's actual sender host is a
+    # GUID subdomain Azure assigns at create time, so it can only come from an
+    # exported attribute - but `mail_from_sender_domain` has NOT been confirmed
+    # against the pinned provider (~> 4.0); terraform validate can't run here
+    # (providers uninitialised, and providers.tf requires >= 1.15.7 against a
+    # 1.14.8 CLI). If plan rejects this attribute, try `from_sender_domain`;
+    # if neither exists, set var.report_email_sender_address explicitly after
+    # the first apply and reference that instead. This is a loud plan-time
+    # failure, not a silent runtime one.
+    "ReportEmail__SenderAddress" = var.report_email_sender_address != "" ? var.report_email_sender_address : "DoNotReply@${azurerm_email_communication_service_domain.managed.mail_from_sender_domain}"
+    "ReportEmail__AcsEndpoint"   = "https://${azurerm_communication_service.main.name}.communication.azure.com"
+
+    # Report-only period: the metrics whose thresholds have no defensible
+    # source yet (chunk coherence, band percentages, duplicate rate, cost
+    # multiplier) render their observed value but raise no flag until this is
+    # switched off. Shipping guessed thresholds teaches people to ignore the
+    # flags on run one - see pipeline-email-report-structure.md, decision 2.
+    "ReportEmail__CalibrationMode" = tostring(var.report_email_calibration_mode)
   }
 
   tags = local.common_tags

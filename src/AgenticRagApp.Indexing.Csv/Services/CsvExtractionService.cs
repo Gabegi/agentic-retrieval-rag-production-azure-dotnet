@@ -134,8 +134,9 @@ public class CsvExtractionService : ICsvExtractionService
             ProcessedSourceIds = diff.ToProcess.Select(d => d.SourceId).Distinct().ToList(),
         };
 
+        // instanceId null - see CsvExtractionOrchestrator's note; CSV is dormant.
         await _reportWriter.WriteReportAsync(
-            $"{ReportFolder}/{runAt:yyyy/MM/dd}/{runAt:HHmmssfff}-diff.json", report, ct);
+            StageReportPath.Build(ReportFolder, runAt, instanceId: null, "diff"), report, ct);
     }
 
     // Assemble ExtractionStageMetrics to return to the activity

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgenticRagApp.Common.Models;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -107,7 +108,8 @@ public class SnapshotServiceTests
         await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
 
         blobStore.Verify(s => s.UploadJsonAsync(
-            It.IsAny<BlobContainerClient>(), "snapshots/pdf/2024/03/15/run-1/full-index.json", It.IsAny<List<SnapshotChunk>>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<BlobContainerClient>(), "snapshots/pdf/2024/03/15/run-1/full-index.json", It.IsAny<List<SnapshotChunk>>(),
+            It.IsAny<JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -119,7 +121,7 @@ public class SnapshotServiceTests
 
         await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
 
-        blobStore.Verify(s => s.EnsureContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
+        blobStore.Verify(s => s.AssertContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]

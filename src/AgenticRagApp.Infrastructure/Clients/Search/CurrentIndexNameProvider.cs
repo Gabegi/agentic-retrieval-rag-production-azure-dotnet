@@ -39,8 +39,8 @@ public class CurrentIndexNameProvider : ICurrentIndexNameProvider
 
     public async Task SetCurrentIndexNameAsync(string indexName, CancellationToken ct = default)
     {
-        await _blobStore.EnsureContainerExistsAsync(_container, ct);
-        await _blobStore.UploadJsonAsync(_container, PointerPath, new IndexNamePointer(indexName), ct);
+        await _blobStore.AssertContainerExistsAsync(_container, ct);
+        await _blobStore.UploadJsonAsync(_container, PointerPath, new IndexNamePointer(indexName), ct: ct);
     }
 
     private record IndexNamePointer(string IndexName);

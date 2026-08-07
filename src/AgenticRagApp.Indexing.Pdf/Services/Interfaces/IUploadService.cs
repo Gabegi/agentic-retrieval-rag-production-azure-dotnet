@@ -19,5 +19,10 @@ public record UploadResult(
     int   ChunksRemoved,
     long? IndexDocumentCountSnapshot,
     long? IndexStorageSizeBytesSnapshot,
-    IReadOnlyList<string> RedFlags
+    IReadOnlyList<string> RedFlags,
+    // The drift baseline this run was compared against - i.e. the previous run's index stats,
+    // captured before IndexStatsMonitor overwrote them. Null when no baseline existed, or when
+    // the stats snapshot itself failed. See IndexDriftCheck.
+    long? PreviousIndexDocumentCount    = null,
+    long? PreviousIndexStorageSizeBytes = null
 );
