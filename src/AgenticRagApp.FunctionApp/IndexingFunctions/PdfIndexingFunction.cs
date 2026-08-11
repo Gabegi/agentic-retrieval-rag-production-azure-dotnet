@@ -209,31 +209,29 @@ public class PdfIndexingFunction
     // Manual-upload path (Zenya source connection isn't live yet) - the timer provides the
     // cadence, ExtractAsync's own new/updated diff is the "check for changes" step, so no
     // separate polling logic is needed here. Fixed instance ID makes this a singleton: a run
-    // longer than the timer interval just causes the next tick(s) to skip rather than overlap,
-    // which is what keeps SnapshotService's read-merge-write safe - runs never race each other.
+    // longer than a day just causes the next tick to skip rather than overlap, which is what
+    // keeps SnapshotService's read-merge-write safe - runs never race each other.
     //
-    // Commented out until Document Intelligence's private link is in place - without it every
-    // tick fails immediately (PdfExtractionPipeline can't resolve IPdfExtractor), spamming
-    // failed orchestration instances every 15 minutes for no benefit. Uncomment once DI is
-    // reachable.
-    // [Function("ScheduledIndexing")]
-    // public async Task RunScheduled(
-    //     [TimerTrigger("0 */15 * * * *")] TimerInfo timer,
-    //     [DurableClient] DurableTaskClient client)
-    // {
-    //     const string instanceId = "PdfIndexing";
-    //
-    //     var existing = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
-    //     if (existing is null
-    //         || existing.RuntimeStatus is OrchestrationRuntimeStatus.Completed
-    //             or OrchestrationRuntimeStatus.Failed
-    //             or OrchestrationRuntimeStatus.Terminated)
-    //     {
-    //         await client.ScheduleNewOrchestrationInstanceAsync(
-    //             "IndexingOrchestrator", new PdfIndexRequest(false),
-    //             new StartOrchestrationOptions { InstanceId = instanceId });
-    //     }
-    // }
+    // Once daily at 22:00 - relies on WEBSITE_TIME_ZONE = "W. Europe Standard Time"
+    // (function_app.tf) so this means 22:00 Dutch wall-clock time, not UTC.
+    [Function("ScheduledIndexing")]
+    public async Task RunScheduled(
+        [TimerTrigger("0 0 22 * * *")] TimerInfo timer,
+        [DurableClient] DurableTaskClient client)
+    {
+        const string instanceId = "PdfIndexing";
+
+        var existing = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
+        if (existing is null
+            || existing.RuntimeStatus is OrchestrationRuntimeStatus.Completed
+                or OrchestrationRuntimeStatus.Failed
+                or OrchestrationRuntimeStatus.Terminated)
+        {
+            await client.ScheduleNewOrchestrationInstanceAsync(
+                "IndexingOrchestrator", new PdfIndexRequest(false),
+                new StartOrchestrationOptions { InstanceId = instanceId });
+        }
+    }
 
     [Function("IndexingOrchestrator")]
     public async Task RunOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)
@@ -361,7 +359,7 @@ public class PdfIndexingFunction
             await WriteBlobAsync(req.StaleIdsBlob, stats.StaleDocumentIds, context.CancellationToken);
 
             await _artifactWriter.WriteArtifactAsync(
-                $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/extraction.json", new { Docs = docs, Stats = stats }, context.CancellationToken);
+                ReportPath.Build(req.StartedAt, "extraction-artifact", req.InstanceId), new { Docs = docs, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Extracted {Count} docs → {Blob}", docs.Count, req.OutputBlob);
 
@@ -385,12 +383,12 @@ public class PdfIndexingFunction
         try
         {
             var docs           = await ReadBlobAsync<List<PdfExtractionDocument>>(req.InputBlob, context.CancellationToken);
-            var (chunks, stats) = _chunkingService.ChunkDocuments(docs);
+            var (chunks, stats) = await _chunkingService.ChunkDocumentsAsync(docs, context.CancellationToken);
             await DeleteBlobAsync(req.InputBlob, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, chunks, context.CancellationToken);
 
             await _artifactWriter.WriteArtifactAsync(
-                $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/chunking.json", new { Chunks = chunks, Stats = stats }, context.CancellationToken);
+                ReportPath.Build(req.StartedAt, "chunking-artifact", req.InstanceId), new { Chunks = chunks, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks → {Blob}", docs.Count, chunks.Count, req.OutputBlob);
             return stats;
@@ -428,7 +426,7 @@ public class PdfIndexingFunction
             var chunkSummaries = embeddedDocs
                 .Select(d => new { d.Id, d.DocumentId, d.ContentHash, Dims = d.ContentVector?.Length });
             await _artifactWriter.WriteArtifactAsync(
-                $"{req.StartedAt:yyyy/MM/dd}/{req.InstanceId}/embedding.json",
+                ReportPath.Build(req.StartedAt, "embedding-artifact", req.InstanceId),
                 new
                 {
                     Chunks = chunkSummaries,
@@ -563,7 +561,14 @@ public class PdfIndexingFunction
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.Restoring, startedAt));
 
             result  = await context.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity");
-            success = true;
+
+            // Gate on the upsert's own per-document result, not IndexDocumentCountSnapshot -
+            // that stats call lags live writes by minutes (see UploadService) and reporting
+            // Success:true next to a stale 0 there masked a real empty-index incident.
+            if (result.ChunksFailed > 0)
+                error = $"{result.ChunksFailed} of {result.ChunksFailed + result.ChunksRestored} chunk(s) failed to upload during restore.";
+            else
+                success = true;
         }
         catch (Exception ex)
         {
@@ -667,6 +672,7 @@ public class PdfIndexingFunction
             ErrorMessage:                  error,
             SnapshotInstanceId:            result?.SnapshotInstanceId,
             ChunksRestored:                result?.ChunksRestored       ?? 0,
+            ChunksFailed:                  result?.ChunksFailed         ?? 0,
             ChunksMissingVector:           result?.ChunksMissingVector  ?? 0,
             IndexDocumentCountSnapshot:    result?.IndexDocumentCountSnapshot,
             IndexStorageSizeBytesSnapshot: result?.IndexStorageSizeBytesSnapshot,

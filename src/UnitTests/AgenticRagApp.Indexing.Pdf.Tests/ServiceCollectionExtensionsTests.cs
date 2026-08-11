@@ -1,7 +1,11 @@
+using Azure.Storage.Blobs;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
+using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf;
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -55,6 +59,33 @@ public class ServiceCollectionExtensionsTests
 
         AssertSingleton<IChunkingStrategy, PdfChunkingStrategy2>(services);
         AssertSingleton<IChunkingService, ChunkingService>(services);
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IDocumentIdentityStore)));
+        AssertSingleton<FamilyIdEmbedder, FamilyIdEmbedder>(services);
+    }
+
+    // The assertions above only inspect ServiceDescriptors, so they pass even when a
+    // constructor takes something the container cannot supply (a bare string, say) - that
+    // only surfaces the first time the graph is actually built, in the Functions host.
+    // Resolving ChunkingService for real covers FamilyIdEmbedder and IDocumentIdentityStore
+    // along with it.
+    [TestMethod]
+    public void AddPdfIndexing_ChunkingServiceGraph_IsResolvable()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        // Stands in for what AddAgenticRagAppInfrastructure() contributes. No calls are made
+        // against these during resolution, so a bare endpoint and a mock are enough.
+        services.AddSingleton(Config());
+        services.AddSingleton(new BlobServiceClient(new Uri("https://storage.example.com")));
+        services.AddSingleton(new Mock<IEmbeddingClient>().Object);
+
+        services.AddPdfIndexing(Config());
+
+        using var provider = services.BuildServiceProvider(validateScopes: true);
+
+        Assert.IsNotNull(provider.GetRequiredService<IChunkingService>());
+        Assert.IsNotNull(provider.GetRequiredService<FamilyIdEmbedder>());
     }
 
     [TestMethod]

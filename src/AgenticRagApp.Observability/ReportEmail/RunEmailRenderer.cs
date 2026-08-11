@@ -91,6 +91,8 @@ public sealed class RunEmailRenderer
               .Append(r.Success ? "completed" : "<span class=\"crit\">FAILED</span>")
               .Append($" in {Duration(r.StartedAt, r.FinishedAt)}, restoring {r.ChunksRestored:N0} chunks from snapshot ")
               .Append($"<span class=\"mono\">{E(r.SnapshotInstanceId ?? "(none)")}</span>. ");
+            if (r.ChunksFailed > 0)
+                sb.Append($"<span class=\"crit\"><b>{r.ChunksFailed:N0} chunks failed to upload</b></span> — the index is incomplete. ");
             if (r.ChunksMissingVector > 0)
                 sb.Append($"<b>{r.ChunksMissingVector:N0} chunks were restored without a cached vector</b> and are not yet reachable by vector search. ");
             sb.Append("</div>");
@@ -315,6 +317,7 @@ public sealed class RunEmailRenderer
         Row(sb, "Duration", Duration(r.StartedAt, r.FinishedAt));
         Row(sb, "Snapshot generation", r.SnapshotInstanceId ?? "(none — nothing to restore from)");
         Row(sb, "Chunks restored", $"{r.ChunksRestored:N0}");
+        Row(sb, "Chunks failed", r.ChunksFailed.ToString());
         Row(sb, "Chunks missing a vector", r.ChunksMissingVector.ToString());
         Row(sb, "Index", r.SearchIndexName);
         Row(sb, "Embedding model", $"{r.EmbeddingModel} ({r.EmbeddingDeployment})");
@@ -403,6 +406,7 @@ public sealed class RunEmailRenderer
         RowIfSet(sb, "Equivalence",   e.MeanEquivalence);
         RowIfSet(sb, "Citation match", e.MeanCitationMatch);
         RowIfSet(sb, "Refusal score", e.MeanRefusalScore);
+        RowIfSet(sb, "Context tokens", e.MeanContextTokens);
         Row(sb, "Eval cost", e.TotalCostUsd.ToString("C4", CultureInfo.GetCultureInfo("en-US")));
         sb.Append("</table>");
     }

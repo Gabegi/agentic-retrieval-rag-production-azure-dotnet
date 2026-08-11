@@ -89,6 +89,7 @@ public class QueryingFunction
                         InputTokens:        result.InputTokens,
                         OutputTokens:       result.OutputTokens,
                         TotalTokens:        result.TotalTokens,
+                        ContextTokens:      result.ContextTokens,
                         Temperature:        result.Temperature,
                         MaxOutputTokens:    result.MaxOutputTokens,
                         TopP:               result.TopP,

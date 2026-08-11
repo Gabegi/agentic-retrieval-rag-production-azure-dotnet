@@ -48,7 +48,8 @@ public sealed class PdfChunkingStrategy2 : IChunkingStrategy
             {
                 var trimmed = piece.Trim();
                 if (!string.IsNullOrWhiteSpace(trimmed))
-                    chunks.Add(new TextChunk(index++, trimmed));
+                    chunks.Add(new TextChunk(index++, trimmed,
+                        EstimatedTokens: ChunkingHelper.EstimateTokens(trimmed, isTable: block.IsTable)));
             }
         }
 

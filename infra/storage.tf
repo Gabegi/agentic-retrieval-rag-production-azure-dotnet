@@ -113,9 +113,11 @@ resource "azurerm_storage_container" "pipeline_reports" {
   container_access_type = "private"
 }
 
-# Written by IPipelineArtifactWriter (Observability/PipelineArtifactWriter.cs) -
-# the full-content per-stage archive (extraction/chunking/embedding.json), plus
-# SnapshotService's rolling corpus snapshots and VectorCache's cached vectors.
+# Written by VectorCache (Indexing.Pdf/Services/Embedding/VectorCache.cs) only, under its
+# vector-cache/ prefix - a content-addressed embedding-vector cache, not a report. Everything
+# else that used to live here (IPipelineArtifactWriter's per-stage content archives,
+# SnapshotService's rolling corpus snapshots) moved to the "pipeline-reports" container
+# alongside every other report - see Observability/Reports.md.
 #
 # THIS CONTAINER ALREADY EXISTS IN AZURE, auto-created at runtime by
 # Program.cs's GetBlobContainerClient("pipeline-artifacts") before it was ever
@@ -134,9 +136,10 @@ resource "azurerm_storage_container" "pipeline_reports" {
 # Because it already exists, a plain apply would fail on a name conflict - the
 # import block below adopts it into state on the next apply instead.
 #
-# Do NOT resolve a conflict by destroying and recreating: RestoreService rebuilds
-# a wiped index from the snapshots in this container, so destroying it discards
-# the only recovery path the pipeline has.
+# Do NOT resolve a conflict by destroying and recreating: RestoreService's snapshots now live
+# in "pipeline-reports" (see above), but this container still holds the vector cache -
+# destroying it loses every cached embedding, forcing a full re-embed of the corpus on the
+# next run.
 resource "azurerm_storage_container" "pipeline_artifacts" {
   name                  = "pipeline-artifacts"
   storage_account_id    = azurerm_storage_account.data.id
@@ -158,10 +161,10 @@ resource "azurerm_storage_container" "test_questions" {
   container_access_type = "private"
 }
 
-# Written by EvalResultWriter (RagApp.Evaluation.Tests) during the Evaluate pipeline
-# stage - one JSONL blob per eval run. Previously left unmanaged on the assumption
-# the writer would lazily create it (see eval_access.tf), but it never did, so every
-# eval run 404'd with ContainerNotFound.
+# No longer written to - eval-publish-results.yml now uploads results/summary/trx into
+# "pipeline-reports" alongside every other report (see Observability/Reports.md). Left declared,
+# not deleted, since it still holds every eval run's history from before that change and nothing
+# migrates historical reports.
 resource "azurerm_storage_container" "eval_results" {
   name                  = "eval-results"
   storage_account_id    = azurerm_storage_account.data.id

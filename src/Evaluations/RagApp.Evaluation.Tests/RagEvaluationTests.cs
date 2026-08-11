@@ -141,7 +141,7 @@ public class RagEvaluationTests
         var summary =
             $"[{row.ScenarioName}] ({row.Type}) G={row.Groundedness:F1} R={row.Relevance:F1} C={row.Coherence:F1} Eq={row.Equivalence:F1} " +
             $"Ret={row.Retrieval:F1} F1={row.F1:F2} Cite={row.CitationMatch:F2} Refusal={row.RefusalScore:F1}  " +
-            $"{row.LatencyMs}ms  ${row.CostUsd:F4}  in={row.InputTokens} out={row.OutputTokens}  ok={row.Succeeded}";
+            $"{row.LatencyMs}ms  ${row.CostUsd:F4}  in={row.InputTokens} out={row.OutputTokens} ctx={row.ContextTokens}  ok={row.Succeeded}";
         Console.WriteLine(summary);
         AppendProgress(summary);
 

@@ -9,6 +9,19 @@ public static class ChunkingHelper
 
     private static readonly char[] SentenceEnders = ['.', '!', '?'];
 
+    // Measured against the real embedding tokenizer (cl100k_base via text-embedding-3-large;
+    // docs/2608/260811/tokenizer-redo-findings.md): body prose 3.14-3.31 chars/token, table
+    // markdown 2.20-2.93 - table cells and pipe characters tokenize less efficiently than
+    // continuous prose, a >10% divergence, so one blended ratio isn't safe. Each constant here
+    // is the low (worst-case, most-tokens) end of its measured band, not the midpoint - per
+    // that finding, underestimating token count is the dangerous direction (a budget sized
+    // against a rosier number silently overruns), never the safe one.
+    private const double ProseCharsPerToken = 3.1;
+    private const double TableCharsPerToken = 2.2;
+
+    public static int EstimateTokens(string content, bool isTable) =>
+        content.Length == 0 ? 0 : (int)Math.Ceiling(content.Length / (isTable ? TableCharsPerToken : ProseCharsPerToken));
+
     public static string SafeKey(string blobName, int index) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes($"{blobName}::{index}"))
             .Replace('+', '-').Replace('/', '_');

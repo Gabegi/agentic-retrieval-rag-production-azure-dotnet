@@ -13,7 +13,7 @@ public class CsvExtractionService : ICsvExtractionService
     private readonly IRunReportWriter           _reportWriter;
     private readonly ILogger<CsvExtractionService> _logger;
 
-    private const string ReportFolder = "indexing/extraction-diff";
+    private const string DiffReportName = "csv-extraction-diff";
 
     public CsvExtractionService(
         ICsvExtractionOrchestrator    extractor,
@@ -114,7 +114,10 @@ public class CsvExtractionService : ICsvExtractionService
     // content, so this stays small regardless of corpus size.
     private async Task EmitMetricsAndBuildReport(DiffResult diff, CancellationToken ct)
     {
-        Instrumentation.DocsExtracted.Add(diff.Output.Docs.Count);
+        // diff.Output.Docs is row-grained (one ExtractionDocument per CSV row sharing a
+        // SourceId) - count distinct SourceIds so this stays a document count, matching
+        // DocsNew/DocsUpdated/DocsSkipped below.
+        Instrumentation.DocsExtracted.Add(diff.Output.Docs.Select(d => d.SourceId).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Instrumentation.DocsSkipped.Add(diff.Skipped);
         Instrumentation.DocsNew.Add(diff.NewCount);
         Instrumentation.DocsUpdated.Add(diff.Updated);
@@ -136,13 +139,15 @@ public class CsvExtractionService : ICsvExtractionService
 
         // instanceId null - see CsvExtractionOrchestrator's note; CSV is dormant.
         await _reportWriter.WriteReportAsync(
-            StageReportPath.Build(ReportFolder, runAt, instanceId: null, "diff"), report, ct);
+            StageReportPath.Build(DiffReportName, runAt, instanceId: null), report, ct);
     }
 
     // Assemble ExtractionStageMetrics to return to the activity
     private static ExtractionStageMetrics BuildStats(DiffResult diff) => new(
         Source:                 diff.Source,
-        DocsToProcess:          diff.ToProcess.Count,
+        // diff.ToProcess is row-grained, same as diff.Output.Docs above - distinct SourceIds
+        // gives the document count report-schema.md documents this field as (= DocsNew + DocsUpdated).
+        DocsToProcess:          diff.ToProcess.Select(d => d.SourceId).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
         DocsSkipped:            diff.Skipped,
         DocsNew:                diff.NewCount,
         DocsUpdated:            diff.Updated,

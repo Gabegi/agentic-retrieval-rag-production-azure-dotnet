@@ -15,4 +15,12 @@ public record PdfPageRecord
     // (Heading, TableInfo, SectionInfo, ...) against RawContent, never this field.
     public string PageContent { get; init; } = "";
     public string Title       { get; init; } = "";
+
+    // C5 (pre-chunking-action-items.md) - this page has at least one figure AND DI found
+    // no extractable words on it (or no content survived cleanup) - a page-level analogue
+    // of the document-level Picture route, for the mixed-document case a whole-document
+    // threshold structurally can't catch (38 normal pages + 2 diagram pages). Set by
+    // GetPictureOnlyPagesHelper once figures are known, after this record is first built -
+    // defaults false, never a real "not picture-only" claim until that join has run.
+    public bool IsPictureOnlyPage { get; init; }
 }

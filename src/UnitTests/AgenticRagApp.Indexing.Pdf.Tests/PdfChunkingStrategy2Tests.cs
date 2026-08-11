@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -29,6 +30,20 @@ public class PdfChunkingStrategy2Tests
 
         Assert.AreEqual(1, chunks.Count);
         Assert.AreEqual(table, chunks[0].Content);
+    }
+
+    [TestMethod]
+    public void TableChunk_EstimatedTokens_UsesTableRatio_ProseChunk_UsesProseRatio()
+    {
+        var table = "| Name | Dose |\n|---|---|\n| Aspirin | 100mg |\n| Ibuprofen | 200mg |";
+        var text  = "This is sentence one. This is sentence two. This is sentence three.";
+        var strategy = new PdfChunkingStrategy2(maxSize: 1500);
+
+        var tableChunks = strategy.Chunk(table);
+        var proseChunks = strategy.Chunk(text);
+
+        Assert.AreEqual(ChunkingHelper.EstimateTokens(table, isTable: true), tableChunks[0].EstimatedTokens);
+        Assert.AreEqual(ChunkingHelper.EstimateTokens(text, isTable: false), proseChunks[0].EstimatedTokens);
     }
 
     [TestMethod]

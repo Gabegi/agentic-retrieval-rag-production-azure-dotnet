@@ -1,6 +1,6 @@
 using System.ClientModel;
 using System.Diagnostics;
-using System.Text.RegularExpressions;
+using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.AI.Evaluation;
 using Microsoft.Extensions.AI.Evaluation.NLP;
@@ -40,12 +40,6 @@ public sealed class RagEvaluator
     // that into one bounded, attributable failure per call instead.
     private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(90);
 
-    // ExpectedSources carries free-text notes ("SharePoint: ...") alongside Zenya document
-    // URLs — the document GUID embedded in those URLs is the only part that reliably lines
-    // up with Citation.DocumentId, so that's what gets matched against.
-    private static readonly Regex DocumentIdPattern = new(
-        @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-        RegexOptions.Compiled);
 
     private readonly GroundednessEvaluator _groundedness = new();
     private readonly RelevanceEvaluator   _relevance    = new();
@@ -179,6 +173,7 @@ public sealed class RagEvaluator
             InputTokens:     result.InputTokens,
             OutputTokens:    result.OutputTokens,
             CostUsd:         costUsd,
+            ContextTokens:   ContextTokenEstimator.Estimate(result.RetrievedContext),
             Groundedness: groundednessResult.Get<NumericMetric>(GroundednessEvaluator.GroundednessMetricName)?.Value ?? 0,
             Relevance:    relevanceResult.Get<NumericMetric>(RelevanceEvaluator.RelevanceMetricName)?.Value ?? 0,
             Coherence:    coherenceResult.Get<NumericMetric>(CoherenceEvaluator.CoherenceMetricName)?.Value ?? 0,
@@ -226,6 +221,7 @@ public sealed class RagEvaluator
             InputTokens:     result.InputTokens,
             OutputTokens:    result.OutputTokens,
             CostUsd:         costUsd,
+            ContextTokens:   ContextTokenEstimator.Estimate(result.RetrievedContext),
             Groundedness: -1,
             Relevance:    relevanceResult.Get<NumericMetric>(RelevanceEvaluator.RelevanceMetricName)?.Value ?? 0,
             Coherence:    coherenceResult.Get<NumericMetric>(CoherenceEvaluator.CoherenceMetricName)?.Value ?? 0,
@@ -238,23 +234,34 @@ public sealed class RagEvaluator
             Timestamp:    DateTimeOffset.UtcNow);
     }
 
-    // Fraction of document IDs found in ExpectedSources that also appear in the chunks the
-    // RAG call actually cited — the cheapest, most deterministic retrieval signal available.
-    // Returns -1 (not scorable) when ExpectedSources carries no document ID at all, e.g. a
-    // free-text SharePoint note or an "Onbekend" known-gap scenario.
+    // Fraction of document ids listed in ExpectedSources (semicolon-separated PDF filenames,
+    // matching Citation.DocumentId - see AgenticRagApp.Indexing.Pdf.Models.SearchUploadChunk)
+    // that also appear among the chunks the RAG call actually cited — the cheapest, most
+    // deterministic retrieval signal available. Returns -1 (not scorable) when ExpectedSources
+    // is empty, e.g. a Refusal scenario or an "Onbekend" known-gap scenario.
+    //
+    // Both sides are Unicode-normalized to NFC before comparing: source PDF filenames on disk
+    // can carry a decomposed diaeresis (e + combining U+0308, "cliënten") while this
+    // dataset is typed with the precomposed form ("cliënten", U+00EB) - OrdinalIgnoreCase does
+    // not normalize, so without this a correct citation for any such filename would silently
+    // score as a miss.
     private static double ComputeCitationMatch(string expectedSources, IReadOnlyList<AgenticRagApp.Querying.Models.Citation> citations)
     {
-        var expectedIds = DocumentIdPattern.Matches(expectedSources)
-            .Select(m => m.Value)
+        var expectedIds = expectedSources.Split(';')
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .Select(Normalize)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (expectedIds.Count == 0) return -1;
 
-        var citedIds = citations.Select(c => c.DocumentId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var citedIds = citations.Select(c => Normalize(c.DocumentId)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var matched  = expectedIds.Count(id => citedIds.Contains(id));
         return matched / (double)expectedIds.Count;
     }
+
+    private static string Normalize(string value) => value.Normalize(NormalizationForm.FormC);
 
     // Retries a judge LLM call on 429 or a stuck-call timeout, honouring the retry-after-ms
     // header when present, falling back to exponential back-off (4 → 8 → 16 → 32 s).

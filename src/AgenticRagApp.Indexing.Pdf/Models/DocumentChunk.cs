@@ -79,6 +79,15 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     [JsonPropertyName("content_vector")]
     public float[]? ContentVector { get; set; }
 
+    // Ratio-estimated token count of the exact text embedded/stored (EmbeddingText below) -
+    // the low-level TextChunk.EstimatedTokens for this chunk's own body, plus the same
+    // estimate for the title/heading prefix ChunkingService prepends (see ChunkingService,
+    // which sets this). Distinct from TokenEstimate further down: that one is a coarse
+    // word-count proxy already used for the IsOversized/IsUndersized QA gates and left
+    // untouched here, not something this field replaces.
+    [JsonPropertyName("token_count")]
+    public int TokenCount { get; set; }
+
     // ── Derived Search-indexed fields (Tier 2) ──────────────────────────────
     // Computed from the raw structural fields below, the same way TokenEstimate/IsEmpty
     // etc. further down are computed from Content - simple scalars/collections Search can
@@ -121,6 +130,24 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     public IReadOnlyList<SectionInfo> Sections  { get; set; } = [];
 
     public string? Breadcrumb { get; set; }
+
+    // Family/domain identity resolved once per document by FamilyIdEmbedder, before
+    // chunking, then carried onto every chunk of that document - same pattern as
+    // Title/Breadcrumb. Not Search-indexed yet: nothing filters/routes on family or domain
+    // today (chunking strategy itself is deliberately out of scope for pre-chunking action
+    // items - docs/2608/260811/pre-chunking-action-items.md), same reasoning TokenCount's
+    // sibling fields already follow.
+    [JsonPropertyName("family_id")]
+    public string? FamilyId { get; set; }
+
+    [JsonPropertyName("domain_tag")]
+    public string? DomainTag { get; set; }
+
+    // SourceIds of other documents this one's title is lexically close to but NOT clustered
+    // with by FamilyId (e.g. Medido/Medimo - see FamilyIdEmbedder's C3 check) - a possible-
+    // confusion flag, not a family relationship. SourceIds rather than titles so a consumer
+    // can look the other document up directly, same identifier shape as FamilyId itself.
+    public IReadOnlyList<string> ConfusableWith { get; set; } = [];
 
     // The page-level structural payload, grouped rather than spread across seven loose
     // properties - see ChunkStructure for why it is carried but not Search-indexed.

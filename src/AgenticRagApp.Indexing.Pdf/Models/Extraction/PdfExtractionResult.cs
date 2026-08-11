@@ -92,4 +92,14 @@ public record PdfExtractionResult
     // outline. Not consumed by anything yet - a future chunk-builder attaches the entry
     // for whichever page(s) a chunk falls on.
     public IReadOnlyDictionary<int, string> SectionBreadcrumbs { get; init; } = new Dictionary<int, string>();
+
+    // Document-level chunking lane (docs/2608/260811/chunkRoutes.md), computed by
+    // ChunkRoutingHelper from Pages/FileSizeBytes/Structure.Figures once extraction
+    // succeeds. Null when Ok is false - there are no pages to route.
+    public DocumentRouting? Routing { get; init; }
+
+    // "nl"/"en", read off DI's own AnalyzeResult.Languages by LanguageDetectionHelper
+    // (chunking-signals-map.md §3c #3) - not re-detected, DI already computes this on
+    // every call. Null when Ok is false.
+    public string? Language { get; init; }
 }

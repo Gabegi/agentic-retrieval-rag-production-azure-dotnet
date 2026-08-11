@@ -13,6 +13,7 @@ public interface IRestoreService
 public record RestoreResult(
     string? SnapshotInstanceId,
     int     ChunksRestored,
+    int     ChunksFailed,
     int     ChunksMissingVector,
     long?   IndexDocumentCountSnapshot,
     long?   IndexStorageSizeBytesSnapshot,

@@ -31,9 +31,11 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
     public string Source => "pdf";
 
-    // Folder segment namespacing every report blob this orchestrator writes, so it
-    // doesn't mix into CsvExtractionOrchestrator's blobs in the same "pipeline-reports" container.
-    private const string ReportFolder = "indexing/pdf-extraction";
+    // Report-name prefixes namespacing every report blob this orchestrator writes, so they
+    // don't collide with CsvExtractionOrchestrator's report names in the same shared container.
+    private const string ValidationReportName = "pdf-validation";
+    private const string FileFactsReportName  = "pdf-file-facts";
+    private const string FailureReportName    = "pdf-failure";
 
     // See CsvExtractionOrchestrator.MaxLoggedIssues — same rationale (log volume/cost cap,
     // separate from MaxReturnedIssues below, which caps the *returned* issues list for
@@ -336,7 +338,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            StageReportPath.Build(ReportFolder, runAt, instanceId, "validation-report"), report, ct);
+            StageReportPath.Build(ValidationReportName, runAt, instanceId), report, ct);
 
         // PdfPig facts already read off each file's PdfDocument before it was disposed
         // (FileSizeBytes/PdfSpecVersion from PdfDocumentValidator, NativeMetadata from
@@ -356,7 +358,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         }).ToList();
 
         await _reportWriter.WriteReportAsync(
-            StageReportPath.Build(ReportFolder, runAt, instanceId, "file-facts"), fileFacts, ct);
+            StageReportPath.Build(FileFactsReportName, runAt, instanceId), fileFacts, ct);
     }
 
     private sealed record PdfExtractionFailureReport(
@@ -370,7 +372,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         if (!_reportWriter.IsEnabled) return;
 
         await _reportWriter.WriteReportAsync(
-            StageReportPath.Build(ReportFolder, runAt, instanceId, "failure-report"),
+            StageReportPath.Build(FailureReportName, runAt, instanceId),
             new PdfExtractionFailureReport(runAt, failure.GetType().FullName ?? failure.GetType().Name, failure.Message, failure.StackTrace),
             ct);
     }

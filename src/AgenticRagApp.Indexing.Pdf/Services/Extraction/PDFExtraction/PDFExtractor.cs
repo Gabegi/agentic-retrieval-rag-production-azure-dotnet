@@ -108,6 +108,20 @@ public class PdfExtractor : IPdfExtractor
                 [],
                 Info: documentAnalyzed.Infos.Select(w => ToPipelineIssue(w, blobName)).ToList()),
             BreadcrumbDiagnostics = breadcrumbDiagnostics,
+
+            // Pages/Structure are guaranteed non-null here (documentAnalyzed.Ok already
+            // returned true above), but computed defensively via ?? [] rather than a
+            // null-forgiving operator - a routing computation is not the place to newly
+            // introduce a throw on a shape another gate was supposed to have already caught.
+            Routing = ChunkRoutingHelper.Compute(
+                documentAnalyzed.Pages ?? [],
+                documentAnalyzed.Structure?.Figures ?? [],
+                fileSizeBytes,
+                documentAnalyzed.Structure?.Headings ?? [],
+                documentAnalyzed.Structure?.Boilerplate ?? [],
+                documentAnalyzed.Structure?.SelectionMarks ?? []),
+
+            Language = documentAnalyzed.Language,
         };
     }
 

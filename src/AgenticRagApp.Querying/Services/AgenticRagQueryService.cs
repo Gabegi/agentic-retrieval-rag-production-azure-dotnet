@@ -124,11 +124,12 @@ public class AgenticRagQueryService : IRagQueryService
             return Blocked(PiiFallback, "blocked_pii", CategoryPrivacy, sw.ElapsedMilliseconds, chunks.Count);
 
         var (inputTokens, outputTokens) = KnowledgeBaseActivitySummary.SumTokens(result.Activity);
+        var retrievedContext = string.Join("\n\n---\n\n", chunks);
 
         var endpoint = new Uri(_config.SearchEndpoint);
         return new RagQueryResult(
             Answer:             answer,
-            RetrievedContext:   string.Join("\n\n---\n\n", chunks),
+            RetrievedContext:   retrievedContext,
             SystemInstructions: "knowledge-base retrieval/answer instructions — see KnowledgeService",
             ChunksRetrieved:    chunks.Count,
             OperationName:      "knowledge_base_retrieve",
@@ -143,6 +144,7 @@ public class AgenticRagQueryService : IRagQueryService
             InputTokens:        inputTokens,
             OutputTokens:       outputTokens,
             TotalTokens:        inputTokens + outputTokens,
+            ContextTokens:      ContextTokenEstimator.Estimate(retrievedContext),
             Temperature:        null, MaxOutputTokens: null, TopP: null, TopK: null,
             FrequencyPenalty:   null, PresencePenalty: null, Seed: null,
             ResponseFormat:     null, StopSequences: null,
@@ -169,6 +171,7 @@ public class AgenticRagQueryService : IRagQueryService
             InputTokens:        0,
             OutputTokens:       0,
             TotalTokens:        0,
+            ContextTokens:      0,
             Temperature:        null, MaxOutputTokens: null, TopP: null, TopK: null,
             FrequencyPenalty:   null, PresencePenalty: null, Seed: null,
             ResponseFormat:     null, StopSequences: null,

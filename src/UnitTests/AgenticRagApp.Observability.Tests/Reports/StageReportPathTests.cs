@@ -9,42 +9,26 @@ public class StageReportPathTests
         new(2026, 8, 7, 3, 14, 12, 847, TimeSpan.Zero);
 
     [TestMethod]
-    public void Build_WithInstanceId_KeepsDateFolderAndTimePrefix()
+    public void Build_WithInstanceId_AppendsIdAfterReportName()
     {
-        var path = StageReportPath.Build("indexing/pdf-extraction", RunAt, "a3f9c21b", "validation-report");
+        var path = StageReportPath.Build("pdf-validation", RunAt, "a3f9c21b");
 
-        // The instance ID is added to the existing naming, not substituted for it: the date
-        // folder still allows browsing to a day, and HHmmssfff still sorts runs chronologically
-        // within it.
-        Assert.AreEqual(
-            "indexing/pdf-extraction/2026/08/07/031412847-a3f9c21b-validation-report.json",
-            path);
+        Assert.AreEqual("2026/08/07/20260807T031412847Z-pdf-validation-a3f9c21b.json", path);
     }
 
     [TestMethod]
-    public void Build_WithoutInstanceId_FallsBackToTimestampOnlyNaming()
+    public void Build_WithoutInstanceId_OmitsTrailingIdSegment()
     {
-        var path = StageReportPath.Build("indexing/pdf-extraction", RunAt, null, "file-facts");
+        var path = StageReportPath.Build("pdf-file-facts", RunAt, null);
 
-        Assert.AreEqual("indexing/pdf-extraction/2026/08/07/031412847-file-facts.json", path);
+        Assert.AreEqual("2026/08/07/20260807T031412847Z-pdf-file-facts.json", path);
     }
 
     [TestMethod]
     public void Build_BlankInstanceId_TreatedAsAbsent()
     {
-        var path = StageReportPath.Build("indexing/extraction-diff", RunAt, "   ", "diff");
+        var path = StageReportPath.Build("csv-extraction-diff", RunAt, "   ");
 
-        Assert.AreEqual("indexing/extraction-diff/2026/08/07/031412847-diff.json", path);
-    }
-
-    [TestMethod]
-    public void Build_DoesNotCollideWithTheRunReportPrefix()
-    {
-        // The run report lives under runs/, deliberately outside every stage-report folder, so
-        // an Event Grid subjectBeginsWith on runs/ cannot match a stage report. See
-        // docs/2608/260807/pipeline-run-email-report.md §2.
-        var path = StageReportPath.Build("indexing/pdf-extraction", RunAt, "a3f9c21b", "validation-report");
-
-        Assert.IsFalse(path.StartsWith("runs/", StringComparison.Ordinal));
+        Assert.AreEqual("2026/08/07/20260807T031412847Z-csv-extraction-diff.json", path);
     }
 }

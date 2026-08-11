@@ -78,4 +78,72 @@ internal static class GetQualityWarningsHelper
         (result.Warnings ?? [])
             .Select(w => new AnalysisWarning(w.Code, w.Message, w.Target))
             .ToList();
+
+    // Numbering-vocabulary words recognised so far (Dutch CAO/Hygiene Code
+    // corpus + English equivalents). Not a gate: an unrecognised word doesn't
+    // change any behaviour, it's surfaced as its own warning so new corpus
+    // vocabulary is visible instead of silently never being added to this set.
+    private static readonly HashSet<string> KnownNumberedHeadingLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Artikel", "Hoofdstuk", "Bijlage",        // Dutch
+        "Article", "Chapter", "Section", "Annex", // English
+    };
+
+    // Two independent signals over GetHeadingsHelper's output, deliberately not
+    // combined into one warning:
+    // - OrphanedNumberedHeading is post-merge: headings still a bare numbered
+    //   label after GetHeadingsHelper's merge attempt. Either a genuine
+    //   title-less article (confirmed real cases exist in this corpus, e.g.
+    //   "Artikel 5" in CAO GGZ - see docs/2608/260810) or a missed two-line
+    //   split. Informational, same style as FiguresWithoutCaption above:
+    //   expected to be occasionally nonzero, so this tracks the count
+    //   changing over time, not hitting zero.
+    // - UnrecognisedNumberedHeadingLabel is pre-merge (numberedLabelsSeen
+    //   comes from GetHeadingsHelper.GetNumberedHeadingLabels, which scans
+    //   raw paragraphs before merge outcome is decided): a successfully
+    //   merged heading no longer matches the bare-label shape, so the orphan
+    //   scan alone would never see labels that merge correctly - exactly the
+    //   vocabulary this warning exists to surface.
+    // public (not private): testable without a live DI call, as with StructureWarnings.
+    public static IReadOnlyList<AnalysisWarning> HeadingWarnings(
+        IReadOnlyList<Heading> headings,
+        IReadOnlyDictionary<string, int> numberedLabelsSeen,
+        IReadOnlyList<string> pairedHeadingMerges,
+        string blobName)
+    {
+        var warnings = new List<AnalysisWarning>();
+
+        var orphans = headings
+            .Select(h => h.Content.Trim())
+            .Where(c => GetHeadingsHelper.BareNumberedLabelWithWord().IsMatch(c))
+            .ToList();
+        if (orphans.Count > 0)
+            warnings.Add(new AnalysisWarning(
+                "OrphanedNumberedHeading",
+                $"{orphans.Count} of {headings.Count} heading(s) are a bare numbered label with no title merged in, " +
+                $"e.g. {string.Join(", ", orphans.Take(3))} - either a title-less article or a missed two-line split.",
+                blobName));
+
+        foreach (var (label, count) in numberedLabelsSeen)
+            if (!KnownNumberedHeadingLabels.Contains(label))
+                warnings.Add(new AnalysisWarning(
+                    "UnrecognisedNumberedHeadingLabel",
+                    $"Label '{label}' ({count} occurrence(s)) is not in the known numbering vocabulary " +
+                    $"({string.Join(", ", KnownNumberedHeadingLabels)}) - new corpus vocabulary, not a defect.",
+                    blobName));
+
+        // D2 - every paired zero-body heading merge GetHeadingsHelper performed, surfaced so
+        // it can be spot-checked against the source PDF - the rule is structural (any two
+        // adjacent heading-role paragraphs), not vocabulary-scoped, and hasn't been run
+        // against the live corpus yet. See GetHeadingsHelper.GetHeadings' own comment.
+        if (pairedHeadingMerges.Count > 0)
+            warnings.Add(new AnalysisWarning(
+                "PairedZeroBodyHeadingsMerged",
+                $"{pairedHeadingMerges.Count} paired zero-body heading(s) merged into one, e.g. " +
+                $"{string.Join(", ", pairedHeadingMerges.Take(3))} - spot-check against the source PDF that each pair " +
+                "is really one logical section, not two independently meaningful headings that happen to be adjacent.",
+                blobName));
+
+        return warnings;
+    }
 }

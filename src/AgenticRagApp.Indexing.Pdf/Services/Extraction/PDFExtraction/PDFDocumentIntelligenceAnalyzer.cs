@@ -39,12 +39,12 @@ public sealed partial class PdfDocumentIntelligenceAnalyzer
     internal const decimal CostPerPage = 0.01m;
 
     // GetLines is the bulkiest thing this class produces - one LineInfo per OCR line,
-    // across every page - and PdfDocumentStructure.Lines isn't persisted anywhere yet
-    // (dev reports only; see GetLines's own comment). Defaulted off so a large document
-    // doesn't pay that allocation for data nothing reads. Flip to true once source
-    // grounding (the future highlight-on-source join GetLines exists for) actually
-    // consumes it.
-    private const bool IncludeLines = false;
+    // across every page. Was defaulted off (dev reports only) until A3 (pre-chunking-
+    // action-items.md) gave it a real consumer: GetFontSizeWarningsHelper needs every
+    // line's polygon to derive a per-document body-text baseline. Source grounding
+    // (the future highlight-on-source join GetLines also exists for) will be a second
+    // consumer later, not the reason this is on now.
+    private const bool IncludeLines = true;
 
     // BackoffDelays/PollingInterval/AnalyzeBudget* now live in DocumentAnalysisPoller
     // (DocumentIntelligenceHelpers/), the only caller.
@@ -167,25 +167,29 @@ public sealed partial class PdfDocumentIntelligenceAnalyzer
         var zeroWordWarnings = GetQualityWarningsHelper.GetZeroWordWarnings(analysis, blobName);
         var tables  = GetTablesHelper.GetTables(analysis);
         var figures = GetFiguresHelper.GetFigures(analysis);
+        var headingsResult = GetHeadingsHelper.GetHeadings(analysis);
         var pageDimensions = GetPageDimensionsHelper.GetPageDimensions(analysis);
+
+        pages = GetPictureOnlyPagesHelper.MarkPictureOnlyPages(analysis, pages, figures);
 
         var (pageDimensionWarnings, pageDimensionInfos) = PageDimensionWarningsHelper.GetPageDimensionWarnings(
             nativeMetadata.NativePageDimensions, pageDimensions, blobName);
 
         var estimatedCost = pages.Count * CostPerPage;
+        var lines         = IncludeLines ? GetLinesHelper.GetLines(analysis) : [];
 
         return new DocumentAnalyzedResults(
             true,
             analysis.Content,
             pages,
             new PdfDocumentStructure(
-                Headings:       GetHeadingsHelper.GetHeadings(analysis),
+                Headings:       headingsResult.Headings,
                 Boilerplate:    GetBoilerplateHelper.GetBoilerplate(analysis),
                 Tables:         tables,
                 PageDimensions: pageDimensions,
                 SelectionMarks: GetSelectionMarksHelper.GetSelectionMarks(analysis),
                 Figures:        figures,
-                Lines:          IncludeLines ? GetLinesHelper.GetLines(analysis) : [],
+                Lines:          lines,
                 Sections:       GetSectionsHelper.GetSections(analysis)),
             estimatedCost,
             null)
@@ -195,8 +199,11 @@ public sealed partial class PdfDocumentIntelligenceAnalyzer
             // List<T>(capacity)+AddRange, since each list here is consumed exactly once.
             Warnings = [.. outcome.Warnings, .. GetQualityWarningsHelper.GetDiWarnings(analysis), .. pageWarnings,
                         .. zeroWordWarnings, .. GetQualityWarningsHelper.StructureWarnings(tables, figures, blobName),
+                        .. GetQualityWarningsHelper.HeadingWarnings(headingsResult.Headings, headingsResult.NumberedLabelsSeen, headingsResult.PairedHeadingMerges, blobName),
+                        .. GetFontSizeWarningsHelper.GetFontSizeWarnings(headingsResult.Headings, lines, blobName),
                         .. pageDimensionWarnings],
             Infos    = [.. pageInfos, GetQualityWarningsHelper.CostInfo(estimatedCost, pages.Count, blobName), .. pageDimensionInfos],
+            Language = LanguageDetectionHelper.Detect(analysis),
         };
     }
 

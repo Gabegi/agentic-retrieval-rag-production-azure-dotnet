@@ -23,4 +23,8 @@ public sealed record DocumentAnalyzedResults(
     // estimated-cost echo) - kept separate from Warnings so callers can tell "worth a
     // human look" apart from "worth knowing." Empty (not null) when Ok is false.
     public IReadOnlyList<AnalysisWarning> Infos { get; init; } = [];
+
+    // "nl"/"en" (LanguageDetectionHelper), read off DI's own AnalyzeResult.Languages -
+    // null when Ok is false, since there's no analysis to have detected a language from.
+    public string? Language { get; init; }
 }

@@ -1,49 +1,67 @@
 # Blob Storage Layout — Reports, Artifacts & Snapshots
 
-Everything the pipelines write to blob storage, by container. All date-based paths are
-`{yyyy}/{MM}/{dd}` in UTC, taken from the run's `StartedAt`/timestamp — browse to today's
-folder to find a given run without already knowing its instance ID.
+Everything the pipelines write to blob storage, by container. Every report — run reports, stage
+diagnostics, per-run content archives, corpus snapshots, and eval results — shares one container
+(`pipeline-reports`) and one naming scheme, built by `ReportPath.Build`:
+
+```
+{yyyy}/{MM}/{dd}/{yyyyMMddTHHmmssfff}Z-{report-name}[-{id}].json
+```
+
+`{yyyy}/{MM}/{dd}` is UTC, taken from the report's own timestamp — browse to today's folder to
+find a given run without already knowing its instance ID. `{id}` is the orchestration instance ID
+(or the pipeline build ID for eval results) and is omitted entirely (no trailing `-{id}`) when the
+caller has none — see `CsvExtractionOrchestrator`'s dormant-pipeline note below.
+
+The one thing deliberately *not* in this container is `vector-cache/{contentHash}.json` (see the
+`pipeline-artifacts` section) — it's a content-addressed cache with no report semantics, looked up
+directly by hash, and folding it into the naming scheme would turn its O(1) lookups into O(n)
+listings.
 
 ## Container: `pipeline-reports`
 
+| Report name | Path | Written by | Content |
+|---|---|---|---|
+| `index-run` | `.../{ts}-index-run-{instanceId}.json` | `IndexingOrchestrator` → `SaveIndexReportActivity` (end of run) | Full run report (`PdfIndexRunReport`) — docs processed/skipped/new/updated, validation errors/warnings, chunk size distribution + samples, embedding + upload stats, index size snapshot |
+| `restore-run` | `.../{ts}-restore-run-{instanceId}.json` | `RestoreOrchestrator` → `SaveRestoreReportActivity` | `PdfRestoreRunReport` — index-wiped-and-rebuilt-from-snapshot report: which snapshot generation was used, chunks restored, chunks missing a cached vector |
+| `pdf-validation` | `.../{ts}-pdf-validation-{instanceId}.json` | `PdfExtractionPipeline` | PDF extraction validation report (errors/warnings, spot-check sample, per-transform cleaning counts) |
+| `pdf-file-facts` | `.../{ts}-pdf-file-facts-{instanceId}.json` | `PdfExtractionPipeline` | Per-file PDF facts — size, spec version, native metadata (Producer/Creator/Subject/Keywords), estimated cost |
+| `pdf-failure` | `.../{ts}-pdf-failure-{instanceId}.json` | `PdfExtractionPipeline` | Fallback report for a run that failed *before* a validation report existed (e.g. blob listing/cleaning threw) |
+| `pdf-extraction-diff` | `.../{ts}-pdf-extraction-diff-{instanceId}.json` | `ExtractionService` | New/updated/deleted document diff for the run, including the document IDs |
+| `csv-validation` | `.../{ts}-csv-validation.json` | `CsvExtractionOrchestrator` | CSV extraction validation report. No `{id}` — CSV is dormant and no orchestration supplies an instance ID |
+| `csv-extraction-diff` | `.../{ts}-csv-extraction-diff.json` | `CsvExtractionService` | Same as `pdf-extraction-diff`, for CSV. Also id-less while CSV is dormant |
+| `extraction-artifact` | `.../{ts}-extraction-artifact-{instanceId}.json` | `PdfIndexingFunction.ExtractActivity` | Full extracted docs + extraction stats (whole-corpus content, no size cap) |
+| `chunking-artifact` | `.../{ts}-chunking-artifact-{instanceId}.json` | `PdfIndexingFunction.ChunkActivity` | Full chunk list + chunking stats |
+| `embedding-artifact` | `.../{ts}-embedding-artifact-{instanceId}.json` | `PdfIndexingFunction.EmbedAndUploadActivity` | Chunk metadata (id, doc id, content hash, vector dims) + embedding stats — never the raw vectors |
+| `snapshot-{source}` | `.../{ts}-snapshot-{source}-{instanceId}.json` | `SnapshotService.UpdateAsync` | Rolling full-corpus snapshot for that source (`pdf`/`csv`) — every chunk believed live in the Search index, merged run over run. Only the 3 most recent generations are kept (older ones pruned). Read back by `RestoreService` to rebuild the index if it's ever wiped/corrupted |
+| `eval-results` / `eval-summary` / `eval-trx` | `.../{ts}-eval-{results\|summary\|trx}-{buildId}.{jsonl\|md\|trx}` | `.pipelines/templates/eval-publish-results.yml` (not app code) | Eval suite output: raw JSONL scoring rows, a generated markdown summary, and the MSTest `.trx` |
+| `run-summary` | `.../{ts}-run-summary-{instanceId}.json` | `SendReportEmailActivity` | Oversized run-email attachment fallback (over `MaxAttachmentBytes`), linked from the email instead of attached |
+
+Plus a handful of fixed-name pointer blobs at the container **root** (not date-folder-scoped —
+there's exactly one current value, not history):
+
 | Path | Written by | Content |
 |---|---|---|
-| `runs/{yyyy}/{MM}/{dd}/{instanceId}.json` | `IndexingOrchestrator` → `SaveIndexReportActivity` (end of run) | Full run report (`PdfIndexRunReport`) — docs processed/skipped/new/updated, validation errors/warnings, chunk size distribution + samples, embedding + upload stats, index size snapshot |
-| `runs/restore/{yyyy}/{MM}/{dd}/{instanceId}.json` | `RestoreOrchestrator` → `SaveRestoreReportActivity` | `PdfRestoreRunReport` — index-wiped-and-rebuilt-from-snapshot report: which snapshot generation was used, chunks restored, chunks missing a cached vector |
-| `queries/{yyyy}/{MM}/{dd}/{HH-mm-ss}.json` | `QueryingFunction` (every `/api/query` call) | `QueryRunReport` — question, answer, retrieved context, model/latency/token telemetry. One file per query |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-validation-report.json` | `PdfExtractionPipeline` | PDF extraction validation report (errors/warnings, spot-check sample, per-transform cleaning counts) |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-file-facts.json` | `PdfExtractionPipeline` | Per-file PDF facts — size, spec version, native metadata (Producer/Creator/Subject/Keywords), estimated cost |
-| `indexing/pdf-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-failure-report.json` | `PdfExtractionPipeline` | Fallback report for a run that failed *before* a validation report existed (e.g. blob listing/cleaning threw) |
-| `indexing/csv-extraction/{yyyy}/{MM}/{dd}/{HHmmssfff}-validation-report.json` | `CsvExtractionOrchestrator` | CSV extraction validation report. No `{instanceId}` — CSV is dormant and no orchestration supplies one |
-| `indexing/extraction-diff/{yyyy}/{MM}/{dd}/{HHmmssfff}-{instanceId}-diff.json` | `ExtractionService` (PDF; CSV writes the same folder without an instance ID) | New/updated/deleted document diff for the run, including the document IDs |
-| `indexing/_last-stats-{source}.json` | `RunReportWriter.SaveLastIndexStatsAsync` | Last known index document count/storage size, keyed by source (`pdf`/`csv`) — single rolling baseline for drift detection, **not** per-run history. Overwritten *during* the run by `IndexStatsMonitor`; the value it replaced is carried forward on `EmbedUploadStageMetrics.PreviousIndexDocumentCount` |
+| `_last-run.json` | `SendReportEmailActivity` | Previous run's summary (`PreviousRunPointer`) — powers the run email's delta section |
+| `_latest-snapshot-{source}.json` | `SnapshotService.UpdateAsync` | Up to 3 most recent snapshot paths + instance IDs for that source, newest first — how `ReadLatestAsync`/pruning find snapshots without a per-source prefix to list |
+| `_latest-eval-results.json` | `.pipelines/templates/eval-publish-results.yml` | `{Path, RanAt}` of the most recent `eval-results` blob — how `RunReportAssembler.TryReadEvalBaselineAsync` finds the eval baseline without listing |
+| `indexing/_last-stats-{source}.json` | `RunReportWriter.SaveLastIndexStatsAsync` | Last known index document count/storage size, keyed by source (`pdf`/`csv`) — single rolling baseline for drift detection, **not** per-run history |
 
-All of the above (except the drift baseline) are written on every run in **every** environment —
+All report writes above (except the drift baseline) happen on every run in **every** environment —
 `IRunReportWriter.IsEnabled` is unconditionally `true`.
 
-### Two naming rules worth knowing
+Query reports are the one exception still on their own path, not yet folded into this scheme:
+`queries/{yyyy}/{MM}/{dd}/{HH-mm-ss}.json` (`QueryingFunction`, one file per `/api/query` call,
+containing question/answer/context/telemetry).
 
-**The run report lives under `runs/`, not `indexing/`.** Blob-trigger binding expressions and
-Event Grid subject filters are both greedy across `/`, so a pattern like
-`indexing/{y}/{m}/{d}/{instance}.json` also matches
-`indexing/pdf-extraction/2026/08/06/103000123-file-facts.json`. Nothing else writes under
-`runs/`, which makes `subjectBeginsWith` an exact gate. Reports written before this change stay
-at the old `indexing/{date}/` prefix — nothing migrates them.
-
-**Stage reports carry the instance ID *in addition to* the timestamp** (`StageReportPath`).
-Timestamp-only naming could not be attributed to a run: overlapping runs interleave in one
-folder, and a run starting at 23:58 writes its extraction reports into the next day's folder.
-The date folder and `HHmmssfff` prefix are kept so browsing and chronological sorting work
-exactly as before.
+Reports written before this container/naming consolidation stay at their old paths (`runs/`,
+`indexing/pdf-extraction/`, the old `pipeline-artifacts`/`eval-results` containers, etc.) — nothing
+migrates them.
 
 ## Container: `pipeline-artifacts`
 
 | Path | Written by | Content |
 |---|---|---|
-| `{yyyy}/{MM}/{dd}/{instanceId}/extraction.json` | `ExtractActivity` | Full extracted docs + extraction stats (whole-corpus content, no size cap) |
-| `{yyyy}/{MM}/{dd}/{instanceId}/chunking.json` | `ChunkActivity` | Full chunk list + chunking stats |
-| `{yyyy}/{MM}/{dd}/{instanceId}/embedding.json` | `EmbedAndUploadActivity` | Chunk metadata (id, doc id, content hash, vector dims) + embedding stats — never the raw vectors |
-| `snapshots/{source}/{yyyy}/{MM}/{dd}/{instanceId}/full-index.json` | `SnapshotService.UpdateAsync` | Rolling full-corpus snapshot for that source (`pdf`/`csv`) — every chunk believed live in the Search index, merged run over run. Only the 3 most recent generations are kept (older ones pruned). Read back by `RestoreService` to rebuild the index if it's ever wiped/corrupted |
 | `vector-cache/{contentHash}.json` | `VectorCache.SetAsync` | One cached embedding vector per content hash — content-addressed, **not** per-run or dated, since its whole purpose is dedup across runs (same content → cache hit regardless of when it was first embedded). Orphaned entries evicted after each snapshot update |
 
 ## Container: `indexing-pipeline` (DI key `pipeline-temp`)
@@ -55,9 +73,3 @@ exactly as before.
 | `{yyyy}/{MM}/{dd}/{instanceId}/stale-document-ids.json` | `ExtractActivity` | Stale/removed document IDs, offloaded to blob (rather than Durable Table Storage) to dodge the 64KB row-size limit — deleted once `EmbedAndUploadActivity` consumes it |
 
 These three are pure orchestration payload-passing (only the blob name string travels through Durable state) — nothing here is meant to be read after the run completes; all three are deleted by the end of a successful run.
-
-## Evaluation harness (separate from the app pipelines)
-
-| Path | Written by | Content |
-|---|---|---|
-| `eval-results/{yyyy-MM-dd}/{executionId}.jsonl` | `EvalResultWriter` (test project) | Append-only JSONL of `EvalRow` scoring results, one blob per test run (date + execution ID) to avoid concurrent-append collisions across parallel test methods. Container name comes from the `STORAGE_CONTAINER` env var used when running the evaluation tests |

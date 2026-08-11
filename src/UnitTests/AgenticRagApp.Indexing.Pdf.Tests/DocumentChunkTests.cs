@@ -30,7 +30,7 @@ public class DocumentChunkTests
         ModDate               = DateTimeOffset.Parse("2023-06-15T00:00:00Z"),
         PageCount             = 12,
         Bookmarks             = [new Bookmark("Inleiding", 0, 1, false)],
-        Sections              = [new SectionInfo([new SectionSpan(0, 100)], ["/paragraphs/0"])],
+        Sections              = [new SectionInfo([new SectionSpan(0, 100)], ["/paragraphs/0"], [new SectionElementRef("paragraphs", 0, "Body text.")])],
         Breadcrumb            = "_Section: Inleiding_",
         Structure             = new ChunkStructure(
             Headings:       [new Heading("Inleiding", "sectionHeading", 0, 0)],

@@ -20,6 +20,11 @@ public record QueryRunReport(
     long                   InputTokens,
     long                   OutputTokens,
     long                   TotalTokens,
+    // Estimated tokens in RetrievedContext (see AgenticRagApp.Querying.Services.
+    // ContextTokenEstimator) — the query-time cost driver first-split-design.md §5 asks
+    // to track directly, distinct from InputTokens (which also carries system-
+    // instruction/prompt overhead).
+    long                   ContextTokens,
     float?                 Temperature,
     int?                   MaxOutputTokens,
     float?                 TopP,

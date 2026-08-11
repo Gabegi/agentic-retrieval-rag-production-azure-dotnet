@@ -12,7 +12,8 @@ public interface IChunkingService
     IReadOnlyList<TextChunk> Chunk(string content);
 
     // High-level: converts ExtractionDocuments into indexed DocumentChunks,
-    // computes ChunkingStageMetrics, and emits all chunk telemetry.
-    (IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats) ChunkDocuments(
-        IReadOnlyList<PdfExtractionDocument> docs);
+    // computes ChunkingStageMetrics, and emits all chunk telemetry. Async - resolves
+    // family/domain identity (FamilyIdEmbedder) via an embedding call before splitting.
+    Task<(IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
+        IReadOnlyList<PdfExtractionDocument> docs, CancellationToken ct = default);
 }

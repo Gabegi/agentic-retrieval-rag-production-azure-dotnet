@@ -6,6 +6,7 @@ using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Indexing.Pdf.Utils;
 using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Indexing.Pdf;
@@ -26,6 +27,14 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IChunkingStrategy, PdfChunkingStrategy2>();
         services.AddSingleton<IChunkingService,  ChunkingService>();
+
+        // Corpus-wide family/domain identity store - "pipeline-artifacts" container, under
+        // its own document-identity/ path prefix (see DocumentIdentityStore), same container
+        // VectorCache uses below.
+        services.AddSingleton<IDocumentIdentityStore>(sp =>
+            new DocumentIdentityStore(
+                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-artifacts")));
+        services.AddSingleton<FamilyIdEmbedder>();
 
         // PDF extraction backend — only registered when Document Intelligence is
         // configured (Infrastructure only registers the DocumentIntelligenceClient itself

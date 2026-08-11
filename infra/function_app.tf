@@ -125,6 +125,11 @@ resource "azurerm_windows_function_app" "indexer" {
     "KNOWLEDGE_SOURCE_NAME"   = var.knowledge_source_name
     "KNOWLEDGE_BASE_NAME"     = var.knowledge_base_name
 
+    # Windows-only app setting: makes TimerTrigger cron expressions (e.g. ScheduledIndexing's
+    # daily 22:00 run) evaluate against Dutch wall-clock time instead of UTC, so the trigger
+    # stays at 22:00 local time across the DST transition rather than drifting by an hour.
+    "WEBSITE_TIME_ZONE" = "W. Europe Standard Time"
+
     # ---------------------------------------------------------------------
     # Pipeline run report email (SendReportEmailActivity)
     # ---------------------------------------------------------------------

@@ -19,13 +19,13 @@ namespace AgenticRagApp.Observability.Reports;
 // docs/2608/260807/pipeline-report-content-candidates.md §3.
 public sealed class RunReportAssembler
 {
-    public const string LastRunPointerPath = "runs/_last-run.json";
+    public const string LastRunPointerPath = "_last-run.json";
+    private const string LatestEvalResultsPointerPath = "_latest-eval-results.json";
     private const int MaxNamesRendered = 20;
 
     private readonly IBlobStore          _blobStore;
     private readonly BlobContainerClient _reports;
     private readonly BlobContainerClient _documents;
-    private readonly BlobContainerClient _evalResults;
     private readonly ReportEmailOptions  _options;
     private readonly ILogger<RunReportAssembler> _logger;
 
@@ -33,16 +33,14 @@ public sealed class RunReportAssembler
         IBlobStore blobStore,
         BlobContainerClient reports,
         BlobContainerClient documents,
-        BlobContainerClient evalResults,
         ReportEmailOptions options,
         ILogger<RunReportAssembler> logger)
     {
-        _blobStore   = blobStore;
-        _reports     = reports;
-        _documents   = documents;
-        _evalResults = evalResults;
-        _options     = options;
-        _logger      = logger;
+        _blobStore = blobStore;
+        _reports   = reports;
+        _documents = documents;
+        _options   = options;
+        _logger    = logger;
     }
 
     public async Task<RunEmailSummary?> AssembleAsync(RunReportRef path, string blobName, CancellationToken ct)
@@ -73,20 +71,17 @@ public sealed class RunReportAssembler
         if (report is null) return null;
         found.Add(blobName);
 
-        // Sibling reports are named {HHmmssfff}-{instanceId}-{suffix}.json under a date folder.
-        // The timestamp prefix isn't knowable here, so they're found by listing the day's folder
-        // and matching on the instance ID - which is exactly what the instance-ID plumbing was
-        // for. Both the run's own date folder and the following day are searched: the run report
-        // is filed under StartedAt while stage reports are named at activity-execution time, so
-        // a run starting at 23:58 writes them into the next day's folder.
-        var validation = await FindSiblingAsync<Dictionary<string, JsonElement>>(
-            "indexing/pdf-extraction", path, "validation-report", ct);
-        var fileFacts  = await FindSiblingAsync<List<Dictionary<string, JsonElement>>>(
-            "indexing/pdf-extraction", path, "file-facts", ct);
-        var diff       = await FindSiblingAsync<Dictionary<string, JsonElement>>(
-            "indexing/extraction-diff", path, "diff", ct);
-        var failure    = await FindSiblingAsync<Dictionary<string, JsonElement>>(
-            "indexing/pdf-extraction", path, "failure-report", ct);
+        // Sibling reports are named {ts}-{reportName}-{instanceId}.json under a date folder. The
+        // timestamp prefix isn't knowable here, so they're found by listing the day's folder and
+        // matching on the report name + instance ID - which is exactly what the instance-ID
+        // plumbing was for. Both the run's own date folder and the following day are searched:
+        // the run report is filed under StartedAt while stage reports are named at
+        // activity-execution time, so a run starting at 23:58 writes them into the next day's
+        // folder.
+        var validation = await FindSiblingAsync<Dictionary<string, JsonElement>>(path, "pdf-validation", ct);
+        var fileFacts  = await FindSiblingAsync<List<Dictionary<string, JsonElement>>>(path, "pdf-file-facts", ct);
+        var diff       = await FindSiblingAsync<Dictionary<string, JsonElement>>(path, "pdf-extraction-diff", ct);
+        var failure    = await FindSiblingAsync<Dictionary<string, JsonElement>>(path, "pdf-failure", ct);
 
         Track(found, missing, "validation-report",  validation.Blob);
         Track(found, missing, "file-facts",         fileFacts.Blob);
@@ -138,6 +133,12 @@ public sealed class RunReportAssembler
                 "No snapshot existed for this source — there was nothing to restore from.",
                 "Run a full indexing pass to rebuild the corpus and produce a snapshot."));
 
+        if (r.ChunksFailed > 0)
+            flags.Add(new ReportFlag(FlagSeverity.Critical, "Restore.ChunksFailed",
+                r.ChunksFailed.ToString(), "0",
+                "One or more chunks failed to upload during restore — the index is incomplete.",
+                "Check the Search service logs for the upsert error, then re-run StartRestore."));
+
         if (r.ChunksMissingVector > 0)
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Restore.ChunksMissingVector",
                 r.ChunksMissingVector.ToString(), "0",
@@ -150,17 +151,17 @@ public sealed class RunReportAssembler
     // ── Sibling lookup ───────────────────────────────────────────────────────
 
     private async Task<(T? Value, string? Blob)> FindSiblingAsync<T>(
-        string folder, RunReportRef path, string suffix, CancellationToken ct) where T : class
+        RunReportRef path, string reportName, CancellationToken ct) where T : class
     {
         foreach (var date in new[] { path.Date, path.Date.AddDays(1) })
         {
-            var prefix = $"{folder}/{date:yyyy/MM/dd}/";
+            var prefix = $"{date:yyyy/MM/dd}/";
             try
             {
                 var blobs = await _blobStore.ListBlobsAsync(_reports, prefix, ct);
                 var match = blobs
                     .Select(b => b.Name)
-                    .Where(n => n.Contains($"-{path.InstanceId}-{suffix}.json", StringComparison.OrdinalIgnoreCase))
+                    .Where(n => n.Contains($"-{reportName}-{path.InstanceId}.json", StringComparison.OrdinalIgnoreCase))
                     .OrderBy(n => n, StringComparer.Ordinal)
                     .LastOrDefault();
 
@@ -293,6 +294,12 @@ public sealed class RunReportAssembler
 
     // ── Eval baseline ────────────────────────────────────────────────────────
 
+    // Written by .pipelines/templates/eval-publish-results.yml right after it uploads the run's
+    // results.jsonl - lets this read the latest eval baseline in one call instead of listing,
+    // now that eval results share this container with every other report and no longer sit
+    // under their own "eval-results/" prefix.
+    private sealed record EvalResultsPointer(string Path, DateTimeOffset RanAt);
+
     // Deliberately tolerant of absence: if no eval has ever run, or the container is not
     // reachable, the section is simply omitted. A run email must never depend on whether
     // someone happened to run the eval tests.
@@ -300,15 +307,10 @@ public sealed class RunReportAssembler
     {
         try
         {
-            var blobs = await _blobStore.ListBlobsAsync(_evalResults, "eval-results/", ct);
-            var latest = blobs
-                .Where(b => b.Name.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(b => b.LastModified ?? DateTimeOffset.MinValue)
-                .FirstOrDefault();
+            var pointer = await TryReadAsync<EvalResultsPointer>(LatestEvalResultsPointerPath, ct);
+            if (pointer is null) return null;
 
-            if (latest.Name is null) return null;
-
-            var bytes = await _blobStore.DownloadBytesAsync(_evalResults, latest.Name, ct);
+            var bytes = await _blobStore.DownloadBytesAsync(_reports, pointer.Path, ct);
             var rows  = System.Text.Encoding.UTF8.GetString(bytes)
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(line => { try { return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(line); } catch { return null; } })
@@ -327,8 +329,8 @@ public sealed class RunReportAssembler
             }
 
             return new EvalBaseline(
-                ExecutionId:   System.IO.Path.GetFileNameWithoutExtension(latest.Name),
-                RanAt:         latest.LastModified ?? default,
+                ExecutionId:   System.IO.Path.GetFileNameWithoutExtension(pointer.Path),
+                RanAt:         pointer.RanAt,
                 ScenarioCount: rows.Count,
                 FailedCount:   rows.Count(r => !GetBool(r, "Succeeded")),
                 MeanGroundedness:  Mean(rows, "Groundedness"),
@@ -337,6 +339,7 @@ public sealed class RunReportAssembler
                 MeanEquivalence:   Mean(rows, "Equivalence"),
                 MeanCitationMatch: Mean(rows, "CitationMatch"),
                 MeanRefusalScore:  Mean(rows, "RefusalScore"),
+                MeanContextTokens: Mean(rows, "ContextTokens"),
                 TotalCostUsd:      rows.Sum(r => GetDouble(r, "CostUsd")));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

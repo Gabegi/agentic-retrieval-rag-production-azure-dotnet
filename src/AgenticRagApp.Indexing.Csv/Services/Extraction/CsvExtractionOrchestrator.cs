@@ -30,10 +30,9 @@ public class CsvExtractionOrchestrator : ICsvExtractionOrchestrator
     private const string IndexBlobName = "zenya_index.csv";
     private const string StateBlobName = "csv-extraction-state.json";
 
-    // Folder segment namespacing every report blob this orchestrator writes, so a
-    // future second ICsvExtractionOrchestrator (e.g. PDF) writing to the same
-    // "pipeline-reports" container doesn't mix its blobs in with these.
-    private const string ReportFolder = "indexing/csv-extraction";
+    // Report-name prefix namespacing every report blob this orchestrator writes, so it
+    // doesn't collide with PdfExtractionPipeline's report names in the same shared container.
+    private const string ValidationReportName = "csv-validation";
 
     // Caps how many individual validation issues get their own log line. A badly
     // malformed file can produce thousands of near-identical issues - real log
@@ -98,7 +97,7 @@ public class CsvExtractionOrchestrator : ICsvExtractionOrchestrator
             // naming. Routed through StageReportPath anyway so reviving CSV means supplying an
             // ID here, not rediscovering the naming rule. See StageReportPath.
             await _reportWriter.WriteReportAsync(
-                StageReportPath.Build(ReportFolder, runAt, instanceId: null, "validation-report"), report, ct);
+                StageReportPath.Build(ValidationReportName, runAt, instanceId: null), report, ct);
         }
 
         var (effectivePassed, errors, warnings, missingTitle, missingVersion, missingDepartment) =

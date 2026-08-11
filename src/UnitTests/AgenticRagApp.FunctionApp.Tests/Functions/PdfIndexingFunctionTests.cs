@@ -154,7 +154,7 @@ public class PdfIndexingFunctionTests
         var stats = ChunkingStageMetrics.Empty("v1");
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<PdfExtractionDocument>>(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(docs);
-        deps.ChunkingService.Setup(c => c.ChunkDocuments(docs)).Returns(([chunk], stats));
+        deps.ChunkingService.Setup(c => c.ChunkDocumentsAsync(docs, It.IsAny<CancellationToken>())).ReturnsAsync(([chunk], stats));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -172,7 +172,7 @@ public class PdfIndexingFunctionTests
         var deps = new Deps();
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<PdfExtractionDocument>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([Doc("doc1.pdf")]);
-        deps.ChunkingService.Setup(c => c.ChunkDocuments(It.IsAny<IReadOnlyList<PdfExtractionDocument>>())).Throws(new Exception("boom"));
+        deps.ChunkingService.Setup(c => c.ChunkDocumentsAsync(It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<CancellationToken>())).ThrowsAsync(new Exception("boom"));
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
@@ -278,7 +278,7 @@ public class PdfIndexingFunctionTests
         var context = MockOrchestrationContext();
         context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
         context.Setup(c => c.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ReturnsAsync(new RestoreResult("snap-1", 5, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
+            .ReturnsAsync(new RestoreResult("snap-1", 5, 0, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
         context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
         var function = deps.Build();
 
@@ -286,6 +286,23 @@ public class PdfIndexingFunctionTests
 
         context.Verify(c => c.CallActivityAsync("SaveRestoreReportActivity",
             It.Is<PdfRestoreRunReport>(r => r.Success && r.ChunksRestored == 5), It.IsAny<TaskOptions>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RunRestoreOrchestrator_ChunksFailed_SavesFailureReportAndThrows()
+    {
+        var deps    = new Deps();
+        var context = MockOrchestrationContext();
+        context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
+        context.Setup(c => c.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(new RestoreResult("snap-1", 5, 3, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
+        context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
+        var function = deps.Build();
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => function.RunRestoreOrchestrator(context.Object));
+
+        context.Verify(c => c.CallActivityAsync("SaveRestoreReportActivity",
+            It.Is<PdfRestoreRunReport>(r => !r.Success && r.ChunksRestored == 5 && r.ChunksFailed == 3), It.IsAny<TaskOptions>()), Times.Once);
     }
 
     [TestMethod]
@@ -350,7 +367,7 @@ public class PdfIndexingFunctionTests
     public async Task RestoreFromSnapshotActivity_Success_ReturnsRestoreResult()
     {
         var deps   = new Deps();
-        var result = new RestoreResult("snap-1", 5, 0, 10, 100, "index", "model", "deployment");
+        var result = new RestoreResult("snap-1", 5, 0, 0, 10, 100, "index", "model", "deployment");
         deps.RestoreService.Setup(s => s.RestoreFromLatestSnapshotAsync(It.IsAny<CancellationToken>())).ReturnsAsync(result);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -386,7 +403,7 @@ public class PdfIndexingFunctionTests
         var report   = new PdfRestoreRunReport(
             InstanceId: "instance-1", StartedAt: DateTimeOffset.UtcNow, FinishedAt: DateTimeOffset.UtcNow,
             Success: true, ErrorMessage: null, SnapshotInstanceId: "snap-1", ChunksRestored: 5,
-            ChunksMissingVector: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100,
+            ChunksFailed: 0, ChunksMissingVector: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100,
             SearchIndexName: "index", EmbeddingModel: "model", EmbeddingDeployment: "deployment");
 
         await function.SaveRestoreReportActivity(report, context);
@@ -405,7 +422,7 @@ public class PdfIndexingFunctionTests
         var report   = new PdfRestoreRunReport(
             InstanceId: "instance-1", StartedAt: DateTimeOffset.UtcNow, FinishedAt: DateTimeOffset.UtcNow,
             Success: true, ErrorMessage: null, SnapshotInstanceId: "snap-1", ChunksRestored: 5,
-            ChunksMissingVector: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100,
+            ChunksFailed: 0, ChunksMissingVector: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100,
             SearchIndexName: "index", EmbeddingModel: "model", EmbeddingDeployment: "deployment");
 
         await function.SaveRestoreReportActivity(report, context);

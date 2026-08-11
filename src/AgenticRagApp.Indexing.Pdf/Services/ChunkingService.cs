@@ -10,14 +10,16 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 public class ChunkingService : IChunkingService
 {
     private readonly IChunkingStrategy             _strategy;
+    private readonly FamilyIdEmbedder              _familyIdEmbedder;
     private readonly ILogger<ChunkingService>      _logger;
 
     public string Name => _strategy.Name;
 
-    public ChunkingService(IChunkingStrategy strategy, ILogger<ChunkingService> logger)
+    public ChunkingService(IChunkingStrategy strategy, FamilyIdEmbedder familyIdEmbedder, ILogger<ChunkingService> logger)
     {
-        _strategy = strategy;
-        _logger   = logger;
+        _strategy         = strategy;
+        _familyIdEmbedder = familyIdEmbedder;
+        _logger           = logger;
     }
 
     // Low-level passthrough — splits raw text into TextChunks.
@@ -31,13 +33,21 @@ public class ChunkingService : IChunkingService
 
     // Converts ExtractionDocuments into indexed DocumentChunks,
     // computes ChunkingStageMetrics, and emits all chunk telemetry in one place.
-    public (IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats) ChunkDocuments(
-        IReadOnlyList<PdfExtractionDocument> docs)
+    //
+    // Async (unlike the old sync ChunkDocuments) because family/domain identity resolution
+    // (FamilyIdEmbedder - pre-chunking action items C2/C3) needs an embedding call before
+    // splitting can start. Resolved once per document, up front, rather than per chunk -
+    // same "resolve once, carry onto every chunk" shape as Title/Breadcrumb below.
+    public async Task<(IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
+        IReadOnlyList<PdfExtractionDocument> docs, CancellationToken ct = default)
     {
-        var result = new List<DocumentChunk>();
+        var families = await _familyIdEmbedder.ResolveAsync(docs, ct);
+        var result   = new List<DocumentChunk>();
 
         foreach (var doc in docs.OrderBy(d => d.SourceId).ThenBy(d => d.Ordinal))
         {
+            families.TryGetValue(doc.SourceId, out var family);
+
             var chunks = Chunk(doc.Content);
 
             // Real per-page section context: Breadcrumb (hierarchical, from the bookmark
@@ -67,6 +77,16 @@ public class ChunkingService : IChunkingService
                 var body    = heading != null ? $"{heading}\n\n{chunk.Content}" : chunk.Content;
                 var content = string.IsNullOrEmpty(doc.Title) ? body : $"{doc.Title}\n\n{body}";
 
+                // content always ends with chunk.Content verbatim (built only by prepending
+                // to it above), so slicing off that length recovers exactly the prepended
+                // title/heading prefix - estimated at the prose ratio, since a document
+                // title/heading is never table markdown regardless of what the chunk itself
+                // is. Added on top of chunk.EstimatedTokens (already correctly ratio'd for
+                // that chunk's own content) rather than re-estimating the whole thing at one
+                // ratio, which would misprice a table-heavy chunk's dominant share.
+                var prefix     = content[..(content.Length - chunk.Content.Length)];
+                var tokenCount = chunk.EstimatedTokens + ChunkingHelper.EstimateTokens(prefix, isTable: false);
+
                 result.Add(new DocumentChunk
                 {
                     Id                    = ChunkingHelper.SafeKey($"{doc.SourceId}::{doc.Ordinal}", docChunkIndex),
@@ -78,6 +98,7 @@ public class ChunkingService : IChunkingService
                     ZenyaStatus           = doc.ZenyaStatus,
                     ZenyaUrl              = doc.ZenyaUrl,
                     Content               = content,
+                    TokenCount            = tokenCount,
                     Heading               = heading,
                     PageNumber            = doc.Ordinal,
                     ChunkIndex            = docChunkIndex,
@@ -88,6 +109,9 @@ public class ChunkingService : IChunkingService
                     Bookmarks             = doc.Bookmarks,
                     Sections              = doc.Sections,
                     Breadcrumb            = doc.Breadcrumb,
+                    FamilyId              = family?.FamilyId,
+                    DomainTag             = family?.DomainTag,
+                    ConfusableWith        = family?.ConfusableWith ?? [],
                     Structure             = new ChunkStructure(
                         Headings:       doc.Headings,
                         Boilerplate:    doc.Boilerplate,

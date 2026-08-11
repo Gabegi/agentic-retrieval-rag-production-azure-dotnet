@@ -7,8 +7,6 @@ namespace AgenticRagApp.Observability.Reports;
 
 public class SnapshotService : ISnapshotService
 {
-    private const string FileName = "full-index.json";
-
     // Keep the 3 most recent snapshots per source - an explicit exception to the archive's
     // otherwise "keep forever" retention, scoped only to this path.
     private const int MaxRetainedSnapshots = 3;
@@ -24,18 +22,27 @@ public class SnapshotService : ISnapshotService
         _logger    = logger;
     }
 
+    // Pointer entry, not just a bare path: parsing an instance ID back out of a filename is
+    // brittle (Durable instance IDs are GUIDs, which themselves contain '-', the same
+    // separator ReportPath uses), so it's carried alongside the path instead of re-derived.
+    // Internal (not private) + AssemblyInfo.cs's InternalsVisibleTo so tests can set up
+    // IBlobStore.TryReadJsonWithETagAsync<SnapshotPointer> directly.
+    internal sealed record SnapshotPointerEntry(string Path, string InstanceId);
+    internal sealed record SnapshotPointer(IReadOnlyList<SnapshotPointerEntry> Entries);
+
+    private static string PointerPath(string source) => $"_latest-snapshot-{source}.json";
+
     public async Task<IReadOnlySet<string>> UpdateAsync<T>(
         string source, IReadOnlyList<T> newChunks, IReadOnlyList<string> staleDocumentIds, string instanceId, DateTimeOffset startedAt, CancellationToken ct = default)
         where T : ISnapshotSource
     {
-        var prefix = $"snapshots/{source}/";
+        await _blobStore.AssertContainerExistsAsync(_container, ct);
 
-        // Newest-first, so [0] is "the previous snapshot" to merge from, and everything from
-        // MaxRetainedSnapshots-1 onward is what gets pruned once this run's new one is added.
-        var existing = await ListSnapshotBlobsAsync(prefix, ct);
+        var (pointer, etag) = await _blobStore.TryReadJsonWithETagAsync<SnapshotPointer>(_container, PointerPath(source), ct);
+        var existingEntries  = pointer?.Entries ?? [];
 
-        var previous = existing.Count > 0
-            ? await ReadSnapshotAsync(existing[0].Path, ct)
+        var previous = existingEntries.Count > 0
+            ? await ReadSnapshotAsync(existingEntries[0].Path, ct)
             : [];
 
         // Drop old entries for any document this run touched (updated or removed), then add
@@ -47,17 +54,27 @@ public class SnapshotService : ISnapshotService
             .Concat(newChunks.Select(SnapshotChunk.From))
             .ToList();
 
-        var path = $"{prefix}{startedAt:yyyy/MM/dd}/{instanceId}/{FileName}";
-        await _blobStore.AssertContainerExistsAsync(_container, ct);
+        var path = ReportPath.Build(startedAt, $"snapshot-{source}", instanceId);
         // Streamed - by far the largest payload in the system (the whole corpus's snapshot,
         // growing unboundedly over time) going through the double-buffering write path this
         // OOM'd on elsewhere in production. See IBlobStore.UploadJsonAsync.
         await _blobStore.UploadJsonAsync(_container, path, merged, ct: ct);
         _logger.LogInformation("Snapshot written — source '{Source}', {Count} chunks → {Path}", source, merged.Count, path);
 
-        var prunedCount = await PruneAsync(existing, ct);
-        if (prunedCount > 0)
-            _logger.LogInformation("Snapshot pruning — source '{Source}', {Count} older snapshot(s) deleted", source, prunedCount);
+        // Newest-first, one slot already spoken for by the new snapshot just written - keep
+        // (MaxRetainedSnapshots - 1) of the pre-existing entries and prune the rest.
+        var retained = existingEntries.Take(MaxRetainedSnapshots - 1).ToList();
+        var pruned   = existingEntries.Skip(MaxRetainedSnapshots - 1).ToList();
+
+        foreach (var entry in pruned)
+            await _blobStore.DeleteIfExistsAsync(_container, entry.Path, ct);
+        if (pruned.Count > 0)
+            _logger.LogInformation("Snapshot pruning — source '{Source}', {Count} older snapshot(s) deleted", source, pruned.Count);
+
+        var newPointer = new SnapshotPointer([new SnapshotPointerEntry(path, instanceId), .. retained]);
+        var saved = await _blobStore.SaveJsonWithETagAsync(_container, PointerPath(source), newPointer, etag, ct);
+        if (!saved)
+            _logger.LogWarning("Lost the race updating the snapshot pointer for source '{Source}' — this run's snapshot at '{Path}' was still written, just not pointed to.", source, path);
 
         return merged.Select(c => c.ContentHash).ToHashSet();
     }
@@ -65,40 +82,12 @@ public class SnapshotService : ISnapshotService
     public async Task<(IReadOnlyList<SnapshotChunk> Chunks, string? InstanceId)> ReadLatestAsync(
         string source, CancellationToken ct = default)
     {
-        var prefix   = $"snapshots/{source}/";
-        var existing = await ListSnapshotBlobsAsync(prefix, ct);
-        if (existing.Count == 0) return ([], null);
+        var (pointer, _) = await _blobStore.TryReadJsonWithETagAsync<SnapshotPointer>(_container, PointerPath(source), ct);
+        var latest = pointer?.Entries.Count > 0 ? pointer.Entries[0] : null;
+        if (latest is null) return ([], null);
 
-        var latest = existing[0];
         var chunks = await ReadSnapshotAsync(latest.Path, ct);
-
-        // Path is {prefix}{yyyy}/{MM}/{dd}/{instanceId}/{FileName} — instanceId is the last
-        // segment before the file name, not everything after the prefix.
-        var dirs       = latest.Path[prefix.Length..^($"/{FileName}".Length)];
-        var instanceId = dirs[(dirs.LastIndexOf('/') + 1)..];
-        return (chunks, instanceId);
-    }
-
-    private async Task<List<(string Path, DateTimeOffset LastModified)>> ListSnapshotBlobsAsync(string prefix, CancellationToken ct)
-    {
-        var blobs = await _blobStore.ListBlobsAsync(_container, prefix, ct);
-
-        return blobs
-            .Where(b => b.Name.EndsWith($"/{FileName}", StringComparison.Ordinal))
-            .Select(b => (b.Name, b.LastModified ?? DateTimeOffset.MinValue))
-            .OrderByDescending(b => b.Item2)
-            .ToList();
-    }
-
-    // Keeps the newest (MaxRetainedSnapshots - 1) of the pre-existing snapshots - one slot is
-    // already spoken for by the new snapshot UpdateAsync just wrote - and deletes the rest.
-    private async Task<int> PruneAsync(List<(string Path, DateTimeOffset LastModified)> existing, CancellationToken ct)
-    {
-        var toDelete = existing.Skip(MaxRetainedSnapshots - 1).ToList();
-        foreach (var (path, _) in toDelete)
-            await _blobStore.DeleteIfExistsAsync(_container, path, ct);
-
-        return toDelete.Count;
+        return (chunks, latest.InstanceId);
     }
 
     private async Task<List<SnapshotChunk>> ReadSnapshotAsync(string path, CancellationToken ct)

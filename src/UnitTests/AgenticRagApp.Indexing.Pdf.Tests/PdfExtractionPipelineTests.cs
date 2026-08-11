@@ -321,7 +321,7 @@ public class PdfExtractionPipelineTests
         Assert.IsNotNull(output);
         Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains("PDF validation failed")));
         reportWriter.Verify(w => w.WriteReportAsync(
-            It.Is<string>(p => p.Contains("validation-report")), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.Is<string>(p => p.Contains("pdf-validation")), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]

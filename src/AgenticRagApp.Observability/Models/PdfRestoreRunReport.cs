@@ -19,6 +19,10 @@ public record PdfRestoreRunReport(
     string? SnapshotInstanceId,
 
     int ChunksRestored,
+    // Chunks the Search upsert itself reported as failed - the accurate, immediate success
+    // signal (unlike IndexDocumentCountSnapshot below, which lags live writes by minutes).
+    // RunRestoreOrchestrator gates Success on this being 0.
+    int ChunksFailed,
     // Quality signal: a chunk restored without its cached vector needs re-embedding before
     // it's actually searchable via vector/hybrid search - it still exists as a document,
     // just without content_vector, until the next incremental run touches it.

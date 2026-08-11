@@ -90,21 +90,26 @@ var host = new HostBuilder()
                 sp.GetRequiredService<IBlobStore>(),
                 sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports")));
 
-        // Persistent full-content archive - separate container from pipeline-reports above,
-        // always on (not gated by environment or a config flag - see IPipelineArtifactWriter).
+        // Persistent full-content archive - same "pipeline-reports" container as every other
+        // report (run reports, stage diagnostics, snapshots, eval results), always on (not
+        // gated by environment or a config flag - see IPipelineArtifactWriter). Only
+        // vector-cache/ (VectorCache, wired in AgenticRagApp.Indexing.Pdf/ServiceCollectionExtensions.cs)
+        // stays on the separate "pipeline-artifacts" container - it's a content-hash-keyed
+        // cache, not a report, and moving it would turn its O(1) lookups into O(n) listings.
         services.AddSingleton<IPipelineArtifactWriter>(sp =>
             new PipelineArtifactWriter(
                 sp.GetRequiredService<IBlobStore>(),
-                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-artifacts")));
+                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports")));
 
         // Rolling full-corpus snapshot (source-scoped, never merged across doc types) - same
-        // "pipeline-artifacts" container, under its own snapshots/{source}/ path prefix.
-        // Vector-cache eviction is done by the caller (IndexingFunction), not here - see
-        // ISnapshotService's own comment for why.
+        // "pipeline-reports" container as every other report, found via a
+        // _latest-snapshot-{source}.json pointer rather than a per-source path prefix (see
+        // SnapshotService). Vector-cache eviction is done by the caller (IndexingFunction), not
+        // here - see ISnapshotService's own comment for why.
         services.AddSingleton<ISnapshotService>(sp =>
             new SnapshotService(
                 sp.GetRequiredService<IBlobStore>(),
-                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-artifacts"),
+                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
                 sp.GetRequiredService<ILogger<SnapshotService>>()));
 
         // Index size telemetry + drift-check, source-scoped (see IIndexStatsMonitor) — one
@@ -134,7 +139,6 @@ var host = new HostBuilder()
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(config.StorageContainer),
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("eval-results"),
             reportEmailOptions,
             sp.GetRequiredService<ILogger<RunReportAssembler>>()));
 

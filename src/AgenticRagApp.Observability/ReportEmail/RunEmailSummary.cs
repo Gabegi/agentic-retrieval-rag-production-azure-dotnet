@@ -124,6 +124,7 @@ public sealed record EvalBaseline(
     double?        MeanEquivalence,
     double?        MeanCitationMatch,
     double?        MeanRefusalScore,
+    double?        MeanContextTokens,
     double         TotalCostUsd);
 
 public sealed record RunAssessment(

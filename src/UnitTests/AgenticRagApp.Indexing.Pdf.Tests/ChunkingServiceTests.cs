@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using AgenticRagApp.Infrastructure.Clients.Embedding;
+using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Indexing.Pdf.Utils;
@@ -19,8 +21,25 @@ public class ChunkingServiceTests
         return mock;
     }
 
+    // No persisted identity, embedding call echoes back one arbitrary vector per input text -
+    // ChunkingService's own behaviour is what these tests exercise, not FamilyIdEmbedder's
+    // clustering (see FamilyIdEmbedderTests for that).
+    private static FamilyIdEmbedder BuildFamilyIdEmbedder()
+    {
+        var embeddingClient = new Mock<IEmbeddingClient>();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .Returns<IReadOnlyList<string>, CancellationToken>((texts, _) =>
+                Task.FromResult((texts.Select(_ => new float[] { 1f, 0f, 0f }).ToArray(), 0)));
+
+        var store = new Mock<IDocumentIdentityStore>();
+        store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        return new FamilyIdEmbedder(embeddingClient.Object, store.Object, new IndexerConfig(), NullLogger<FamilyIdEmbedder>.Instance);
+    }
+
     private static ChunkingService BuildService(Mock<IChunkingStrategy> strategy) =>
-        new(strategy.Object, NullLogger<ChunkingService>.Instance);
+        new(strategy.Object, BuildFamilyIdEmbedder(), NullLogger<ChunkingService>.Instance);
 
     private static PdfExtractionDocument Doc(
         string sourceId, int ordinal, string content,
@@ -115,24 +134,24 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public void ChunkDocuments_ComputesIdFromSourceIdOrdinalAndChunkIndex()
+    public async Task ChunkDocuments_ComputesIdFromSourceIdOrdinalAndChunkIndex()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", ordinal: 2, content: "content");
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         var expectedId = ChunkingHelper.SafeKey("doc1::2", 0);
         Assert.AreEqual(expectedId, docs[0].Id);
     }
 
     [TestMethod]
-    public void ChunkDocuments_SetsDocumentIdAndPageNumberFromSourceDocument()
+    public async Task ChunkDocuments_SetsDocumentIdAndPageNumberFromSourceDocument()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", ordinal: 5, content: "content");
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual("doc1", docs[0].DocumentId);
         Assert.AreEqual(5, docs[0].PageNumber);
@@ -140,66 +159,66 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public void ChunkDocuments_PrependsTitleToContent_WhenTitlePresent()
+    public async Task ChunkDocuments_PrependsTitleToContent_WhenTitlePresent()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", 0, "body text", title: "My Title");
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual("My Title\n\nbody text", docs[0].Content);
     }
 
     [TestMethod]
-    public void ChunkDocuments_NoTitle_ContentIsBodyOnly()
+    public async Task ChunkDocuments_NoTitle_ContentIsBodyOnly()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", 0, "body text");
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual("body text", docs[0].Content);
     }
 
     [TestMethod]
-    public void ChunkDocuments_PrependsBreadcrumbBeforeTitle_WhenPresent()
+    public async Task ChunkDocuments_PrependsBreadcrumbBeforeTitle_WhenPresent()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", 0, "body text", title: "My Title", breadcrumb: "_Section: Chapter 1_");
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual("My Title\n\n_Section: Chapter 1_\n\nbody text", docs[0].Content);
         Assert.AreEqual("_Section: Chapter 1_", docs[0].Heading);
     }
 
     [TestMethod]
-    public void ChunkDocuments_FallsBackToFirstDetectedHeading_WhenNoBreadcrumb()
+    public async Task ChunkDocuments_FallsBackToFirstDetectedHeading_WhenNoBreadcrumb()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", 0, "body text",
             headings: [new Heading("Detected Heading", "sectionHeading", Offset: 0, PageNumber: 0)]);
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual("Detected Heading", docs[0].Heading);
         Assert.IsTrue(docs[0].Content.Contains("Detected Heading"));
     }
 
     [TestMethod]
-    public void ChunkDocuments_NoBreadcrumbOrHeadings_HeadingIsNull()
+    public async Task ChunkDocuments_NoBreadcrumbOrHeadings_HeadingIsNull()
     {
         var service = BuildService(MockStrategy());
         var doc     = Doc("doc1", 0, "body text");
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         Assert.IsNull(docs[0].Heading);
         Assert.AreEqual("body text", docs[0].Content);
     }
 
     [TestMethod]
-    public void ChunkDocuments_MapsExtractionFieldsOntoDocumentChunk()
+    public async Task ChunkDocuments_MapsExtractionFieldsOntoDocumentChunk()
     {
         var service   = BuildService(MockStrategy());
         var createdAt = DateTimeOffset.Parse("2020-01-01T00:00:00Z");
@@ -215,7 +234,7 @@ public class ChunkingServiceTests
             lastModifiedDate: lastMod,
             tables:           [table]);
 
-        var (docs, _) = service.ChunkDocuments([doc]);
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
 
         var result = docs[0];
         Assert.AreEqual("Title", result.Title);
@@ -228,7 +247,21 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public void ChunkDocuments_ChunkIndexIsScopedPerDocument_NotAcrossRun()
+    public async Task ChunkDocuments_SetsFamilyIdAndDomainTagFromFamilyIdEmbedder()
+    {
+        var doc = Doc("doc1", 0, "content", title: "CAO GGZ (Versie 4)");
+
+        var (docs, _) = await BuildService(MockStrategy()).ChunkDocumentsAsync([doc]);
+
+        // No persisted corpus to cluster against, so this document is its own family -
+        // FamilyId is deterministically its own SourceId (see ClusterByCosineSimilarity).
+        Assert.AreEqual("doc1", docs[0].FamilyId);
+        Assert.AreEqual("GGZ", docs[0].DomainTag);
+        Assert.AreEqual(0, docs[0].ConfusableWith.Count);
+    }
+
+    [TestMethod]
+    public async Task ChunkDocuments_ChunkIndexIsScopedPerDocument_NotAcrossRun()
     {
         // Two docs, each producing 2 chunks — chunk index must restart at 0 for the second
         // document rather than continuing from the first (see comment in ChunkingService).
@@ -236,14 +269,14 @@ public class ChunkingServiceTests
         var service  = BuildService(strategy);
         var docs     = new[] { Doc("doc1", 0, "x"), Doc("doc2", 0, "y") };
 
-        var (result, _) = service.ChunkDocuments(docs);
+        var (result, _) = await service.ChunkDocumentsAsync(docs);
 
         var doc2Chunks = result.Where(d => d.DocumentId == "doc2").OrderBy(d => d.ChunkIndex).ToList();
         CollectionAssert.AreEqual(new[] { 0, 1 }, doc2Chunks.Select(d => d.ChunkIndex).ToList());
     }
 
     [TestMethod]
-    public void ChunkDocuments_OrdersBySourceIdThenOrdinal()
+    public async Task ChunkDocuments_OrdersBySourceIdThenOrdinal()
     {
         var strategy = MockStrategy();
         var service  = BuildService(strategy);
@@ -254,7 +287,7 @@ public class ChunkingServiceTests
             Doc("docA", 1, "a1"),
         };
 
-        var (result, _) = service.ChunkDocuments(docs);
+        var (result, _) = await service.ChunkDocumentsAsync(docs);
 
         CollectionAssert.AreEqual(
             new[] { "a1", "a2", "b1" },
@@ -262,11 +295,11 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public void ChunkDocuments_NoDocuments_ReturnsEmptyStatsAndDocs()
+    public async Task ChunkDocuments_NoDocuments_ReturnsEmptyStatsAndDocs()
     {
         var service = BuildService(MockStrategy(name: "Strat"));
 
-        var (docs, stats) = service.ChunkDocuments([]);
+        var (docs, stats) = await service.ChunkDocumentsAsync([]);
 
         Assert.AreEqual(0, docs.Count);
         Assert.AreEqual(0, stats.ChunksProduced);
@@ -274,12 +307,39 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public void ChunkDocuments_StatsReflectStrategyNameAndChunkCount()
+    public async Task ChunkDocuments_TokenCount_AddsPrefixEstimateOnTopOfChunkEstimate()
+    {
+        // "My Title\n\n" prefix is 10 chars -> ceil(10 / 3.1) = 4 tokens at the prose ratio,
+        // on top of the chunk's own pre-computed EstimatedTokens (100, picked arbitrarily to
+        // be distinguishable from the prefix estimate).
+        var strategy = MockStrategy(chunkFn: content => [new TextChunk(0, content, EstimatedTokens: 100)]);
+        var service  = BuildService(strategy);
+        var doc      = Doc("doc1", 0, "body text", title: "My Title");
+
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
+
+        Assert.AreEqual(104, docs[0].TokenCount);
+    }
+
+    [TestMethod]
+    public async Task ChunkDocuments_TokenCount_NoTitleOrHeading_EqualsChunkEstimateAlone()
+    {
+        var strategy = MockStrategy(chunkFn: content => [new TextChunk(0, content, EstimatedTokens: 42)]);
+        var service  = BuildService(strategy);
+        var doc      = Doc("doc1", 0, "body text");
+
+        var (docs, _) = await service.ChunkDocumentsAsync([doc]);
+
+        Assert.AreEqual(42, docs[0].TokenCount);
+    }
+
+    [TestMethod]
+    public async Task ChunkDocuments_StatsReflectStrategyNameAndChunkCount()
     {
         var strategy = MockStrategy(name: "Strat", chunkFn: content => [new TextChunk(0, content), new TextChunk(1, content)]);
         var service  = BuildService(strategy);
 
-        var (docs, stats) = service.ChunkDocuments([Doc("doc1", 0, "content")]);
+        var (docs, stats) = await service.ChunkDocumentsAsync([Doc("doc1", 0, "content")]);
 
         Assert.AreEqual(2, docs.Count);
         Assert.AreEqual(2, stats.ChunksProduced);

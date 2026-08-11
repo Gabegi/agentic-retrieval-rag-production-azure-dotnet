@@ -24,6 +24,7 @@ public record EvalRow(
     long            InputTokens,
     long            OutputTokens,
     double          CostUsd,            // (InputTokens × inputPrice + OutputTokens × outputPrice) / 1M
+    long            ContextTokens,      // estimated tokens in RetrievedContext (see ContextTokenEstimator) — the query-time cost driver first-split-design.md §5 asks to track directly, not inferred from InputTokens (which also carries system-instruction/prompt overhead)
 
     // Scores — Answer scenarios only (−1 = not scored, e.g. a Refusal scenario)
     double          Groundedness,       // 1-5  LLM — response grounded in retrieved context?
@@ -58,6 +59,7 @@ public record EvalRow(
         InputTokens: 0,
         OutputTokens: 0,
         CostUsd: 0,
+        ContextTokens: 0,
         Groundedness: 0, Relevance: 0, Coherence: 0,
         Equivalence: 0,
         Retrieval: 0,  // re-enable with Retrieval
@@ -90,6 +92,7 @@ public record EvalRow(
         InputTokens: 0,
         OutputTokens: 0,
         CostUsd: 0,
+        ContextTokens: 0,
         Groundedness: -1, Relevance: -1, Coherence: -1,
         Equivalence: -1,
         Retrieval: -1,

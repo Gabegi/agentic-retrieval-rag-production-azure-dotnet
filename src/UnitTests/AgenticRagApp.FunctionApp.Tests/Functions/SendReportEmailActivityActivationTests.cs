@@ -55,7 +55,6 @@ public class SendReportEmailActivityActivationTests
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("eval-results"),
             sp.GetRequiredService<ReportEmailOptions>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<RunReportAssembler>()));
         services.AddSingleton(sp => new RunAnalysisAgent(

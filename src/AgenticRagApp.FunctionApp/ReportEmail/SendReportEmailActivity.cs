@@ -159,7 +159,7 @@ public class SendReportEmailActivity
             return ([new ReportAttachment(fileName, "application/json", BinaryData.FromBytes(json))],
                     $"Full run summary attached as {fileName} ({json.Length / 1024.0:N0} KB).");
 
-        var blobPath = $"runs/_summaries/{summary.InstanceId}.json";
+        var blobPath = ReportPath.Build(DateTimeOffset.UtcNow, "run-summary", summary.InstanceId);
         try
         {
             await _blobStore.UploadAsync(_reports, blobPath, BinaryData.FromBytes(json), overwrite: true, ct);
@@ -197,7 +197,7 @@ public class SendReportEmailActivity
             // The email already went out; failing the activity here would misreport a
             // successful send as a failure. Losing this write only means the next run's delta
             // section falls back to "no previous run on record".
-            _logger.LogWarning(ex, "Email for {InstanceId} was sent but runs/_last-run.json could not be updated", summary.InstanceId);
+            _logger.LogWarning(ex, "Email for {InstanceId} was sent but _last-run.json could not be updated", summary.InstanceId);
         }
     }
 }

@@ -88,6 +88,7 @@ public class RestoreServiceTests
 
         Assert.AreEqual("instance-1", result.SnapshotInstanceId);
         Assert.AreEqual(1, result.ChunksRestored);
+        Assert.AreEqual(0, result.ChunksFailed);
         Assert.AreEqual(0, result.ChunksMissingVector);
         Assert.AreEqual(42, result.IndexDocumentCountSnapshot);
         Assert.AreEqual("my-index", result.SearchIndexName);
@@ -111,5 +112,19 @@ public class RestoreServiceTests
         var result = await service.RestoreFromLatestSnapshotAsync();
 
         Assert.AreEqual(1, result.ChunksMissingVector);
+    }
+
+    [TestMethod]
+    public async Task RestoreFromLatestSnapshotAsync_UploadReportsFailures_PropagatesChunksFailed()
+    {
+        var chunk = new SnapshotChunk("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash1");
+        var snapshotService = MockSnapshotService([chunk], "instance-1");
+        var vectorCache      = MockVectorCache(new() { ["hash1"] = [0.1f, 0.2f] });
+        var uploadService    = MockUploadService(new UploadResult(0, 1, 0, 0, 0, []));
+        var service          = BuildService(snapshotService, vectorCache, uploadService);
+
+        var result = await service.RestoreFromLatestSnapshotAsync();
+
+        Assert.AreEqual(1, result.ChunksFailed);
     }
 }

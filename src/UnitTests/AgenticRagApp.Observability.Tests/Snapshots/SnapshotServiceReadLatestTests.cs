@@ -1,3 +1,4 @@
+using Azure;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -8,7 +9,7 @@ namespace AgenticRagApp.Observability.Reports.Tests;
 [TestClass]
 public class SnapshotServiceReadLatestTests
 {
-    private static readonly IReadOnlyDictionary<string, string> NoMetadata = new Dictionary<string, string>();
+    private const string PointerPath = "_latest-snapshot-pdf.json";
 
     private static SnapshotService BuildService(Mock<IBlobStore> blobStore) =>
         new(blobStore.Object, new Mock<BlobContainerClient>().Object, NullLogger<SnapshotService>.Instance);
@@ -16,9 +17,9 @@ public class SnapshotServiceReadLatestTests
     [TestMethod]
     public async Task ReadLatestAsync_NoSnapshotsExist_ReturnsEmptyAndNullInstanceId()
     {
+        // No pointer setup - Moq's default for an unconfigured generic call returns
+        // default(T), i.e. (null, null), mirroring "no snapshot pointer exists yet".
         var blobStore = new Mock<IBlobStore>();
-        blobStore.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/", It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
         var service = BuildService(blobStore);
 
         var (chunks, instanceId) = await service.ReadLatestAsync("pdf");
@@ -28,22 +29,23 @@ public class SnapshotServiceReadLatestTests
     }
 
     [TestMethod]
-    public async Task ReadLatestAsync_MultipleGenerations_ReadsTheMostRecentOne()
+    public async Task ReadLatestAsync_PointerHasEntries_ReadsTheFirstOne()
     {
         var blobStore = new Mock<IBlobStore>();
-        blobStore.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(
+        blobStore.Setup(s => s.TryReadJsonWithETagAsync<SnapshotService.SnapshotPointer>(
+                It.IsAny<BlobContainerClient>(), PointerPath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((new SnapshotService.SnapshotPointer(
             [
-                ("snapshots/pdf/2024/01/01/instance-old/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-01-01"), (long?)null, NoMetadata),
-                ("snapshots/pdf/2024/06/01/instance-new/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-06-01"), (long?)null, NoMetadata),
-            ]);
+                new SnapshotService.SnapshotPointerEntry("2024/06/01/ts-snapshot-pdf-instance-new.json", "instance-new"),
+                new SnapshotService.SnapshotPointerEntry("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"),
+            ]), (ETag?)null));
 
         var expectedChunks = new List<SnapshotChunk>
         {
             new("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash1"),
         };
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
-                It.IsAny<BlobContainerClient>(), "snapshots/pdf/2024/06/01/instance-new/full-index.json", It.IsAny<CancellationToken>()))
+                It.IsAny<BlobContainerClient>(), "2024/06/01/ts-snapshot-pdf-instance-new.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedChunks);
 
         var service = BuildService(blobStore);
@@ -59,11 +61,12 @@ public class SnapshotServiceReadLatestTests
     public async Task ReadLatestAsync_LatestSnapshotUnreadable_ReturnsEmptyRatherThanThrowing()
     {
         var blobStore = new Mock<IBlobStore>();
-        blobStore.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), "snapshots/pdf/", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(
+        blobStore.Setup(s => s.TryReadJsonWithETagAsync<SnapshotService.SnapshotPointer>(
+                It.IsAny<BlobContainerClient>(), PointerPath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((new SnapshotService.SnapshotPointer(
             [
-                ("snapshots/pdf/2024/06/01/instance-new/full-index.json", (DateTimeOffset?)DateTimeOffset.Parse("2024-06-01"), (long?)null, NoMetadata),
-            ]);
+                new SnapshotService.SnapshotPointerEntry("2024/06/01/ts-snapshot-pdf-instance-new.json", "instance-new"),
+            ]), (ETag?)null));
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
                 It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("corrupt"));

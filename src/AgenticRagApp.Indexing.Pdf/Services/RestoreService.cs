@@ -38,7 +38,7 @@ public class RestoreService : IRestoreService
         if (snapshotChunks.Count == 0)
         {
             _logger.LogWarning("No snapshot found for source '{Source}' — nothing to restore.", Source);
-            return new RestoreResult(snapshotInstanceId, 0, 0, null, null,
+            return new RestoreResult(snapshotInstanceId, 0, 0, 0, null, null,
                 _config.SearchIndexName, _config.OpenAiEmbeddingModelName, _config.OpenAiEmbeddingDeployment);
         }
 
@@ -82,6 +82,7 @@ public class RestoreService : IRestoreService
         return new RestoreResult(
             snapshotInstanceId,
             uploadResult.DocsUploaded,
+            uploadResult.DocsFailed,
             missingVector,
             uploadResult.IndexDocumentCountSnapshot,
             uploadResult.IndexStorageSizeBytesSnapshot,

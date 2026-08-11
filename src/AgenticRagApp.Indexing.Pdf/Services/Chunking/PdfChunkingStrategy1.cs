@@ -79,6 +79,9 @@ public sealed class PdfChunkingStrategy1 : IChunkingStrategy
         ChunkingHelper.Flush(chunks, current, _overlapSize);
         ChunkingHelper.MergeTinyTrailingChunk(chunks, _minTail);
 
-        return chunks.Select((text, index) => new TextChunk(index, text)).ToList();
+        // Never table-aware (see this class's own header comment) - every chunk here is
+        // estimated at the prose ratio.
+        return chunks.Select((text, index) =>
+            new TextChunk(index, text, EstimatedTokens: ChunkingHelper.EstimateTokens(text, isTable: false))).ToList();
     }
 }

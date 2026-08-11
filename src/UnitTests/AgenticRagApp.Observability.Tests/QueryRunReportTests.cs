@@ -34,6 +34,7 @@ public class QueryRunReportTests
         InputTokens:        100,
         OutputTokens:       50,
         TotalTokens:        150,
+        ContextTokens:      42,
         Temperature:        temperature,
         MaxOutputTokens:    maxOutputTokens,
         TopP:               topP,
@@ -66,6 +67,7 @@ public class QueryRunReportTests
         Assert.AreEqual(100L, report.InputTokens);
         Assert.AreEqual(50L, report.OutputTokens);
         Assert.AreEqual(150L, report.TotalTokens);
+        Assert.AreEqual(42L, report.ContextTokens);
     }
 
     [TestMethod]

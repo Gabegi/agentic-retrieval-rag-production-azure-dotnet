@@ -1,4 +1,5 @@
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace RagApp.UnitTests.Indexing;
 
@@ -35,6 +36,20 @@ public class PdfChunkingStrategy1Tests
         Assert.AreEqual(1, chunks.Count);
         Assert.AreEqual("A short paragraph.", chunks[0].Content);
         Assert.AreEqual(0, chunks[0].Index);
+    }
+
+    [TestMethod]
+    public void EstimatedTokens_IsSetOnEveryChunk_AtTheProseRatio()
+    {
+        // Strategy1 is never table-aware, so every chunk uses the prose ratio regardless of
+        // content shape - see ChunkingHelper.EstimateTokens.
+        var strategy = new PdfChunkingStrategy1(targetSize: 1_000, maxSize: 1_500, minTail: 200, overlapSize: 150);
+        var content  = "A short paragraph.";
+
+        var chunks = strategy.Chunk(content);
+
+        Assert.AreEqual(ChunkingHelper.EstimateTokens(content, isTable: false), chunks[0].EstimatedTokens);
+        Assert.IsTrue(chunks[0].EstimatedTokens > 0);
     }
 
     [TestMethod]

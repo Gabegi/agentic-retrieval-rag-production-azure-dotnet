@@ -17,7 +17,7 @@ public class ExtractionService : IExtractionService
     private readonly IRunReportWriter           _reportWriter;
     private readonly ILogger<ExtractionService> _logger;
 
-    private const string ReportFolder = "indexing/extraction-diff";
+    private const string DiffReportName = "pdf-extraction-diff";
 
     public ExtractionService(
         BlobContainerClient        container,
@@ -202,7 +202,10 @@ public class ExtractionService : IExtractionService
     // content, so this stays small regardless of corpus size.
     private async Task EmitMetricsAndBuildReport(DiffResult diff, string? instanceId, CancellationToken ct)
     {
-        Instrumentation.DocsExtracted.Add(diff.Output.Docs.Count);
+        // diff.Output.Docs is page-grained (one PdfExtractionDocument per page, per
+        // BuildExtractionOutput) - count distinct SourceIds so this stays a document count,
+        // matching DocsNew/DocsUpdated/DocsSkipped below.
+        Instrumentation.DocsExtracted.Add(diff.Output.Docs.Select(d => d.SourceId).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Instrumentation.DocsSkipped.Add(diff.Skipped);
         Instrumentation.DocsNew.Add(diff.NewCount);
         Instrumentation.DocsUpdated.Add(diff.Updated);
@@ -223,7 +226,7 @@ public class ExtractionService : IExtractionService
         };
 
         await _reportWriter.WriteReportAsync(
-            StageReportPath.Build(ReportFolder, runAt, instanceId, "diff"), report, ct);
+            StageReportPath.Build(DiffReportName, runAt, instanceId), report, ct);
     }
 
 // SearchDocumentStore.GetCurrentIndexedDocumentDatesAsync = 
@@ -251,7 +254,9 @@ public class ExtractionService : IExtractionService
     // Assemble ExtractionStageMetrics to return to the activity
     private static ExtractionStageMetrics BuildStats(DiffResult diff, IReadOnlyList<string> extraRedFlags) => new(
         Source:                 diff.Source,
-        DocsToProcess:          diff.ToProcess.Count,
+        // diff.ToProcess is page-grained, same as diff.Output.Docs above - distinct SourceIds
+        // gives the document count report-schema.md documents this field as (= DocsNew + DocsUpdated).
+        DocsToProcess:          diff.ToProcess.Select(d => d.SourceId).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
         DocsSkipped:            diff.Skipped,
         DocsNew:                diff.NewCount,
         DocsUpdated:            diff.Updated,

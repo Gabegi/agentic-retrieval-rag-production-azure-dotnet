@@ -173,7 +173,7 @@ public class CsvExtractionOrchestratorTests
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => orchestrator.ExtractDocumentsAsync());
 
         reportWriter.Verify(w => w.WriteReportAsync(
-            It.Is<string>(p => p.Contains("validation-report")), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.Is<string>(p => p.Contains("csv-validation")), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]

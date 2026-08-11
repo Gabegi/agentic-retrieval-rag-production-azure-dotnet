@@ -7,14 +7,19 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // vs the page-only boundaries GetPages relies on today.
 // - Every span kept (not anchor-only like the others): a section only means something
 //   as a start-to-end range.
-// - Elements stay as raw JSON-pointer strings; resolving them is a future
-//   chunk-builder's job.
+// - Elements stay as raw JSON-pointer strings, kept verbatim; ResolvedElements is the
+//   same list dereferenced against this same result (ResolveSectionElementsHelper).
 internal static class GetSectionsHelper
 {
     public static IReadOnlyList<SectionInfo> GetSections(AnalyzeResult result) =>
         (result.Sections ?? [])
-            .Select(s => new SectionInfo(
-                (s.Spans ?? []).Select(sp => new SectionSpan(sp.Offset, sp.Length)).ToList(),
-                s.Elements?.ToList() ?? []))
+            .Select(s =>
+            {
+                var elements = s.Elements?.ToList() ?? [];
+                return new SectionInfo(
+                    (s.Spans ?? []).Select(sp => new SectionSpan(sp.Offset, sp.Length)).ToList(),
+                    elements,
+                    ResolveSectionElementsHelper.Resolve(elements, result));
+            })
             .ToList();
 }

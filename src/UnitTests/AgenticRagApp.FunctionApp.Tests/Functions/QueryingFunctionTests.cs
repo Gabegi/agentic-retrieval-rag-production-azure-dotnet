@@ -29,6 +29,7 @@ public class QueryingFunctionTests
         InputTokens:         10,
         OutputTokens:        20,
         TotalTokens:         30,
+        ContextTokens:       15,
         Temperature:         null,
         MaxOutputTokens:     null,
         TopP:                null,
