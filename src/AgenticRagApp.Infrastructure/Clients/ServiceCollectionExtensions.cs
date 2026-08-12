@@ -116,12 +116,14 @@ public static class ServiceCollectionExtensions
               .AsIChatClient())
             .UseOpenTelemetry(sourceName: "Microsoft.Extensions.AI", configure: c => c.EnableSensitiveData = true);
 
+        // All three pin the api-version explicitly - see SearchServiceVersion for why the SDK
+        // default is not good enough here.
         services.AddSingleton(_ =>
-            new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential));
+            new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential, SearchServiceVersion.Options()));
         services.AddSingleton(_ =>
-            new SearchIndexClient(new Uri(config.SearchEndpoint), credential));
+            new SearchIndexClient(new Uri(config.SearchEndpoint), credential, SearchServiceVersion.Options()));
         services.AddSingleton(_ =>
-            new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential));
+            new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential, SearchServiceVersion.Options()));
 
         // Document Intelligence is optional — only registered when configured. Consumers
         // that need it (e.g. the PDF extraction backend) are responsible for checking

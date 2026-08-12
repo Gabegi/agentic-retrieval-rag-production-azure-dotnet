@@ -489,115 +489,134 @@ public class PdfExtractionPipelineTests
     private static PdfDocumentStructure EmptyStructure() => new(
         Headings: [], Boilerplate: [], Tables: [], PageDimensions: [], SelectionMarks: [], Figures: [], Lines: [], Sections: []);
 
-    [TestMethod]
-    public void NoFileResults_ProducesEmptyLookup()
-    {
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup([]);
+    // ── BuildDocuments: page -> document assembly (action-plan.md C8) ─────────
+    // These replace the old BuildPageContextLookup tests. That method filtered structure
+    // down to each page; there is no per-page record any more, so the thing worth testing
+    // is the assembly itself - specifically that PageSpans stay exact, since every offset
+    // downstream is measured against them.
 
-        Assert.AreEqual(0, lookup.Count);
+    private static PdfCleanResult CleanedPages(params (string Blob, int Page, string Content)[] pages)
+    {
+        var result = new PdfCleanResult();
+        foreach (var (blob, page, content) in pages)
+            result.AddRecord(new CleanedPdfPageRecord
+            {
+                BlobName = blob, PageNumber = page, PageContent = content, Title = "T",
+            });
+        return result;
     }
 
     [TestMethod]
-    public void FailedFile_IsExcludedEntirely_EvenIfItCarriedBreadcrumbs()
+    public void BuildDocuments_OnePerBlob_NotOnePerPage()
     {
-        var failed = ResultWithStructure("bad.pdf", null, ok: false, breadcrumbs: new Dictionary<int, string> { [1] = "Chapter 1" });
+        var docs = PdfExtractionPipeline.BuildDocuments(
+            [SuccessResult("a.pdf"), SuccessResult("b.pdf")],
+            CleanedPages(("a.pdf", 1, "one"), ("a.pdf", 2, "two"), ("b.pdf", 1, "three")),
+            [], []);
 
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup([failed]);
-
-        Assert.AreEqual(0, lookup.Count);
+        Assert.AreEqual(2, docs.Count);
+        Assert.AreEqual(2, docs.Single(d => d.SourceId == "a.pdf").PageSpans.Count);
     }
 
     [TestMethod]
-    public void PageWithOnlyABreadcrumb_GetsAnEntry_WithEmptyListsElsewhere()
+    public void BuildDocuments_PageSpansAddressTheAssembledContentExactly()
     {
-        var breadcrumbs = new Dictionary<int, string> { [1] = "Chapter 1 > Section A" };
-        var file = ResultWithStructure("doc.pdf", EmptyStructure(), breadcrumbs: breadcrumbs);
+        var docs = PdfExtractionPipeline.BuildDocuments(
+            [SuccessResult("a.pdf")],
+            CleanedPages(("a.pdf", 1, "alpha"), ("a.pdf", 2, "beta"), ("a.pdf", 3, "gamma")),
+            [], []);
 
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup([file]);
+        var doc = docs.Single();
 
-        Assert.AreEqual(1, lookup.Count);
-        var context = lookup[("doc.pdf", 1)];
-        Assert.AreEqual("Chapter 1 > Section A", context.Breadcrumb);
-        Assert.AreEqual(0, context.Headings.Count);
-        Assert.AreEqual(0, context.Tables.Count);
-        Assert.IsNull(context.Dimensions);
+        // The whole point of recording spans during assembly rather than reconstructing
+        // them: slicing Content at a span must return that page's text back verbatim,
+        // including for pages after the first, where the separator has shifted everything.
+        foreach (var (span, expected) in doc.PageSpans.Zip(new[] { "alpha", "beta", "gamma" }))
+            Assert.AreEqual(expected, doc.Content.Substring(span.Offset, span.Length));
     }
 
     [TestMethod]
-    public void PageWithNoSignalsAtAll_GetsNoEntry_SparseByDesign()
+    public void BuildDocuments_PagesAreOrderedByPageNumber_NotInputOrder()
     {
-        // A page number that never appears in any of Headings/Boilerplate/Tables/
-        // PageDimensions/SelectionMarks/Figures/Lines/SectionBreadcrumbs never becomes a
-        // lookup key at all - callers fall back to PdfPageContext.Empty for it.
-        var file = ResultWithStructure("doc.pdf", EmptyStructure());
+        var docs = PdfExtractionPipeline.BuildDocuments(
+            [SuccessResult("a.pdf")],
+            CleanedPages(("a.pdf", 3, "third"), ("a.pdf", 1, "first"), ("a.pdf", 2, "second")),
+            [], []);
 
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup([file]);
+        var doc = docs.Single();
 
-        Assert.AreEqual(0, lookup.Count);
+        CollectionAssert.AreEqual(new[] { 1, 2, 3 }, doc.PageSpans.Select(s => s.PageNumber).ToArray());
+        Assert.IsTrue(doc.Content.StartsWith("first", StringComparison.Ordinal));
     }
 
     [TestMethod]
-    public void EverySignalType_MergesOntoTheSamePageEntry_WhenAllPresentOnThatPage()
+    public void BuildDocuments_CarriesRoutingAndLanguage()
     {
-        var structure = new PdfDocumentStructure(
-            Headings:       [new Heading("Intro", "title", 0, 2)],
-            Boilerplate:    [new Heading("Footer text", "pageFooter", 5, 2)],
-            Tables:         [new TableInfo(1, 1, [new TableCellInfo(0, 0, "content", "a", null, null)], Offset: 0, PageNumber: 2, Caption: null, Footnotes: [], Regions: [])],
-            PageDimensions: [new PageDimensions(2, 612, 792, "pixel")],
-            SelectionMarks: [new SelectionMarkInfo(2, "selected", 0, 0.9, [])],
-            Figures:        [new FigureInfo("A figure", 0, 2, "fig1", [])],
-            Lines:          [new LineInfo("A line of text", 0, 2, [])],
-            Sections:       []);
-        var file = ResultWithStructure("doc.pdf", structure, breadcrumbs: new Dictionary<int, string> { [2] = "Chapter 2" });
+        // Both were computed at extraction and read by nothing at all before C7.
+        var result = SuccessResult("a.pdf") with { Language = "nl" };
 
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup([file]);
+        var docs = PdfExtractionPipeline.BuildDocuments(
+            [result], CleanedPages(("a.pdf", 1, "text")), [], []);
 
-        Assert.AreEqual(1, lookup.Count);
-        var context = lookup[("doc.pdf", 2)];
-        Assert.AreEqual("Chapter 2", context.Breadcrumb);
-        Assert.AreEqual(1, context.Headings.Count);
-        Assert.AreEqual(1, context.Boilerplate.Count);
-        Assert.AreEqual(1, context.Tables.Count);
-        Assert.IsNotNull(context.Dimensions);
-        Assert.AreEqual(1, context.SelectionMarks.Count);
-        Assert.AreEqual(1, context.Figures.Count);
-        Assert.AreEqual(1, context.Lines.Count);
+        Assert.AreEqual("nl", docs.Single().Language);
     }
 
     [TestMethod]
-    public void SignalsOnDifferentPages_ProduceSeparateEntries_NotCrossContaminated()
+    public void BuildDocuments_BlobWithNoCleanedPages_ProducesNoDocument()
     {
-        var structure = new PdfDocumentStructure(
-            Headings:       [new Heading("Page 1 heading", "title", 0, 1), new Heading("Page 2 heading", "title", 0, 2)],
-            Boilerplate:    [], Tables: [], PageDimensions: [], SelectionMarks: [], Figures: [], Lines: [], Sections: []);
-        var file = ResultWithStructure("doc.pdf", structure);
+        // "Extraction produced nothing for this file" is a real outcome the validation
+        // report already covers. An empty-content document would chunk to zero chunks while
+        // looking like a successfully processed file.
+        var docs = PdfExtractionPipeline.BuildDocuments(
+            [SuccessResult("a.pdf")], CleanedPages(), [], []);
 
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup([file]);
-
-        Assert.AreEqual(2, lookup.Count);
-        Assert.AreEqual("Page 1 heading", lookup[("doc.pdf", 1)].Headings[0].Content);
-        Assert.AreEqual("Page 2 heading", lookup[("doc.pdf", 2)].Headings[0].Content);
-        Assert.AreEqual(0, lookup[("doc.pdf", 1)].Tables.Count);
+        Assert.AreEqual(0, docs.Count);
     }
 
     [TestMethod]
-    public void MultipleFiles_KeyedByBlobNameAndPageNumber_DoNotCollide()
+    public void BuildDocuments_BlankPage_GetsNoSeparator_ButKeepsItsSpan()
     {
-        var structureA = new PdfDocumentStructure(
-            Headings: [new Heading("Doc A heading", "title", 0, 1)],
-            Boilerplate: [], Tables: [], PageDimensions: [], SelectionMarks: [], Figures: [], Lines: [], Sections: []);
-        var structureB = new PdfDocumentStructure(
-            Headings: [new Heading("Doc B heading", "title", 0, 1)],
-            Boilerplate: [], Tables: [], PageDimensions: [], SelectionMarks: [], Figures: [], Lines: [], Sections: []);
+        // A caption-less diagram page cleans to nothing (PdfCleaner.ConvertFigures drops the
+        // placeholder) and is kept as a record rather than dropped, so this is the ordinary
+        // case for a picture-only page, not an edge case.
+        var clean = new PdfCleanResult();
+        clean.AddRecord(new CleanedPdfPageRecord { BlobName = "a.pdf", PageNumber = 1, PageContent = "alpha", Title = "T" });
+        clean.AddRecord(new CleanedPdfPageRecord { BlobName = "a.pdf", PageNumber = 2, PageContent = "", Title = "T", IsPictureOnlyPage = true });
+        clean.AddRecord(new CleanedPdfPageRecord { BlobName = "a.pdf", PageNumber = 3, PageContent = "gamma", Title = "T" });
 
-        var lookup = PdfExtractionPipeline.BuildPageContextLookup(
-        [
-            ResultWithStructure("a.pdf", structureA),
-            ResultWithStructure("b.pdf", structureB),
-        ]);
+        var doc = PdfExtractionPipeline.BuildDocuments([SuccessResult("a.pdf")], clean, [], []).Single();
 
-        Assert.AreEqual(2, lookup.Count);
-        Assert.AreEqual("Doc A heading", lookup[("a.pdf", 1)].Headings[0].Content);
-        Assert.AreEqual("Doc B heading", lookup[("b.pdf", 1)].Headings[0].Content);
+        // Separating on both sides of nothing would leave a four-newline run. PdfCleaner
+        // collapses \n{3,} per page, but assembly is the only stage after cleaning and
+        // nothing re-collapses the joined text - so this is the one place such a run can
+        // reach the index.
+        Assert.AreEqual("alpha\n\ngamma", doc.Content);
+
+        // The page is still recorded. Dropping the span would drop IsPictureOnly with it,
+        // which is the only signal that a mostly-normal document has diagram pages in it.
+        var blank = doc.PageSpans.Single(s => s.PageNumber == 2);
+        Assert.AreEqual(0, blank.Length);
+        Assert.IsTrue(blank.IsPictureOnly);
+
+        // And the pages either side still address Content exactly, blank page in between.
+        foreach (var (span, expected) in doc.PageSpans.Zip(new[] { "alpha", "", "gamma" }))
+            Assert.AreEqual(expected, doc.Content.Substring(span.Offset, span.Length));
+    }
+
+    [TestMethod]
+    public void BuildDocuments_BlobNamesDifferingOnlyByCase_AreTwoDocuments()
+    {
+        // Azure blob names are case-sensitive, so this pair can legally sit in one container.
+        // Under a case-insensitive comparer the lookups here threw ArgumentException on the
+        // duplicate key - and threw it after every paid Document Intelligence call in the run
+        // had already been made.
+        var docs = PdfExtractionPipeline.BuildDocuments(
+            [SuccessResult("Beleid.pdf"), SuccessResult("beleid.pdf")],
+            CleanedPages(("Beleid.pdf", 1, "upper"), ("beleid.pdf", 1, "lower")),
+            [], []);
+
+        Assert.AreEqual(2, docs.Count);
+        Assert.AreEqual("upper", docs.Single(d => d.SourceId == "Beleid.pdf").Content);
+        Assert.AreEqual("lower", docs.Single(d => d.SourceId == "beleid.pdf").Content);
     }
 }

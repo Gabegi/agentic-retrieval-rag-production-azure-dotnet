@@ -20,13 +20,18 @@ internal static class ChunkRoutingHelper
     private const double SparseCharsPerPageThreshold   = 1_000;
     private const double HighLossBytesPerCharThreshold = 100;
 
-    // chunking-signals-map.md §4: 50,000 sits in the largest gap in the corpus's own
-    // token distribution (~25,100 -> ~90,900, nothing between) - the readable midpoint of
-    // a real distributional break, not a boundary chosen for its own sake. 4,000 is the
-    // "can the whole document be the retrieval unit" line - below it, a parent/child
-    // hierarchy buys nothing over returning the document whole.
-    private const int LargeTokenThreshold  = 50_000;
-    private const int MediumTokenThreshold = 4_000;
+    // Decision 3: a document needs a navigation summary when its sections compete against
+    // each other in a flat ranking, which is a section-count question, not a size one. Set
+    // where the corpus itself separates: two-thirds of its 2,105 headings sit in four
+    // documents, and this picks out roughly those.
+    //
+    // The old Large/Medium/Small token thresholds (50,000 / 4,000) are gone with the
+    // ChunkRoute enum. The 50,000 line did rest on a real observation - it sat in the
+    // largest gap in the corpus's own token distribution, ~25,100 to ~90,900 with nothing
+    // between - and that observation is recorded in docs/2608/260812/action-plan.md (Q5) so
+    // it survives the constant. The 4,000 line had no such backing and is replaced by
+    // Decision 2's measured return bound.
+    private const int NavigationSummaryHeadingThreshold = 100;
 
     public static DocumentRouting Compute(
         IReadOnlyList<PdfPageRecord> pages,
@@ -62,13 +67,14 @@ internal static class ChunkRoutingHelper
         var estimatedTokens = pages.Sum(p => ChunkingHelper.SplitIntoBlocks(p.PageContent)
             .Sum(block => ChunkingHelper.EstimateTokens(block.Text, block.IsTable)));
 
-        var route = charsPerPage < SparseCharsPerPageThreshold || bytesPerChar >= HighLossBytesPerCharThreshold
-            ? ChunkRoute.Picture
-            : estimatedTokens >= LargeTokenThreshold
-                ? ChunkRoute.Large
-                : estimatedTokens >= MediumTokenThreshold
-                    ? ChunkRoute.Medium
-                    : ChunkRoute.Small;
+        // Decision 1 - the extraction gate. Same two frozen thresholds as before; the only
+        // change is that this is now its own answer rather than one branch of a four-way
+        // ternary that also decided size.
+        var hasExtractableContent =
+            charsPerPage >= SparseCharsPerPageThreshold && bytesPerChar < HighLossBytesPerCharThreshold;
+
+        // Decision 3 - navigation grain, on section count.
+        var needsNavigationSummary = headings.Count >= NavigationSummaryHeadingThreshold;
 
         var headingsPerThousandChars = totalChars == 0 ? 0 : headings.Count / (totalChars / 1_000.0);
 
@@ -89,7 +95,13 @@ internal static class ChunkRoutingHelper
 
         return new DocumentRouting(
             pageCount, totalChars, fileSizeBytes, charsPerPage, bytesPerChar, figuresPerPage,
-            estimatedTokens, route,
+            estimatedTokens,
+            hasExtractableContent,
+            // Decision 2 stays unanswered until the return bound is measured (Phase D).
+            // Null rather than a default: the value it replaces was reasoned and never
+            // verified, and it decides what gets stored.
+            DocumentIsSafeReturnUnit: null,
+            needsNavigationSummary,
             headingsPerThousandChars, numberedHeadingShare, maxSectionSizeChars,
             boilerplateShare, selectionMarksPerPage);
     }

@@ -29,15 +29,28 @@ internal static partial class GetHeadingsHelper
     // evidence this is scoped to (checked against captured headings in both
     // validated documents: matches only the one confirmed legitimate orphan,
     // introduces no new merge candidates).
-    // The roman-numeral branch matches any run of IVXLCDM letters, not just
-    // valid roman numerals (e.g. "Bijlage CIVIL" would match) - a pattern
-    // match, not a validity check. Fine per the empirical scan (zero such
-    // cases in the corpus); tighten only if a real one turns up.
+    // The roman-numeral branch requires TWO OR MORE IVXLCDM letters. A single
+    // letter is inherently ambiguous between a roman numeral and an ordinary
+    // list letter, and D3's corpus scan (docs/2608/260811/
+    // d3-short-label-discovery-findings.md) settled which reading is real here:
+    // the branch fired exactly once across all 51 documents, on
+    // "Mobiliteitsklasse C" - a mobility class labelled A-E, where only C is
+    // also a roman numeral. Its siblings "Mobiliteitsklasse A/B/E" did not
+    // match, so one of five identical headings was treated differently purely
+    // by letter. Requiring 2+ characters removes that false positive and costs
+    // nothing measurable: the scan found zero genuine roman-numeral headings of
+    // any length in the corpus, so no real case is lost, while "Bijlage XII" /
+    // "Hoofdstuk IV" style labels still match if they ever appear. This is the
+    // "tighten only if a real one turns up" condition the previous comment set
+    // out, now met.
+    // Still a pattern match rather than a validity check - "Bijlage CIVIL"
+    // would match - which remains acceptable for the same reason as before:
+    // zero such cases in the corpus.
     // Label word captured (group 1) for the vocabulary-discovery signal.
     // internal (not private): GetQualityWarningsHelper.HeadingWarnings shares
     // this regex to identify post-merge orphans by the same shape, rather
     // than duplicating the pattern.
-    [GeneratedRegex(@"^(\p{L}+)\s+(?:\d+(?:\.\d+)*|[IVXLCDM]+)$")]
+    [GeneratedRegex(@"^(\p{L}+)\s+(?:\d+(?:\.\d+)*|[IVXLCDM]{2,})$")]
     internal static partial Regex BareNumberedLabelWithWord();
 
     // B4 (pre-chunking-action-items.md) - broader than BareNumberedLabelWithWord above,
@@ -48,7 +61,13 @@ internal static partial class GetHeadingsHelper
     // "10. Producten bereiden" - the exact regex hygienecode-numbering-findings.md already
     // validated reproduces Pass 2's 32% figure). ChunkRoutingHelper uses this for B4's
     // per-document numbered-heading share.
-    [GeneratedRegex(@"^(?:\p{L}+\s+(?:\d+(?:\.\d+)*|[IVXLCDM]+)\b|\d+(?:\.\d+)*\.?)(?=\s|$)")]
+    // Roman branch requires 2+ letters for the same reason as
+    // BareNumberedLabelWithWord above - the two must agree on what counts as a
+    // numeral, or a heading could be "numbered" for B4's share while not being a
+    // bare label for the merge, on nothing but a single ambiguous letter.
+    // Verified against the corpus: Hygiene Code's numbering is dotted-number
+    // throughout, so its 123/385 (31.9%) share is unchanged by this.
+    [GeneratedRegex(@"^(?:\p{L}+\s+(?:\d+(?:\.\d+)*|[IVXLCDM]{2,})\b|\d+(?:\.\d+)*\.?)(?=\s|$)")]
     internal static partial Regex NumberedHeadingPrefix();
 
     // Upper bound on a merge-candidate term's length (e.g. "opleiding",

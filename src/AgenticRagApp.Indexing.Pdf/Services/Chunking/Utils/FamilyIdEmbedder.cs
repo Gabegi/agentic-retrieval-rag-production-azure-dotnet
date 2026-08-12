@@ -204,15 +204,16 @@ public class FamilyIdEmbedder
                     confusableOf.TryGetValue(d.SourceId, out var c) ? c : []));
     }
 
-    // One identity per SourceId. PdfExtractionDocument is a per-page record, so headings
-    // have to be gathered across every page of a document, not read off a single row.
+    // One identity per document. This used to open with a GroupBy(SourceId) to gather
+    // headings back across a document's pages - one of the three places that undid the
+    // per-page record shape by hand. Extraction emits whole documents now (action-plan.md
+    // C8), so the grouping is gone and the headings are simply the document's own.
     private List<DocumentIdentity> BuildIdentities(IReadOnlyList<PdfExtractionDocument> docs) =>
-        docs.GroupBy(d => d.SourceId)
-            .Select(g =>
+        docs.Select(g =>
             {
-                var title      = g.First().Title;
+                var title      = g.Title;
                 var domainTag  = DomainTagger.Tag(title);
-                var headings   = g.SelectMany(d => d.Headings)
+                var headings   = g.Headings
                                    .Select(h => h.Content)
                                    .Where(c => !string.IsNullOrWhiteSpace(c));
                 var identityText = string.Join(
@@ -223,7 +224,7 @@ public class FamilyIdEmbedder
                 // change forces a re-embed instead of leaving stale vectors looking current.
                 var hash = HashText($"{_embeddingModelId}\n{identityText}");
 
-                return new DocumentIdentity(g.Key, title, domainTag, identityText, hash);
+                return new DocumentIdentity(g.SourceId, title, domainTag, identityText, hash);
             })
             .ToList();
 

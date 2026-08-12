@@ -1,11 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <!-- ACS email client for AcsEmailSender (ReportEmail/) - every other Azure SDK client this
-         project touches directly (BlobContainerClient) arrives transitively via Infrastructure's
-         PackageReferences; this is the one client Infrastructure doesn't already carry. -->
-    <PackageReference Include="Azure.Communication.Email" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\AgenticRagApp.Infrastructure\AgenticRagApp.Infrastructure.csproj" />
     <ProjectReference Include="..\AgenticRagApp.Common\AgenticRagApp.Common.csproj" />
   </ItemGroup>

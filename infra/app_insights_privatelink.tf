@@ -42,7 +42,7 @@ resource "azurerm_monitor_private_link_scoped_service" "app_insights" {
 # the backing workspace should ALSO be linked into this scope for a
 # fully-private path - deliberately NOT done here. Confirmed 2026-08-07: the
 # deploy SP has zero access in that workspace's subscription
-# (a separate management/logging subscription), not even enough for the
+# (the log analytics/management subscription), not even enough for the
 # azurerm.logmgmt provider to initialize (Microsoft.Resources/subscriptions/
 # providers/read 403s at the subscription scope). Not needed for the actual
 # bug this file fixes, though: Program.cs's OTel exporters

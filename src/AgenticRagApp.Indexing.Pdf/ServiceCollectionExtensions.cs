@@ -25,8 +25,21 @@ public static class ServiceCollectionExtensions
     // resolve a temporary provider mid-registration.
     public static IServiceCollection AddPdfIndexing(this IServiceCollection services, IndexerConfig config)
     {
-        services.AddSingleton<IChunkingStrategy, PdfChunkingStrategy2>();
-        services.AddSingleton<IChunkingService,  ChunkingService>();
+        // Two-axis chunking (docs/2608/260812/chunking_flow_summary.md).
+        //
+        // Axis 2 - the leaf splitter, chosen per block inside a section.
+        services.AddSingleton<ITextSplitter, SectionSplitter>();
+
+        // Axis 1 - one strategy per document, chosen by DocumentStrategySelector from the
+        // three first-split decisions. Only the section cascade is registered: the
+        // whole-document strategy has no selector until the return bound is measured, and the
+        // picture/fallback branch has no implementation until the Content Understanding spike
+        // reports. Registering either now would mean routing documents to code that cannot
+        // yet be right about them.
+        services.AddSingleton<SectionCascadeStrategy>();
+        services.AddSingleton<DocumentStrategySelector>();
+
+        services.AddSingleton<IChunkingService, ChunkingService>();
 
         // Corpus-wide family/domain identity store - "pipeline-artifacts" container, under
         // its own document-identity/ path prefix (see DocumentIdentityStore), same container

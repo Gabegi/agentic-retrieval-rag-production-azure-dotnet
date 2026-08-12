@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -200,10 +200,11 @@ public class PdfCleaner : IPdfCleaner
 
     private static CleanedPdfPageRecord ToCleanedRecord(PdfPageRecord page, string content) => new()
     {
-        BlobName    = page.BlobName,
-        PageNumber  = page.PageNumber,
-        PageContent = content,
-        Title       = TrimOrEmpty(page.Title),
+        BlobName          = page.BlobName,
+        PageNumber        = page.PageNumber,
+        PageContent       = content,
+        Title             = TrimOrEmpty(page.Title),
+        IsPictureOnlyPage = page.IsPictureOnlyPage,
     };
 
     private static string TrimOrEmpty(string? value) => value?.Trim() ?? "";

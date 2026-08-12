@@ -18,6 +18,17 @@ public record EvalRow(
     string          RetrievedContext,
     bool            Succeeded,
     string          Error,
+    // Why the app answered the way it did. Without these two, a run where retrieval found
+    // nothing and a run where the retrieved references failed to map are byte-identical in
+    // this file — the 2026-08-11 eval had 31 of 32 answerable questions on the fallback with
+    // no way to tell them apart. stop = a real answer; no_relevant_answer = Search returned
+    // nothing; references_unmappable = Search returned references the mapper dropped (a
+    // knowledge-source SourceDataFields mismatch, not an out-of-scope question).
+    string          FinishReason,
+    // Mapped chunks fed to synthesis. On a blocked row this carries the raw reference count
+    // Search returned instead, so ChunksRetrieved > 0 alongside a fallback answer points at
+    // mapping rather than retrieval.
+    int             ChunksRetrieved,
 
     // Performance
     long            LatencyMs,
@@ -55,6 +66,8 @@ public record EvalRow(
         RetrievedContext: "",
         Succeeded: false,
         Error: error,
+        FinishReason: "call_failed",
+        ChunksRetrieved: 0,
         LatencyMs: latencyMs,
         InputTokens: 0,
         OutputTokens: 0,
@@ -88,6 +101,8 @@ public record EvalRow(
         RetrievedContext: "",
         Succeeded: true,
         Error: "",
+        FinishReason: "content_filter",
+        ChunksRetrieved: 0,
         LatencyMs: latencyMs,
         InputTokens: 0,
         OutputTokens: 0,

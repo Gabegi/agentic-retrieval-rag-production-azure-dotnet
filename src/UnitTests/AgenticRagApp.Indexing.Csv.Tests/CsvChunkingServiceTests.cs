@@ -92,8 +92,8 @@ public class ChunkingServiceTests
         var (docs, _) = service.ChunkDocuments([doc]);
 
         Assert.AreEqual("doc1", docs[0].DocumentId);
-        Assert.AreEqual(5, docs[0].PageNumber);
-        Assert.AreEqual(0, docs[0].ChunkIndex);
+        Assert.AreEqual(5, docs[0].PageStart);
+        Assert.AreEqual(0, docs[0].ChildIndex);
     }
 
     [TestMethod]
@@ -129,7 +129,7 @@ public class ChunkingServiceTests
         var (docs, _) = service.ChunkDocuments([doc]);
 
         Assert.AreEqual("My Title\n\nSection 1\n\nbody text", docs[0].Content);
-        Assert.AreEqual("Section 1", docs[0].Heading);
+        Assert.AreEqual("Section 1", docs[0].HeadingText);
     }
 
     [TestMethod]
@@ -202,8 +202,8 @@ public class ChunkingServiceTests
 
         var (result, _) = service.ChunkDocuments(docs);
 
-        var doc2Chunks = result.Where(d => d.DocumentId == "doc2").OrderBy(d => d.ChunkIndex).ToList();
-        CollectionAssert.AreEqual(new[] { 0, 1 }, doc2Chunks.Select(d => d.ChunkIndex).ToList());
+        var doc2Chunks = result.Where(d => d.DocumentId == "doc2").OrderBy(d => d.ChildIndex).ToList();
+        CollectionAssert.AreEqual(new[] { 0, 1 }, doc2Chunks.Select(d => d.ChildIndex).ToList());
     }
 
     [TestMethod]

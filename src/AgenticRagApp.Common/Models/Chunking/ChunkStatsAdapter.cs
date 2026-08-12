@@ -40,14 +40,17 @@ public class ChunkStatsAdapter : IChunkStatsSource
     [JsonPropertyName("summary")]
     public string? Summary { get; set; }
 
+    // C# names follow IChunk's vocabulary (action-plan.md §4.6); the JSON names stay as
+    // CSV's own schema. PDF and CSV no longer share an index, so CSV's wire format is not
+    // affected by the PDF field rename - only the shared interface it implements is.
     [JsonPropertyName("heading")]
-    public string? Heading { get; set; }
+    public string? HeadingText { get; set; }
 
     [JsonPropertyName("page_number")]
-    public int PageNumber { get; set; }
+    public int PageStart { get; set; }
 
     [JsonPropertyName("chunk_index")]
-    public int ChunkIndex { get; set; }
+    public int ChildIndex { get; set; }
 
     [JsonPropertyName("content_vector")]
     public float[]? ContentVector { get; set; }

@@ -21,16 +21,14 @@ public class DocumentChunkTests
         Title                 = "Gedragscode medewerkers",
         LastModifiedDate      = DateTimeOffset.Parse("2024-05-01T12:00:00Z"),
         Content               = "Gedragscode medewerkers\n\n_Section: Inleiding_\n\nBody text.",
-        Heading               = "_Section: Inleiding_",
-        PageNumber            = 0,
-        ChunkIndex            = 0,
+        HeadingText = "_Section: Inleiding_",
+        PageStart   = 0,
+        ChildIndex  = 0,
         ContentVector         = [0.1f, 0.2f, 0.3f],
         Author                = "Contoso P&O",
         CreatedAt             = DateTimeOffset.Parse("2018-02-01T00:00:00Z"),
         ModDate               = DateTimeOffset.Parse("2023-06-15T00:00:00Z"),
         PageCount             = 12,
-        Bookmarks             = [new Bookmark("Inleiding", 0, 1, false)],
-        Sections              = [new SectionInfo([new SectionSpan(0, 100)], ["/paragraphs/0"], [new SectionElementRef("paragraphs", 0, "Body text.")])],
         Breadcrumb            = "_Section: Inleiding_",
         Structure             = new ChunkStructure(
             Headings:       [new Heading("Inleiding", "sectionHeading", 0, 0)],
@@ -38,8 +36,7 @@ public class DocumentChunkTests
             Tables:         [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0, null, [], [])],
             Dimensions:     new PageDimensions(0, 8.27, 11.69, "inch"),
             SelectionMarks: [new SelectionMarkInfo(0, "selected", 5, 0.98, [new PolygonPoint(1f, 1f)])],
-            Figures:        [new FigureInfo("Organogram Contoso", 20, 0, "/figures/0", ["/paragraphs/3"])],
-            Lines:          [new LineInfo("Gedragscode medewerkers", 0, 0, [new PolygonPoint(0f, 0f)])]),
+            Figures:        [new FigureInfo("Organogram Contoso", 20, 0, "/figures/0", ["/paragraphs/3"])]),
     };
 
     [TestMethod]
@@ -56,9 +53,9 @@ public class DocumentChunkTests
         Assert.AreEqual(original.Title, restored.Title);
         Assert.AreEqual(original.LastModifiedDate, restored.LastModifiedDate);
         Assert.AreEqual(original.Content, restored.Content);
-        Assert.AreEqual(original.Heading, restored.Heading);
-        Assert.AreEqual(original.PageNumber, restored.PageNumber);
-        Assert.AreEqual(original.ChunkIndex, restored.ChunkIndex);
+        Assert.AreEqual(original.HeadingText, restored.HeadingText);
+        Assert.AreEqual(original.PageStart, restored.PageStart);
+        Assert.AreEqual(original.ChildIndex, restored.ChildIndex);
         CollectionAssert.AreEqual(original.ContentVector, restored.ContentVector);
 
         // Everything the chunking rewrite added - the fields the bug lost
@@ -66,21 +63,15 @@ public class DocumentChunkTests
         Assert.AreEqual(original.CreatedAt, restored.CreatedAt);
         Assert.AreEqual(original.ModDate, restored.ModDate);
         Assert.AreEqual(original.PageCount, restored.PageCount);
-        Assert.AreEqual(1, restored.Bookmarks.Count);
-        Assert.AreEqual(original.Bookmarks[0].Title, restored.Bookmarks[0].Title);
-        Assert.AreEqual(1, restored.Sections.Count);
         Assert.AreEqual(original.Breadcrumb, restored.Breadcrumb);
         Assert.AreEqual(1, restored.Structure.Headings.Count);
-        Assert.AreEqual(original.Structure.Headings[0].Content, restored.Structure.Headings[0].Content);
         Assert.AreEqual(1, restored.Structure.Boilerplate.Count);
+        Assert.IsNotNull(restored.Structure.Dimensions);
+        Assert.AreEqual(1, restored.Structure.SelectionMarks.Count);
         Assert.AreEqual(1, restored.Structure.Tables.Count);
         Assert.AreEqual(original.Structure.Tables[0].Cells.Count, restored.Structure.Tables[0].Cells.Count);
-        Assert.IsNotNull(restored.Structure.Dimensions);
-        Assert.AreEqual(original.Structure.Dimensions!.Width, restored.Structure.Dimensions!.Width);
-        Assert.AreEqual(1, restored.Structure.SelectionMarks.Count);
         Assert.AreEqual(1, restored.Structure.Figures.Count);
         Assert.AreEqual(original.Structure.Figures[0].Caption, restored.Structure.Figures[0].Caption);
-        Assert.AreEqual(1, restored.Structure.Lines.Count);
 
         // Derived Tier 2 fields must still be correct after round-tripping - this is
         // exactly what was silently zeroed out by the bug (Tables/Figures reset to
@@ -99,14 +90,30 @@ public class DocumentChunkTests
         using var doc = JsonDocument.Parse(json);
 
         var actualKeys = doc.RootElement.EnumerateObject().Select(p => p.Name).ToHashSet();
+        // Mirrors IndexService.BuildIndexDefinition exactly. The CSV-era fields (summary,
+        // department, quick_code, relative_path, check_date, version) are deliberately
+        // absent - PDF and CSV no longer share an index (action-plan.md B2).
         var expectedKeys = new HashSet<string>
         {
-            "id", "document_id", "title", "last_modified_date",
-            "created_at", "mod_date", "page_count",
+            // identity and position (§4.6's naming rule: *_id names a thing,
+            // *_index names a position within a stated scope)
+            "id", "document_id", "section_id", "section_index", "child_index", "grain",
+            // content and heading context
+            "title", "content", "parent_text",
+            "heading_text", "heading_path", "heading_depth", "heading_source",
+            // document metadata
+            "last_modified_date", "created_at", "mod_date", "page_count",
             "zenya_document_id", "zenya_version", "zenya_status", "zenya_url",
-            "content", "heading",
-            "page_number", "chunk_index", "content_vector",
+            // pages - a unit can span them once sections are the grain
+            "page_start", "page_end",
+            // size - neither reconstructs the other, chars/token is not constant
+            "char_count", "token_count",
+            // identity / ambiguity - the only deterministic fix for wrong-sector answers
+            "family_id", "domain_tag", "confusable_with", "population", "language",
+            "content_vector",
             "table_count", "has_table", "figure_captions",
+            // quality flags
+            "is_overlap", "heading_located", "page_extraction_flag",
         };
 
         CollectionAssert.AreEquivalent(expectedKeys.ToList(), actualKeys.ToList());
@@ -120,6 +127,29 @@ public class DocumentChunkTests
         Assert.AreEqual(1, upload.TableCount);
         Assert.IsTrue(upload.HasTable);
         CollectionAssert.AreEqual(new[] { "Organogram Contoso" }, upload.FigureCaptions.ToList());
+    }
+
+    // Regression guard for the OOM of 260812. DocumentChunk carried the whole document's
+    // Sections (with ResolvedElements) and Bookmarks on EVERY chunk, plus per-page Lines with
+    // their polygons. At 3,046 chunks the hand-off blob reached 772 MB against a 16 MB
+    // extraction artifact for the same corpus, and EmbedAndUploadActivity ran out of memory
+    // deserializing it.
+    //
+    // Asserted as a size ceiling rather than by naming forbidden fields: the failure mode is
+    // "somebody attaches per-document data to a per-chunk record", and the next instance of it
+    // will be some field nobody has written yet. A cap catches that; a deny-list does not.
+    [TestMethod]
+    public void DocumentChunk_SerializedSize_StaysProportionalToItsOwnContent()
+    {
+        var chunk = FullyPopulated();
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(chunk).Length;
+
+        // Generous: this fixture is a ~57-character body carrying a table, a figure and a
+        // vector, so it is already unrepresentatively heavy per character. The point is the
+        // order of magnitude - the real leak made chunks ~253 KB each.
+        Assert.IsTrue(bytes < 8_000,
+            $"a single chunk serialized to {bytes} bytes - check nothing per-DOCUMENT was " +
+            "attached to this per-CHUNK record (see ChunkStructure's comment)");
     }
 
     [TestMethod]

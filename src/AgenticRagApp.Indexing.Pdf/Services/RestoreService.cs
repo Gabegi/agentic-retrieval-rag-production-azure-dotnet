@@ -61,9 +61,10 @@ public class RestoreService : IRestoreService
                 Title            = s.Title,
                 LastModifiedDate = s.LastModifiedDate,
                 Content          = s.Content,
-                Heading          = s.Heading,
-                PageNumber       = s.PageNumber,
-                ChunkIndex       = s.ChunkIndex,
+                HeadingText      = s.HeadingText,
+                PageStart        = s.PageStart,
+                PageEnd          = s.PageStart,
+                ChildIndex       = s.ChildIndex,
                 ContentVector    = vector,
             });
         }

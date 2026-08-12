@@ -2,103 +2,99 @@ using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
-// One PDF page handed to the chunking pipeline. Fully typed on purpose - PDF is this
-// project's only source (see docs/plan210726.md's "no generic" note), and a Metadata
-// string dictionary is exactly what let six CSV-era fields (folder_path, quick_code,
-// check_date, version, summary, plus a Heading nobody ever set) sit unused for so long
-// without anyone noticing: nothing forced a reader to account for every key. A typed
-// record forces that - every field here is either read by ChunkingService or visibly
-// unused right here, not buried behind a string key.
+// One whole PDF handed to the chunking pipeline - not one page (action-plan.md §3.1, C8).
 //
-// Every field extraction produces that's actually useful downstream is carried through -
-// not silently dropped, even where nothing consumes a given field yet (see
-// docs/chunking-rewrite-plan.md). File-level facts (native metadata, bookmarks, DI
-// sections) are duplicated identically across every page of one file, same as Title
-// already was before this rewrite. Page-level structure (headings, tables, figures,
-// lines, selection marks, boilerplate, dimensions, OCR confidence) is filtered to just
-// this page's PageNumber - not the whole file's Structure repeated per page, which would
-// blow up an N-page document's payload roughly N-fold for no reason.
+// This used to be a per-PAGE record, and every consumer that needed document semantics
+// undid that split itself: FamilyIdEmbedder grouped by SourceId to gather headings,
+// ExtractionService counted distinct SourceIds to get a document count, ChunkingService
+// ordered by SourceId then Ordinal to rebuild reading order. Three regroups, each with a
+// comment apologising for the shape. Meanwhile Document Intelligence analyses a whole
+// document in the first place - AnalyzeResult.Content IS the document - so the pages were
+// a slice made only to be glued back together.
 //
-// Deliberately NOT carried:
-//   - PdfExtractionResult.FileSizeBytes/PdfSpecVersion/EstimatedCostUsd - operational
-//     facts already surfaced in the extraction run report, not something a chunk needs.
-//   - PdfExtractionResult.PageErrors/Warnings - not dropped data, already fully surfaced
-//     through PdfPipelineValidator -> PdfExtractionOutput.Issues -> the run report.
-//     Duplicating either here would repackage identical data, not add anything new.
-//   - DocMetadata.Producer/Creator/Subject/Keywords - diagnostics-only signals (pipeline
-//     provenance/QA, e.g. flagging a PDF with no Producer as a non-standard export path -
-//     see PdfNativeMetadataExtractor's Producer-missing warning). Not chunk-worthy, same
-//     reasoning as FileSizeBytes/PdfSpecVersion above.
+// It also cost: the whole file's Sections list was attached to every page, so serialized
+// size grew with sections x pages. Carrying file-level data once removes that by
+// construction.
+//
+// Per-page cleaning is unaffected. PdfCleaner still cleans page by page, and one bad page
+// still becomes a PipelineIssue rather than failing the file; extraction assembles the
+// cleaned pages afterwards and records where each one landed (PageSpans). Per-page error
+// isolation and a single coordinate system were never actually in tension - only the
+// output record's shape coupled them.
+//
+// Deliberately NOT deriving from ExtractionDocumentBase any more: that base is
+// (SourceId, Ordinal, Content), and Ordinal was the page number. A document has no
+// ordinal, and inheriting one that means nothing is worse than not sharing a base at all.
+// CSV keeps its own row-shaped record.
 public sealed record PdfExtractionDocument(
-    string SourceId,   // grouping/chunking boundary — the chunker never blends chunks across different SourceIds; blobName for PDF
-    int    Ordinal,    // page number — used for ordering only
+    // Grouping/chunking boundary - blobName. The chunker never blends across SourceIds.
+    string SourceId,
 
+    // The whole document's cleaned text, assembled from its pages in page order.
+    // PageSpans says which range came from which page.
     string Content,
 
-    // ── File-level (same value on every page of one file) ──────────────────
+    // Where each page's text sits in Content, in page order. Recorded during assembly, so
+    // exact rather than reconstructed - see PageSpan.
+    IReadOnlyList<PageSpan> PageSpans,
 
-    // Native PDF Title if the file has one set, else a filename-derived fallback -
-    // see PdfDocumentIntelligenceAnalyzer.GetTitle.
+    // ── File-level facts (carried once, not repeated per page) ──────────────
+
+    // Native PDF Title if the file has one, else a filename-derived fallback.
     string Title,
 
-    // Native PDF Info-dictionary facts (PdfNativeMetadataExtractor).
+    // Native PDF Info-dictionary facts (PdfNativeMetadataExtractor). ModDate is when the
+    // content was actually last edited - the real "is this policy current" signal, distinct
+    // from LastModifiedDate (blob re-upload timing).
     string?         Author,
     DateTimeOffset? CreatedAt,
-    // The PDF's own ModDate - when the file's content was actually last edited, distinct
-    // from LastModifiedDate below (which only reflects blob re-upload timing, not content
-    // changes). The real "is this policy current" signal for citations.
     DateTimeOffset? ModDate,
     int?            PageCount,
-
-    // The blob's own storage LastModified, full precision (not date-truncated - that
-    // truncation only ever mattered for ExtractionService's own diff comparison, which
-    // reads the blob property directly, not this field).
     DateTimeOffset? LastModifiedDate,
 
-    // Zenya's own identity/lifecycle facts (ZenyaMetadata.FromBlobMetadata) - sourced from
-    // custom blob metadata, not the PDF itself (see ZenyaMetadata's comment for why). All
-    // null is the expected default until whoever uploads a PDF starts setting this metadata;
-    // that's a real traceability gap for a chunk built from this document, not a bug.
+    // Zenya's own identity/lifecycle facts, from custom blob metadata rather than the PDF
+    // itself. All null is the expected default until whoever uploads a PDF sets it - a real
+    // traceability gap for chunks built from this document, not a bug.
     string? ZenyaDocumentId,
     string? ZenyaVersion,
     string? ZenyaStatus,
     string? ZenyaUrl,
 
-    // Raw bookmark/outline tree (Breadcrumb below is the resolved per-page projection of
-    // this - kept here too since the tree itself, e.g. full depth/structure, is lossy to
-    // collapse into a single breadcrumb string).
+    // Raw bookmark/outline tree. Only 5 of 51 documents have one, and the four largest have
+    // none - which is why DI's detected headings, not this, are the primary boundary signal.
     IReadOnlyList<Bookmark> Bookmarks,
 
-    // DI's own semantic section boundaries - not page-scoped (a section's Elements are
-    // JSON-pointer refs that can span pages), so carried at file level, same on every page.
-    // Not consumed by chunk *splitting* yet - that's a chunking-strategy decision, reviewed
-    // separately - but the data isn't dropped in the meantime.
+    // Page number -> breadcrumb text, where the outline covers that page. Kept as a map
+    // rather than resolved onto pages, since a chunk can now span pages.
+    IReadOnlyDictionary<int, string> PageBreadcrumbs,
+
+    // DI's own semantic section tree. Phase A measured its boundaries as identical to the
+    // DI headings below (99.4-100%, both directions), so it is a hierarchy cross-check
+    // rather than a second boundary source - its spans nest, which the flat heading list
+    // does not express.
     IReadOnlyList<SectionInfo> Sections,
 
-    // ── Page-level (filtered to this page's PageNumber) ─────────────────────
+    // ── Document-scoped structure (every element carries its own PageNumber) ─
+    // No longer filtered per page: page filtering existed only to keep the per-page record
+    // from carrying the whole file's structure, and there is no per-page record now.
 
-    // Resolved section context for this page, when the PDF has an outline - hierarchical,
-    // e.g. "Chapter 3 > 3.2 Dosage" (PDFSectionBreadCrumbBuilder). Null means no outline
-    // covers this page, not "unknown."
-    string? Breadcrumb,
-
-    // DI-detected heading paragraphs (title/sectionHeading roles) on this page - works even
-    // when the PDF has no bookmark outline at all, unlike Breadcrumb above.
-    IReadOnlyList<Heading> Headings,
-
-    // DI-detected boilerplate paragraphs (pageHeader/pageFooter/footnote/pageNumber roles)
-    // on this page. Not stripped from Content today - see PdfCleaner's own comment on why
-    // header/footer stripping is deliberately deferred - but available here for whichever
-    // step picks that up.
-    IReadOnlyList<Heading> Boilerplate,
-
-    IReadOnlyList<TableInfo> Tables,
-
-    // Physical page geometry - for a future highlight-on-source feature (pairs with Lines'
-    // polygons), not used by embedding/retrieval today.
-    PageDimensions? Dimensions,
-
+    IReadOnlyList<Heading>           Headings,
+    IReadOnlyList<Heading>           Boilerplate,
+    IReadOnlyList<TableInfo>         Tables,
     IReadOnlyList<SelectionMarkInfo> SelectionMarks,
     IReadOnlyList<FigureInfo>        Figures,
-    IReadOnlyList<LineInfo>          Lines
-) : ExtractionDocumentBase(SourceId, Ordinal, Content);
+    IReadOnlyList<LineInfo>          Lines,
+
+    // ── Routing measurements (action-plan.md C7) ────────────────────────────
+
+    // Computed at extraction and, until now, read by nothing at all. Carries the measured
+    // inputs to all three first-split decisions (chars/page and bytes/char for the
+    // extraction gate, EstimatedTokens for the parent grain, heading counts for the
+    // navigation grain). The old Route enum is gone - it fused a density test and a token
+    // tier into one four-way value that could not express "large but unstructured".
+    DocumentRouting? Routing,
+
+    // "nl"/"en" from DI's own AnalyzeResult.Languages. The corpus is Dutch plus one
+    // 36-page English document whose chars/token ratio is ~4 rather than ~3.2, which makes
+    // every character-derived ceiling wrong for it - including its own routing input.
+    string? Language);

@@ -23,11 +23,11 @@ public static class KnowledgeBaseReferenceMapper
             r.SourceData.TryGetValue("id", out var idRaw);
             r.SourceData.TryGetValue("document_id", out var docIdRaw);
             r.SourceData.TryGetValue("title", out var titleRaw);
-            r.SourceData.TryGetValue("summary", out var summaryRaw);
-            r.SourceData.TryGetValue("page_number", out var pageRaw);
-            r.SourceData.TryGetValue("chunk_index", out var chunkIndexRaw);
-            r.SourceData.TryGetValue("quick_code", out var quickCodeRaw);
-            r.SourceData.TryGetValue("relative_path", out var relativePathRaw);
+            // page_start/child_index replace page_number/chunk_index (action-plan.md §4.6).
+            // summary/quick_code/relative_path were CSV-only and are gone from the schema -
+            // PDF and CSV no longer share an index (B2), so they were always null here.
+            r.SourceData.TryGetValue("page_start", out var pageRaw);
+            r.SourceData.TryGetValue("child_index", out var chunkIndexRaw);
             r.SourceData.TryGetValue("zenya_document_id", out var zenyaDocIdRaw);
             r.SourceData.TryGetValue("zenya_version", out var zenyaVersionRaw);
             r.SourceData.TryGetValue("zenya_status", out var zenyaStatusRaw);
@@ -42,10 +42,10 @@ public static class KnowledgeBaseReferenceMapper
                 Page:            AsInt(pageRaw),
                 ChunkIndex:      AsInt(chunkIndexRaw),
                 Title:           AsText(titleRaw),
-                Summary:         AsText(summaryRaw),
+                Summary:         null,
                 Content:         content,
-                QuickCode:       AsText(quickCodeRaw),
-                RelativePath:    AsText(relativePathRaw),
+                QuickCode:       null,
+                RelativePath:    null,
                 ZenyaDocumentId: AsText(zenyaDocIdRaw),
                 ZenyaVersion:    AsText(zenyaVersionRaw),
                 ZenyaStatus:     AsText(zenyaStatusRaw),

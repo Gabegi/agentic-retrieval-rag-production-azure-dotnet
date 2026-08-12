@@ -13,4 +13,12 @@ public record CleanedPdfPageRecord
     public int    PageNumber  { get; init; }
     public string PageContent { get; init; } = "";
     public string Title       { get; init; } = "";
+
+    // Carried through cleaning rather than recomputed: the flag is a join between DI's
+    // figure list and its zero-word pages (GetPictureOnlyPagesHelper), and neither input
+    // survives into the cleaned text - a page that lost all its content to cleaning looks
+    // identical to a genuinely blank one by the time it gets here. Previously dropped at
+    // this boundary, which is why the document-level gate was the only one anything
+    // downstream could see (action-plan.md C4).
+    public bool IsPictureOnlyPage { get; init; }
 }

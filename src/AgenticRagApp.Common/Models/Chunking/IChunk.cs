@@ -7,12 +7,24 @@ namespace AgenticRagApp.Common.Models;
 //
 // Observability depends on these interfaces rather than on DocumentChunk, so it never
 // references a pipeline's own chunk type.
+//
+// Naming follows action-plan.md §4.6: *_id names a thing, *_index names a position within
+// an explicitly stated scope. The old names are kept out deliberately - "Heading",
+// "PageNumber" and "ChunkIndex" were three of the four places the same word meant a
+// different scope, and leaving them here would have kept that vocabulary alive in Common
+// while the pipeline moved off it.
 public interface IChunk
 {
-    string  Id         { get; }
-    string  DocumentId { get; }
-    string  Content    { get; }
-    string? Heading    { get; }
-    int     PageNumber { get; }
-    int     ChunkIndex { get; }
+    string  Id          { get; }
+    string  DocumentId  { get; }
+    string  Content     { get; }
+
+    // The unit's own heading, leaf only - not the chain.
+    string? HeadingText { get; }
+
+    // First page the unit starts on. A unit can span pages once sections are the grain.
+    int     PageStart   { get; }
+
+    // Position of this child within its section (was position within its page).
+    int     ChildIndex  { get; }
 }

@@ -7,7 +7,6 @@
     <PackageVersion Include="Azure.AI.DocumentIntelligence" Version="1.*" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
     <PackageVersion Include="Azure.AI.TextAnalytics" Version="5.3.0" />
-    <PackageVersion Include="Azure.Communication.Email" Version="1.0.1" />
     <PackageVersion Include="Azure.Core" Version="1.60.0" />
     <PackageVersion Include="Azure.Identity" Version="1.*" />
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.*" />
@@ -24,6 +23,12 @@
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.OpenTelemetry" Version="1.2.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.7" />
+    <!-- Pinned above the transitive 9.0.4 that Microsoft.ML.Tokenizers pulls in:
+         that version carries GHSA-73j8-2gch-69rq (high severity), and NuGet audit is
+         warn-as-error here, so the tokenizer cannot be referenced without this. -->
+    <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="9.9.1" />
     <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="*-*" />
     <PackageVersion Include="Microsoft.Extensions.AI.Evaluation.NLP" Version="*-*" />

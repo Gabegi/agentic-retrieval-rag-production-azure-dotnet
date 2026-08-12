@@ -48,7 +48,7 @@ data "azurerm_resource_group" "data" {
 }
 
 # --- Private DNS zones (hub, owned by platform team) -----------------------
-# Subscription cor-connectivity-prd, RG cor-connectivity-dns-prd-we-001.
+# Hub/connectivity subscription, private DNS resource group.
 # Confirmed via pipeline diagnostic (2026-07-07): the SP has Private DNS
 # Zone Contributor scoped individually on these zones, so their private
 # endpoints attach a private_dns_zone_group directly (search.tf, storage.tf,
@@ -65,7 +65,7 @@ data "azurerm_resource_group" "data" {
 # 403s. Plain string instead; each zone data source below only needs
 # zone-level read.
 locals {
-  dns_hub_resource_group_name = "cor-connectivity-dns-prd-we-001"
+  dns_hub_resource_group_name = "example-connectivity-dns-prd-we-001"
 }
 
 data "azurerm_private_dns_zone" "azurewebsites" {
@@ -109,3 +109,30 @@ data "azurerm_private_dns_zone" "search" {
   name                = "privatelink.search.windows.net"
   resource_group_name = local.dns_hub_resource_group_name
 }
+
+# --- Azure Monitor Private Link (AMPLS) zones -------------------------------
+# Deliberately NOT declared as data sources here, unlike every zone above.
+# app_insights_privatelink.tf's private endpoint needs
+# privatelink.monitor.azure.com, .oms.opinsights.azure.com,
+# .ods.opinsights.azure.com, and .agentsvc.azure-automation.net (plus
+# privatelink.blob.core.windows.net, already covered above) per Microsoft's
+# AMPLS DNS requirements - but confirmed 2026-08-07 that this SP has no grant
+# on any of them (403 AuthorizationFailed reading each one, not 404 - the
+# zones exist, just not individually granted to this SP the way the zones
+# above were). A Terraform data source is read at plan time regardless of
+# whether anything references its result, so even an unused declaration here
+# would 403 the same way - there is no way to reference these zones from
+# Terraform until that grant exists. See
+# docs/2608/260807/app-insights-private-link.md for the exact platform-team
+# ask; app_insights_privatelink.tf's private endpoint omits its
+# private_dns_zone_group for the same reason and defers DNS registration to
+# the platform team's own automation in the meantime.
+
+# Log Analytics workspace backing App Insights - deliberately NOT declared
+# here. Would need providers.tf's azurerm.logmgmt alias (still in place,
+# unused for now) - confirmed 2026-08-07 that alias can't even initialize,
+# let alone read this workspace (zero access in that subscription). Not
+# needed for app_insights_privatelink.tf's actual fix - see its comment on
+# why the Log Analytics scoped-service link was dropped rather than waited
+# on. Re-add once the platform team grants subscription-scope Reader there
+# (docs/2608/260807/app-insights-private-link.md).

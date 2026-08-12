@@ -28,6 +28,40 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     [JsonPropertyName("document_id")]
     public string DocumentId { get; set; } = "";
 
+    // ── Two-grain identity and position (action-plan.md §4.6) ───────────────
+    // Naming rule: *_id names a thing, *_index names a position within an explicitly
+    // stated scope. Replaces the old ChunkIndex (position-within-PAGE), which collided in
+    // meaning with PdfExtractionDocument.Ordinal (page) and TextChunk.Index
+    // (position-within-strategy-output).
+    //
+    // SectionId/SectionIndex/Grain have no producer until the section grain exists - they
+    // are defined now so the index schema migrates once rather than once per item.
+
+    // The parent section this unit belongs to. On a parent unit this equals Id, so
+    // "everything in this section" is a single filter with no special case.
+    [JsonPropertyName("section_id")]
+    public string? SectionId { get; set; }
+
+    [JsonPropertyName("section_index")]
+    public int SectionIndex { get; set; }
+
+    // Position of this child within its section. 0 on a parent unit.
+    [JsonPropertyName("child_index")]
+    public int ChildIndex { get; set; }
+
+    // "document" | "parent" | "child". Explicit rather than inferred from SectionId == Id:
+    // Q3 option 2 (parents indexed but not embedded) filters parents out of ranking on
+    // exactly this field, and inference would make that filter depend on a convention.
+    [JsonPropertyName("grain")]
+    public string Grain { get; set; } = ChunkGrain.Child;
+
+    // The whole parent section's text, materialized here rather than fetched at query time
+    // ("materialize, don't assemble"). Fan-out measured at ~1.25 in Phase A, so this costs
+    // roughly 2.7 MB across the corpus. Stored but deliberately NOT indexed - see
+    // IndexService.
+    [JsonPropertyName("parent_text")]
+    public string? ParentText { get; set; }
+
     [JsonPropertyName("title")]
     public string? Title { get; set; }
 
@@ -65,16 +99,37 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     [JsonPropertyName("content")]
     public string Content { get; set; } = "";
 
-    // Real content now (Breadcrumb, or the first DI-detected heading) - previously always
-    // null, since nothing ever set TextChunk.Heading. See ChunkingService.
-    [JsonPropertyName("heading")]
-    public string? Heading { get; set; }
+    // ── Heading context ─────────────────────────────────────────────────────
+    // Was "Heading". Renamed so the leaf heading and the full chain are two clearly
+    // separate concepts rather than one field that means whichever the caller assumed.
 
-    [JsonPropertyName("page_number")]
-    public int PageNumber { get; set; }
+    // This unit's own heading, leaf only.
+    [JsonPropertyName("heading_text")]
+    public string? HeadingText { get; set; }
 
-    [JsonPropertyName("chunk_index")]
-    public int ChunkIndex { get; set; }
+    // The full heading chain ("Hoofdstuk 3 > 3.2 Dosering"). Searchable in the index, not
+    // just a label - it is the context §1.6 wants contributing to scoring.
+    [JsonPropertyName("heading_path")]
+    public string? HeadingPath { get; set; }
+
+    // H1-H6 nesting level (Heading.Depth). 0 when unknown.
+    [JsonPropertyName("heading_depth")]
+    public int HeadingDepth { get; set; }
+
+    // Which signal produced the heading - see ChunkHeadingSource. Breadcrumbs (bookmark
+    // outline) and DI headings have different provenance, and DI's own nested sections are
+    // a third; one field beats three half-populated ones.
+    [JsonPropertyName("heading_source")]
+    public string? HeadingSource { get; set; }
+
+    // ── Pages ───────────────────────────────────────────────────────────────
+    // A unit can span pages once sections are the grain, so a single page number is not
+    // enough. Replaces the old PageNumber.
+    [JsonPropertyName("page_start")]
+    public int PageStart { get; set; }
+
+    [JsonPropertyName("page_end")]
+    public int PageEnd { get; set; }
 
     [JsonPropertyName("content_vector")]
     public float[]? ContentVector { get; set; }
@@ -87,6 +142,42 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     // untouched here, not something this field replaces.
     [JsonPropertyName("token_count")]
     public int TokenCount { get; set; }
+
+    // Stored alongside TokenCount, not derived from it: chars/token is not constant
+    // (prose ~3.1-3.3, table markdown ~1.9-2.8), so neither reconstructs the other.
+    [JsonPropertyName("char_count")]
+    public int CharCount => Content.Length;
+
+    // ── Quality flags ───────────────────────────────────────────────────────
+
+    // This child carries overlap from a sibling - lets retrieval de-duplicate without
+    // re-comparing text.
+    [JsonPropertyName("is_overlap")]
+    public bool IsOverlap { get; set; }
+
+    // False when this unit's heading came from a fallback rather than a confident match.
+    // The per-chunk form of the heading locator's failure counter: the aggregate says how
+    // many failed, this says which chunks to distrust. Defaults true so a unit that never
+    // needed locating is not reported as suspect.
+    [JsonPropertyName("heading_located")]
+    public bool HeadingLocated { get; set; } = true;
+
+    // Set when this unit's pages include figure-only / zero-word pages. The document-level
+    // extraction gate cannot see a mixed document - a 134-page file with 20 image-only
+    // pages passes chars/page comfortably and loses that content with nothing marking it.
+    [JsonPropertyName("page_extraction_flag")]
+    public bool PageExtractionFlag { get; set; }
+
+    // Target population (LVB/MVB and similar). A different axis from DomainTag: sector says
+    // which care sector, population says which client group. No producer yet.
+    [JsonPropertyName("population")]
+    public string? Population { get; set; }
+
+    // "nl"/"en" from DI's own AnalyzeResult.Languages. Computed at extraction today but
+    // never carried this far - the one English document's ~4:1 chars/token ratio makes
+    // every character-derived ceiling wrong for it.
+    [JsonPropertyName("language")]
+    public string? Language { get; set; }
 
     // ── Derived Search-indexed fields (Tier 2) ──────────────────────────────
     // Computed from the raw structural fields below, the same way TokenEstimate/IsEmpty
@@ -125,9 +216,18 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     // Author is the Word-exporting user's login (e.g. "mherbst"), not a real policy
     // owner - kept for traceability/debugging but deliberately not Search-indexed.
 
-    public string?         Author { get; set; }
-    public IReadOnlyList<Bookmark>    Bookmarks { get; set; } = [];
-    public IReadOnlyList<SectionInfo> Sections  { get; set; } = [];
+    public string? Author { get; set; }
+
+    // Bookmarks and Sections USED to be carried here - the whole document's outline and DI
+    // section tree, copied onto every chunk of that document. Nothing ever read either one,
+    // and once extraction started populating SectionInfo.ResolvedElements the cost showed up
+    // hard: 3,046 chunks serialized to 772 MB against a 16 MB extraction artifact for the
+    // same corpus, and EmbedAndUploadActivity ran out of memory deserializing it.
+    //
+    // Both live once per document on PdfExtractionDocument, which is where a consumer that
+    // needs them should read them. Do not reintroduce them here: per-document data attached
+    // per chunk is quadratic in document size, and nothing surfaces that until a blob read
+    // fails (action-plan.md §3.2 recorded the same shape of problem in the extraction blob).
 
     public string? Breadcrumb { get; set; }
 

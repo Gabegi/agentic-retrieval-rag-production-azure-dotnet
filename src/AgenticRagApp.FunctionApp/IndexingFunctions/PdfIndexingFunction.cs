@@ -6,11 +6,11 @@ using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using AgenticRagApp.Functions.ReportEmail;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
+using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 
@@ -43,6 +43,7 @@ public class PdfIndexingFunction
     private readonly ISnapshotService          _snapshotService;
     private readonly IVectorCache              _vectorCache;
     private readonly IRestoreService           _restoreService;
+    private readonly IndexerConfig             _config;
     private readonly ILogger<PdfIndexingFunction> _logger;
 
     public PdfIndexingFunction(
@@ -59,6 +60,7 @@ public class PdfIndexingFunction
         ISnapshotService          snapshotService,
         IVectorCache              vectorCache,
         IRestoreService           restoreService,
+        IndexerConfig             config,
         ILogger<PdfIndexingFunction> logger)
     {
         _extractionService = extractionService;
@@ -74,6 +76,7 @@ public class PdfIndexingFunction
         _snapshotService   = snapshotService;
         _vectorCache       = vectorCache;
         _restoreService    = restoreService;
+        _config            = config;
         _logger            = logger;
     }
 
@@ -227,8 +230,11 @@ public class PdfIndexingFunction
                 or OrchestrationRuntimeStatus.Failed
                 or OrchestrationRuntimeStatus.Terminated)
         {
+            // TODO: remove once this is in production - forcing a full reindex on every
+            // scheduled run is a development-only setting; the daily run should use the
+            // new/updated diff (ForceReindex: false) once the index is stable.
             await client.ScheduleNewOrchestrationInstanceAsync(
-                "IndexingOrchestrator", new PdfIndexRequest(false),
+                "IndexingOrchestrator", new PdfIndexRequest(ForceReindex: true),
                 new StartOrchestrationOptions { InstanceId = instanceId });
         }
     }
@@ -294,37 +300,6 @@ public class PdfIndexingFunction
                 Chunking   = chunkResults,
                 Embedding  = embedResults,
             });
-
-        // Same reasoning as above - ReportEmailOptions.Enabled is checked inside the activity,
-        // not here. Called on success and failure alike, same as the report write it follows:
-        // a run that died in extraction still gets an email saying so.
-        //
-        // A retry policy, not the unbounded default: this must not hold the orchestration open
-        // indefinitely over a mail problem, and the activity itself already logs+returns rather
-        // than throwing on most failure paths - retries here catch only what does throw
-        // (a transient exception before that point), few attempts, short backoff.
-        //
-        // Wrapped in its own try/catch, deliberately separate from the try/catch above: this
-        // call sits after `success`/`error` are already decided, and nothing about a failed
-        // email may change that outcome or overwrite `error`. Without this catch, an activity
-        // failure here (retries exhausted) propagates as the ORCHESTRATION's own unhandled
-        // exception, which does two things wrong at once - it can turn an otherwise-successful
-        // indexing run into a "Failed" orchestration over a mail problem, and it overwrites
-        // Durable's own `output` field with the email failure text, hiding whatever `error`
-        // this run actually had. Confirmed happening in production 2026-08-07: a genuine
-        // ChunkActivity OutOfMemoryException was masked by exactly this for hours before being
-        // found via full instance history rather than the top-level status.
-        try
-        {
-            await context.CallActivityAsync("SendReportEmailActivity",
-                new SendReportEmailRequest(RunReportKind.Index, context.InstanceId, startedAt),
-                TaskOptions.FromRetryPolicy(new RetryPolicy(
-                    maxNumberOfAttempts: 3, firstRetryInterval: TimeSpan.FromSeconds(10))));
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogError(ex, "SendReportEmailActivity failed for {InstanceId} - the indexing run's own outcome is unaffected", context.InstanceId);
-        }
 
         if (!success)
             throw new InvalidOperationException(error ?? "Indexing pipeline failed");
@@ -582,24 +557,6 @@ public class PdfIndexingFunction
         await context.CallActivityAsync("SaveRestoreReportActivity",
             BuildRestoreReport(context, startedAt, result, success, error));
 
-        // Same activity as the index run's email - restore is manual/rare, so this is the
-        // single run most worth an email about (companion doc §6 risk 5).
-        //
-        // Own try/catch, same reasoning as IndexingOrchestrator's call: an email failure must
-        // never become the orchestration's own unhandled exception and overwrite `error`/mask
-        // the real restore failure. See that call site for the production incident this fixes.
-        try
-        {
-            await context.CallActivityAsync("SendReportEmailActivity",
-                new SendReportEmailRequest(RunReportKind.Restore, context.InstanceId, startedAt),
-                TaskOptions.FromRetryPolicy(new RetryPolicy(
-                    maxNumberOfAttempts: 3, firstRetryInterval: TimeSpan.FromSeconds(10))));
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogError(ex, "SendReportEmailActivity failed for {InstanceId} - the restore run's own outcome is unaffected", context.InstanceId);
-        }
-
         if (!success)
             throw new InvalidOperationException(error ?? "Index restore failed");
     }
@@ -679,6 +636,71 @@ public class PdfIndexingFunction
             SearchIndexName:               result?.SearchIndexName      ?? "",
             EmbeddingModel:                result?.EmbeddingModel       ?? "",
             EmbeddingDeployment:           result?.EmbeddingDeployment  ?? "");
+
+    // Drops the index and rebuilds it EMPTY on the current schema, then rebuilds the
+    // knowledge source and base on top of it. Nothing is repopulated - run StartIndexing
+    // afterwards.
+    //
+    // This exists because EnsureIndexAsync is deliberately get-or-create: it never updates an
+    // existing index, so a schema change cannot reach a live index through the normal indexing
+    // run at all. The only other path that recreates is RestoreOrchestrator, and that
+    // immediately repopulates from the rolling snapshot - useless after a field rename, since
+    // the snapshot is in the previous shape.
+    //
+    // Destructive and irreversible: every indexed chunk is gone until a reindex completes, and
+    // if the snapshot predates the current schema there is no restore path either. The caller
+    // must therefore name the index in ?confirm=, which is checked against the configured name
+    // - a function key proves you may call this, not that you meant to call it on THIS index.
+    [Function("FullIndexRecreation")]
+    public async Task<HttpResponseData> RunFullIndexRecreation(
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "index/full-recreation")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var confirm = req.Query["confirm"];
+
+        if (!string.Equals(confirm, _config.SearchIndexName, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("FullIndexRecreation refused - confirm='{Confirm}' does not name the configured index", confirm);
+
+            var refused = req.CreateResponse(HttpStatusCode.BadRequest);
+            await refused.WriteStringAsync(
+                $"Refused. This DELETES every indexed chunk in '{_config.SearchIndexName}' and rebuilds it empty. " +
+                $"Re-send with ?confirm={_config.SearchIndexName} if that is what you want, " +
+                "then run POST /api/index?force=true to repopulate it.");
+            return refused;
+        }
+
+        _logger.LogWarning(
+            "FullIndexRecreation triggered - index '{Name}' will be dropped and rebuilt empty on the current schema",
+            _config.SearchIndexName);
+
+        try
+        {
+            // Teardown order is base -> source -> index, rebuild is index -> source -> base:
+            // Azure AI Search refuses to delete an index while a knowledge source still
+            // references it. Same order RecreateIndexActivity uses.
+            await _knowledgeService.DeleteKnowledgeBaseAsync(context.CancellationToken);
+            await _knowledgeService.DeleteKnowledgeSourceAsync(context.CancellationToken);
+            await _indexService.RecreateIndexAsync();
+            await _knowledgeService.EnsureKnowledgeSourceAsync(context.CancellationToken);
+            await _knowledgeService.EnsureKnowledgeBaseAsync(context.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "full-index-recreation"));
+            _logger.LogError(ex, "FullIndexRecreation failed");
+
+            var failed = req.CreateResponse(HttpStatusCode.InternalServerError);
+            await failed.WriteStringAsync($"Recreate failed: {ex.Message}");
+            return failed;
+        }
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        await response.WriteStringAsync(
+            $"Index '{_config.SearchIndexName}' recreated empty on the current schema, knowledge source and base rebuilt. " +
+            "It holds no documents until POST /api/index?force=true completes.");
+        return response;
+    }
 
     [Function("SetupKnowledgeBase")]
     public async Task<HttpResponseData> RunSetupKnowledgeBase(

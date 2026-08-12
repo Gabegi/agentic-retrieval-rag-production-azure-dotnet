@@ -390,12 +390,63 @@ public class GetHeadingsHelperTests
     [TestMethod]
     public void TitleRoleParagraph_AlsoMergesWithFollowingTerm()
     {
-        var result = ResultWithParagraphs(("title", "Bijlage V"), (null, "FWG-reglement"));
+        // "Bijlage VI", not "Bijlage V": this test is about the Title role merging at all,
+        // and a two-character numeral keeps it independent of the single-letter rule
+        // exercised by SingleLetterRomanNumeral_DoesNotMatch_SoSiblingLabelsAreTreatedAlike.
+        var result = ResultWithParagraphs(("title", "Bijlage VI"), (null, "FWG-reglement"));
 
         var headings = GetHeadingsHelper.GetHeadings(result).Headings;
 
         Assert.AreEqual(1, headings.Count);
-        Assert.AreEqual("Bijlage V FWG-reglement", headings[0].Content);
+        Assert.AreEqual("Bijlage VI FWG-reglement", headings[0].Content);
+    }
+
+    // --- D3: single-letter roman-numeral tightening -------------------------
+
+    [TestMethod]
+    public void SingleLetterRomanNumeral_DoesNotMatch_SoSiblingLabelsAreTreatedAlike()
+    {
+        // The real corpus case (docs/2608/260811/d3-short-label-discovery-findings.md):
+        // "Mobiliteitsklasse A/B/C/D/E" are mobility classes, not numerals. Before the
+        // tightening only "C" matched, purely because C is in [IVXLCDM] - one of five
+        // identical headings treated differently by letter. All five must now behave
+        // the same way: no merge, no orphan/vocabulary signal.
+        var result = ResultWithParagraphs(
+            ("title", "Mobiliteitsklasse C"), (null, "De C-client heeft hulp nodig"));
+
+        var headingsResult = GetHeadingsHelper.GetHeadings(result);
+
+        Assert.AreEqual(1, headingsResult.Headings.Count);
+        Assert.AreEqual("Mobiliteitsklasse C", headingsResult.Headings[0].Content);
+        Assert.AreEqual(0, headingsResult.NumberedLabelsSeen.Count);
+    }
+
+    [TestMethod]
+    [DataRow("Mobiliteitsklasse A")]
+    [DataRow("Mobiliteitsklasse B")]
+    [DataRow("Mobiliteitsklasse C")]
+    [DataRow("Mobiliteitsklasse D")]
+    [DataRow("Mobiliteitsklasse E")]
+    public void SingleLetterLabels_AllSiblingsBehaveIdentically(string heading)
+    {
+        var result = ResultWithParagraphs(("title", heading), (null, "beschrijving van de klasse"));
+
+        var headingsResult = GetHeadingsHelper.GetHeadings(result);
+
+        Assert.AreEqual(heading, headingsResult.Headings[0].Content);
+        Assert.AreEqual(0, headingsResult.NumberedLabelsSeen.Count);
+    }
+
+    [TestMethod]
+    public void MultiLetterRomanNumeral_StillMatchesAndMerges()
+    {
+        // The tightening must not cost real roman-numeral labels.
+        var result = ResultWithParagraphs(("sectionHeading", "Hoofdstuk IV"), (null, "Arbeidsduur"));
+
+        var headingsResult = GetHeadingsHelper.GetHeadings(result);
+
+        Assert.AreEqual("Hoofdstuk IV Arbeidsduur", headingsResult.Headings[0].Content);
+        Assert.AreEqual(1, headingsResult.NumberedLabelsSeen["Hoofdstuk"]);
     }
 
     [TestMethod]

@@ -23,6 +23,6 @@ jobs:
       - name: Run scraper
         working-directory: src/scraper
         env:
-          STORAGE_ACCOUNT_URL: https://staccountchunkingrag.blob.core.windows.net/
+          STORAGE_ACCOUNT_URL: https://<your-storage-account>.blob.core.windows.net/
           AZURE_CONTAINER_NAME: protocols
         run: dotnet run --configuration Release

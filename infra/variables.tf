@@ -108,31 +108,3 @@ variable "dev_eval_service_principal_object_id" {
   default     = ""
 }
 
-# ---------------------------------------------------------------------------
-# Pipeline run report email - see communication.tf and
-# docs/2608/260807/pipeline-run-email-report.md
-# ---------------------------------------------------------------------------
-
-variable "report_email_enabled" {
-  type        = bool
-  description = "Master switch for the per-run pipeline report email. Set false to mute local/dev runs - every StartIndexing sends mail otherwise. The function no-ops with an informational log when this is false."
-  default     = true
-}
-
-variable "report_email_recipients" {
-  type        = string
-  description = "Semicolon-separated recipient list for the pipeline run report email. INTERNAL ADDRESSES ONLY: the mail body carries verbatim corpus excerpts (chunk samples) and attaches the full run summary as JSON - see pipeline-email-report-structure.md §5/§5a, where that exposure was accepted on the condition that recipients stay internal."
-  default     = "gabriel.pirastru@devoteam.com"
-}
-
-variable "report_email_calibration_mode" {
-  type        = bool
-  description = "While true, thresholds with no defensible source yet (chunk coherence, size-band percentages, duplicate rate, cost multiplier) are rendered as observed values but raise no flag. Set false once ~2 weeks of runs have established real baselines. Thresholds that ARE sourced (index drift 15%, DocsFailed > 0, VectorDimErrors > 0, ReconciliationProblems > 0, oversized/undersized token bounds) flag regardless of this setting."
-  default     = true
-}
-
-variable "report_email_sender_address" {
-  type        = string
-  description = "Explicit sender address for the pipeline report email, e.g. DoNotReply@<guid>.azurecomm.net. Leave empty to derive it from the Azure-managed domain's exported attribute (see function_app.tf) - set it explicitly only if that attribute reference fails at plan time."
-  default     = ""
-}

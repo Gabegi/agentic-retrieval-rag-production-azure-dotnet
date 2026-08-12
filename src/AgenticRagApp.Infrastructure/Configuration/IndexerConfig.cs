@@ -28,4 +28,17 @@ public class IndexerConfig
     public string DocumentIntelligenceEndpoint { get; init; } = "";
     public string OpenAiEmbeddingModelName     { get; init; } = "text-embedding-3-large";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
+
+    // TEMPORARY - set true 2026-08-12 by request, to be revisited once eval shows how often
+    // each guard actually fires (docs/2608/260812/guards-review.md).
+    //
+    // true  = every guard in AgenticRagQueryService still runs and still logs, but no longer
+    //         blocks. The user gets the knowledge base's answer regardless.
+    // false = guards block, the original behaviour.
+    //
+    // While this is true the app does NOT enforce acceptance criteria 4 (prompt injection) or
+    // 5 (no personal data in question or answer). Those criteria exist precisely because model
+    // instructions can be bypassed, so nothing else covers them - see AcceptatieCriteria.md:41-45.
+    // Set GUARDS_LOG_ONLY=false to restore enforcement; no code change needed.
+    public bool   GuardsLogOnly                { get; init; } = true;
 }

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text;
 using Azure;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Hosting;
@@ -222,8 +223,17 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         // one PdfCleanResult it just created - safe to Add here without further locking, same
         // as results above. Merged into one run-level PdfCleanResult after the loop.
         var cleanResults = new ConcurrentBag<PdfCleanResult>();
-        var lastModified = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
-        var zenya        = new ConcurrentDictionary<string, ZenyaMetadata>(StringComparer.OrdinalIgnoreCase);
+        // Ordinal, not OrdinalIgnoreCase: Azure blob names are case-sensitive, so "Beleid.pdf"
+        // and "beleid.pdf" are two different blobs that can legally sit in the same container.
+        // Under a case-insensitive comparer these indexers silently overwrite one with the
+        // other's metadata, and the ToDictionary calls in BuildDocuments below throw outright
+        // on the same pair - after every paid Document Intelligence call in the run has been
+        // made. Every blob-name-keyed collection in this pipeline is Ordinal for that reason.
+        var lastModified = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var zenya        = new ConcurrentDictionary<string, ZenyaMetadata>(StringComparer.Ordinal);
+
+        // C7 measurement, always populated - see the LogContentHashOutcome call below.
+        var contentHashes = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
 
         // Iterates through the entries to process, for each one runs the download-and-extract
         await Parallel.ForEachAsync(
@@ -283,15 +293,13 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
                     var pdfBytes = await _blobStore.DownloadBytesAsync(_container, name, cancellationToken);
 
-                    // Computed here, before any backend is invoked, so it applies regardless of
-                    // which IPdfExtractor ends up running - same bytes always hash the same,
-                    // independent of blob name, so a byte-identical re-upload is detectable before
-                    // paying for extraction again. Not yet compared against anything (no store of
-                    // previously-seen hashes exists) - logged for now so the value is at least
-                    // visible while that dedup check gets built. Gated on IsEnabled so SHA-256 isn't
-                    // computed on every blob, every run, when Debug logging is off (the normal case).
-                    if (_logger.IsEnabled(LogLevel.Debug))
-                        _logger.LogDebug("'{Blob}' content hash: {Hash}", name, ComputeContentHash(pdfBytes));
+                    // C7 (pre-chunking-action-items.md), measurement half only. Computed here,
+                    // before any backend is invoked, so it applies regardless of which
+                    // IPdfExtractor ends up running - same bytes always hash the same,
+                    // independent of blob name. No longer gated on Debug logging: this is a
+                    // reported metric now, not just a log line, and SHA-256 over bytes already
+                    // in memory is negligible next to the paid call that follows.
+                    contentHashes[name] = ComputeContentHash(pdfBytes);
 
                     var extracted = await _extractor.ExtractPDFAsync(name, pdfBytes, cancellationToken);
                     results.Add(extracted);
@@ -315,14 +323,16 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 }
             });
 
+        LogContentHashOutcome(contentHashes, results);
+
         var cleanResult = new PdfCleanResult();
         foreach (var perFile in cleanResults)
             cleanResult.MergeFrom(perFile);
 
         return (results.ToList(),
             cleanResult,
-            new Dictionary<string, DateTimeOffset>(lastModified, StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, ZenyaMetadata>(zenya, StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, DateTimeOffset>(lastModified, StringComparer.Ordinal),
+            new Dictionary<string, ZenyaMetadata>(zenya, StringComparer.Ordinal));
     }
 
     // The validation report (same shape CsvExtractionOrchestrator writes) plus a second,
@@ -399,43 +409,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         Dictionary<string, DateTimeOffset>  lastModifiedByBlob,
         Dictionary<string, ZenyaMetadata>   zenyaByBlob)
     {
-        var nativeMetadataByBlob = BuildNativeMetadataLookup(fileResults);
-        var sectionsByBlob       = BuildSectionsLookup(fileResults);
-        var pageContextByKey     = BuildPageContextLookup(fileResults);
-
-        var extractionDocs = cleanResult.Records
-            .Select(r =>
-            {
-                var nativeMetadata = nativeMetadataByBlob.GetValueOrDefault(r.BlobName);
-                var pageContext    = pageContextByKey.GetValueOrDefault((r.BlobName, r.PageNumber)) ?? PdfPageContext.Empty;
-                var zenya          = zenyaByBlob.GetValueOrDefault(r.BlobName) ?? ZenyaMetadata.Empty;
-
-                return new PdfExtractionDocument(
-                    SourceId:              r.BlobName,
-                    Ordinal:               r.PageNumber,
-                    Content:               r.PageContent,
-                    Title:                 r.Title,
-                    Author:                nativeMetadata?.Author,
-                    CreatedAt:             nativeMetadata?.CreatedAt,
-                    ModDate:               nativeMetadata?.ModDate,
-                    PageCount:             nativeMetadata?.PageCount,
-                    LastModifiedDate:      lastModifiedByBlob.TryGetValue(r.BlobName, out var lm) ? lm : null,
-                    ZenyaDocumentId:       zenya.DocumentId,
-                    ZenyaVersion:          zenya.Version,
-                    ZenyaStatus:           zenya.Status,
-                    ZenyaUrl:              zenya.Url,
-                    Bookmarks:             nativeMetadata?.Bookmarks ?? [],
-                    Sections:              sectionsByBlob.GetValueOrDefault(r.BlobName) ?? [],
-                    Breadcrumb:            pageContext.Breadcrumb,
-                    Headings:              pageContext.Headings,
-                    Boilerplate:           pageContext.Boilerplate,
-                    Tables:                pageContext.Tables,
-                    Dimensions:            pageContext.Dimensions,
-                    SelectionMarks:        pageContext.SelectionMarks,
-                    Figures:               pageContext.Figures,
-                    Lines:                 pageContext.Lines);
-            })
-            .ToList();
+        var extractionDocs = BuildDocuments(fileResults, cleanResult, lastModifiedByBlob, zenyaByBlob);
 
         // No projection needed: report.Issues is already the type the output carries.
         // This used to convert ValidationIssue -> ValidationIssueEntry field by field,
@@ -485,108 +459,153 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         };
     }
 
-    // File-level native PDF facts (Author, CreatedAt, PageCount, Bookmarks) - same value
-    // applies to every page of that file, so this is a per-blob lookup, not per-page like
-    // PdfPageContext below.
+    // The separator between two pages' cleaned text in the assembled document. A blank line
+    // is what every downstream splitter already treats as a paragraph boundary
+    // (PdfChunkingStrategy1 splits on "\n\n"), so joining with anything else would invent a
+    // boundary shape nothing else recognises. Its length is accounted for in PageSpans, so
+    // the offsets stay exact.
+    //
+    // Assembly is the only stage that runs after cleaning, which makes it the only place a
+    // per-page cleaning invariant can be broken again: PdfCleaner collapses \n{3,} down to one
+    // blank line within a page, and nothing re-collapses the joined text. So every invariant
+    // cleaning established has to be re-established at the join - see the blank-page case in
+    // BuildDocuments, where appending this on both sides of an empty page would produce exactly
+    // the four-newline run PdfCleaner exists to prevent.
+    private const string PageSeparator = "\n\n";
+
+    // Assembles one PdfExtractionDocument per PDF from its cleaned pages (action-plan.md C8).
+    //
+    // Pages are cleaned individually upstream and joined here, recording each page's offset
+    // as it is appended. That ordering matters: cleaning per page keeps one bad page from
+    // failing the file, and recording offsets during assembly means the page map is exact
+    // rather than a downstream guess at the separator.
+    //
+    // A document with no surviving cleaned pages produces no record at all, rather than an
+    // empty-content one - "extraction produced nothing for this file" is a real outcome the
+    // validation report already covers, and an empty document would chunk to zero chunks
+    // while looking like a successfully processed file.
+    internal static List<PdfExtractionDocument> BuildDocuments(
+        IReadOnlyList<PdfExtractionResult>  fileResults,
+        PdfCleanResult                      cleanResult,
+        Dictionary<string, DateTimeOffset>  lastModifiedByBlob,
+        Dictionary<string, ZenyaMetadata>   zenyaByBlob)
+    {
+        var nativeMetadataByBlob = BuildNativeMetadataLookup(fileResults);
+        var resultByBlob         = fileResults
+            .Where(f => f.Ok)
+            .ToDictionary(f => f.BlobName, f => f, StringComparer.Ordinal);
+
+        var documents = new List<PdfExtractionDocument>();
+
+        // cleanResult.Records is merged from a ConcurrentBag, so its order is nondeterministic
+        // across runs. Grouping, then ordering pages by PageNumber and documents by blob name,
+        // is what makes the output stable - and that matters beyond tidiness: ChunkingHelper.SafeKey
+        // derives chunk ids from SourceId plus the chunk's index within the document, so an
+        // unstable assembly order would reshuffle every chunk id from one run to the next.
+        // (The ordering is only total because PdfPipelineValidator separately asserts no
+        // duplicate (BlobName, PageNumber) - with a duplicate, OrderBy's stability would
+        // tie-break on bag order and the ids would drift again.)
+        foreach (var group in cleanResult.Records
+                     .GroupBy(r => r.BlobName, StringComparer.Ordinal)
+                     .OrderBy(g => g.Key, StringComparer.Ordinal))
+        {
+            var pages = group.OrderBy(r => r.PageNumber).ToList();
+
+            // Always hits: cleanResult only ever receives records from a file whose extraction
+            // succeeded (see ExtractPdfsFromBlobAsync's `if (extracted.Ok)` before CleanPdf), so
+            // every blob that reaches this loop has an Ok result. The file?. guards below are
+            // defence against that invariant being broken later, not a reachable state - a
+            // document with null Routing/Language and empty structure is not something this
+            // pipeline can currently produce.
+            resultByBlob.TryGetValue(group.Key, out var file);
+            var nativeMetadata = nativeMetadataByBlob.GetValueOrDefault(group.Key);
+            var zenya          = zenyaByBlob.GetValueOrDefault(group.Key) ?? ZenyaMetadata.Empty;
+            var structure      = file?.Structure;
+
+            // DistinctBy before ToDictionary: DI is expected to report each page once, but a
+            // duplicate PageNumber would otherwise throw here and take down a run that has
+            // already paid for every analysis in it. First entry wins.
+            var dimensionsByPage = (structure?.PageDimensions ?? [])
+                .DistinctBy(d => d.PageNumber)
+                .ToDictionary(d => d.PageNumber, d => d);
+
+            // Presized: without it the builder regrows and copies its way up to what can be a
+            // whole large PDF's text. Separator count is an upper bound (blank pages don't get
+            // one - see below), which is the right side to err on for a capacity hint.
+            var content   = new StringBuilder(
+                pages.Sum(p => p.PageContent.Length) + (pages.Count - 1) * PageSeparator.Length);
+            var pageSpans = new List<PageSpan>(pages.Count);
+
+            foreach (var page in pages)
+            {
+                // No separator around a page that cleaned to nothing - a caption-less diagram
+                // page does exactly that (PdfCleaner.ConvertFigures drops the placeholder), and
+                // it is kept as a record rather than dropped. Separating on both sides of it
+                // would leave a four-newline run in the assembled text: PdfCleaner collapses
+                // \n{3,} per page, but assembly runs after cleaning and nothing re-collapses
+                // across the join, so the join is the one place such a run can reach the index.
+                //
+                // The page still gets a zero-length span. Dropping it would drop its
+                // IsPictureOnly flag, which is the only signal that a mostly-normal document
+                // has diagram pages in it (see PageSpan) - the document-level density gate
+                // passes such a file comfortably.
+                if (content.Length > 0 && page.PageContent.Length > 0) content.Append(PageSeparator);
+
+                pageSpans.Add(new PageSpan(
+                    PageNumber:    page.PageNumber,
+                    Offset:        content.Length,
+                    Length:        page.PageContent.Length,
+                    Dimensions:    dimensionsByPage.GetValueOrDefault(page.PageNumber),
+                    IsPictureOnly: page.IsPictureOnlyPage));
+
+                content.Append(page.PageContent);
+            }
+
+            documents.Add(new PdfExtractionDocument(
+                SourceId:         group.Key,
+                Content:          content.ToString(),
+                PageSpans:        pageSpans,
+                // Read from the file's own metadata, not off pages[0]. The title is already a
+                // file-level fact - GetTitleHelper resolves it once per file (native Title, else
+                // a filename-derived fallback) and GetPagesHelper stamps the same value on every
+                // page - so reading it back off a page was the last place assembly still depended
+                // on the per-page shape. Same value either way; this one can't be wrong if a
+                // document's first page is ever missing.
+                Title:            GetTitleHelper.GetTitle(nativeMetadata, group.Key),
+                Author:           nativeMetadata?.Author,
+                CreatedAt:        nativeMetadata?.CreatedAt,
+                ModDate:          nativeMetadata?.ModDate,
+                PageCount:        nativeMetadata?.PageCount,
+                LastModifiedDate: lastModifiedByBlob.TryGetValue(group.Key, out var lm) ? lm : null,
+                ZenyaDocumentId:  zenya.DocumentId,
+                ZenyaVersion:     zenya.Version,
+                ZenyaStatus:      zenya.Status,
+                ZenyaUrl:         zenya.Url,
+                Bookmarks:        nativeMetadata?.Bookmarks ?? [],
+                PageBreadcrumbs:  file?.SectionBreadcrumbs ?? new Dictionary<int, string>(),
+                Sections:         structure?.Sections       ?? [],
+                Headings:         structure?.Headings       ?? [],
+                Boilerplate:      structure?.Boilerplate    ?? [],
+                Tables:           structure?.Tables         ?? [],
+                SelectionMarks:   structure?.SelectionMarks ?? [],
+                Figures:          structure?.Figures        ?? [],
+                Lines:            structure?.Lines          ?? [],
+                Routing:          file?.Routing,
+                Language:         file?.Language));
+        }
+
+        return documents;
+    }
+
+    // File-level native PDF facts (Author, CreatedAt, PageCount, Bookmarks) - one entry per
+    // blob, read once per document now rather than re-attached to every page. Ordinal for the
+    // same reason as every other blob-name-keyed collection here - see ExtractPdfsFromBlobAsync.
     private static Dictionary<string, DocMetadata> BuildNativeMetadataLookup(
         IReadOnlyList<PdfExtractionResult> fileResults) =>
         fileResults
             .Where(f => f.Ok && f.NativeMetadata is not null)
-            .ToDictionary(f => f.BlobName, f => f.NativeMetadata!, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(f => f.BlobName, f => f.NativeMetadata!, StringComparer.Ordinal);
 
-    // DI's semantic sections aren't page-scoped (a section's Elements can span pages), so
-    // - like NativeMetadata above - this is file-level, duplicated across every page's
-    // PdfExtractionDocument rather than filtered per page.
-    private static Dictionary<string, IReadOnlyList<SectionInfo>> BuildSectionsLookup(
-        IReadOnlyList<PdfExtractionResult> fileResults) =>
-        fileResults
-            .Where(f => f.Ok)
-            .ToDictionary(f => f.BlobName, IReadOnlyList<SectionInfo> (f) => f.Structure?.Sections ?? [],
-                StringComparer.OrdinalIgnoreCase);
-
-    // Everything Structure/SectionBreadcrumbs knows about one page. Breadcrumb comes from
-    // the bookmark outline (PDFSectionBreadCrumbBuilder, hierarchical - "Chapter 3 > 3.2
-    // Dosage"); Headings from Document Intelligence's own title/sectionHeading-role
-    // paragraph detection, which works even when the PDF has no outline at all. List fields
-    // default to real empty (DI looked and found none), not "unknown" - only
-    // Breadcrumb/Dimensions are genuinely nullable "no data" cases.
-    internal sealed record PdfPageContext(
-        string?                          Breadcrumb,
-        IReadOnlyList<Heading>           Headings,
-        IReadOnlyList<Heading>           Boilerplate,
-        IReadOnlyList<TableInfo>         Tables,
-        PageDimensions?                  Dimensions,
-        IReadOnlyList<SelectionMarkInfo> SelectionMarks,
-        IReadOnlyList<FigureInfo>        Figures,
-        IReadOnlyList<LineInfo>          Lines)
-    {
-        public static readonly PdfPageContext Empty = new(null, [], [], [], null, [], [], []);
-    }
-
-    // Sparse by design: only pages with at least one of these signals get an entry. A page
-    // with none of them - nothing Structure has any data for at all - is a legitimate
-    // "nothing to attach" case the caller handles via PdfPageContext.Empty, not a lookup
-    // miss to work around.
-    // internal (not private): unit tested directly against hand-built PdfExtractionResult
-    // fixtures, same rationale as PdfDocumentIntelligenceAnalyzer.GetPages/BuildResults.
-    internal static Dictionary<(string BlobName, int PageNumber), PdfPageContext> BuildPageContextLookup(
-        IReadOnlyList<PdfExtractionResult> fileResults)
-    {
-        var lookup = new Dictionary<(string, int), PdfPageContext>();
-
-        foreach (var file in fileResults.Where(f => f.Ok))
-        {
-            var headingsByPage = (file.Structure?.Headings ?? [])
-                .GroupBy(h => h.PageNumber)
-                .ToDictionary(g => g.Key, IReadOnlyList<Heading> (g) => g.ToList());
-
-            var boilerplateByPage = (file.Structure?.Boilerplate ?? [])
-                .GroupBy(h => h.PageNumber)
-                .ToDictionary(g => g.Key, IReadOnlyList<Heading> (g) => g.ToList());
-
-            var tablesByPage = (file.Structure?.Tables ?? [])
-                .GroupBy(t => t.PageNumber)
-                .ToDictionary(g => g.Key, IReadOnlyList<TableInfo> (g) => g.ToList());
-
-            var dimensionsByPage = (file.Structure?.PageDimensions ?? [])
-                .ToDictionary(d => d.PageNumber, d => d);
-
-            var selectionMarksByPage = (file.Structure?.SelectionMarks ?? [])
-                .GroupBy(s => s.PageNumber)
-                .ToDictionary(g => g.Key, IReadOnlyList<SelectionMarkInfo> (g) => g.ToList());
-
-            var figuresByPage = (file.Structure?.Figures ?? [])
-                .GroupBy(f => f.PageNumber)
-                .ToDictionary(g => g.Key, IReadOnlyList<FigureInfo> (g) => g.ToList());
-
-            var linesByPage = (file.Structure?.Lines ?? [])
-                .GroupBy(l => l.PageNumber)
-                .ToDictionary(g => g.Key, IReadOnlyList<LineInfo> (g) => g.ToList());
-
-            var pageNumbers = file.SectionBreadcrumbs.Keys
-                .Concat(headingsByPage.Keys)
-                .Concat(boilerplateByPage.Keys)
-                .Concat(tablesByPage.Keys)
-                .Concat(dimensionsByPage.Keys)
-                .Concat(selectionMarksByPage.Keys)
-                .Concat(figuresByPage.Keys)
-                .Concat(linesByPage.Keys)
-                .Distinct();
-
-            foreach (var pageNumber in pageNumbers)
-                lookup[(file.BlobName, pageNumber)] = new PdfPageContext(
-                    Breadcrumb:     file.SectionBreadcrumbs.GetValueOrDefault(pageNumber),
-                    Headings:       headingsByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Boilerplate:    boilerplateByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Tables:         tablesByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Dimensions:     dimensionsByPage.GetValueOrDefault(pageNumber),
-                    SelectionMarks: selectionMarksByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Figures:        figuresByPage.GetValueOrDefault(pageNumber) ?? [],
-                    Lines:          linesByPage.GetValueOrDefault(pageNumber) ?? []);
-        }
-
-        return lookup;
-    }
 
     // Pure counts derived from the report/cleanResult — no side effects, safe to compute
     // independently of whether EmitValidationTelemetry below ever runs. BuildExtractionOutput
@@ -656,13 +675,52 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
         }
     }
 
-    // Stable hash of the PDF's raw bytes, used as a dedup/caching key:
+    // Stable hash of the PDF's raw bytes (C7):
     // - Same file content -> same hash, regardless of the blob's file name.
-    // - Would let a future caller detect "this exact file was already processed" and skip
-    //   paying for another extraction call - not wired into a skip decision yet, since
-    //   there's nowhere that stores previously-seen hashes across runs.
+    // - Two uses today, both measurement: the duplicate-detection signal below, and a
+    //   rename-proof document identity (F1 - the corpus has no Zenya document ids, so the
+    //   blob name is otherwise the only identifier, and a rename silently creates a "new"
+    //   document).
     private static string ComputeContentHash(byte[] pdfBytes) =>
         Convert.ToHexString(SHA256.HashData(pdfBytes));
+
+    // C7, measurement only. A content-hash-keyed cache of extraction *results* was built and
+    // then deliberately removed: keying on the build id (so a code change can't serve stale
+    // extractions) excludes the one case such a cache would pay for - a full reindex after a
+    // code change - leaving only "blob touched but bytes unchanged" and duplicate uploads.
+    // It also could not dedup duplicates within a single run, since parallel workers hash and
+    // miss before either write lands, and it saved only the Document Intelligence call, never
+    // the download that precedes the hash.
+    //
+    // So this logs the evidence instead of assuming the answer: run it for a while, read
+    // Distinct vs Total, and build the cache only if the numbers justify it.
+    private void LogContentHashOutcome(
+        IReadOnlyDictionary<string, string> contentHashes,
+        IEnumerable<PdfExtractionResult> results)
+    {
+        if (contentHashes.Count == 0) return;
+
+        var distinctHashes = contentHashes.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var billedUsd      = results.Sum(r => r.EstimatedCostUsd ?? 0m);
+
+        _logger.LogInformation(
+            "Content hashes (build {Version}): {Total} document(s) extracted, {Distinct} distinct by bytes, ${Billed:F2} billed this run.",
+            ExtractionVersion.AssemblyVersion, contentHashes.Count, distinctHashes, billedUsd);
+
+        // Two blobs with the same hash are the same file uploaded twice - a corpus-hygiene
+        // finding that stands on its own, independent of whether anything ever caches on it.
+        if (distinctHashes < contentHashes.Count)
+        {
+            var duplicateGroups = contentHashes
+                .GroupBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .Select(g => string.Join(" == ", g.Select(kv => kv.Key)));
+
+            _logger.LogWarning(
+                "Byte-identical duplicates in the corpus ({Total} document(s), {Distinct} distinct): {Groups}",
+                contentHashes.Count, distinctHashes, string.Join(" | ", duplicateGroups));
+        }
+    }
 
     private async Task<(int? Count, ETag? ETag)> PreviousRunCount(CancellationToken ct)
     {

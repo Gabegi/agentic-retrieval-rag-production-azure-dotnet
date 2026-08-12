@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Azure.Search.Documents.KnowledgeBases.Models;
+using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.KnowledgeRetrieval;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Querying.Guards;
@@ -24,33 +25,35 @@ public class AgenticRagQueryService : IRagQueryService
     // expected answers so eval scoring lines up.
     private const string PiiFallback       = "Ik kan geen vragen verwerken met persoonlijke gegevens. Verwijder namen, adressen of andere persoonsgegevens en probeer het opnieuw.";
     private const string InjectionFallback = "Hier kan ik geen antwoord op geven.";
-    // Distinct, longer text for the "nothing relevant found" case (buiten_scope) - the
-    // dataset keeps this separate from InjectionFallback above even though both start the
-    // same way.
-    private const string BuitenScopeFallback = "Hier kan ik geen antwoord op geven. Vraag dit na bij je leidinggevende.";
+    // The buiten_scope fallback constant lived here until 2026-08-12, paired with the
+    // zero-chunk guard in AskAsync. Both were removed together by request. The same Dutch
+    // wording is still produced - by the model, via KnowledgeService's AnswerInstructions -
+    // so the dataset's expected text is unchanged; only the deterministic enforcement is gone.
 
     private const string CategoryPrivacy        = "privacy";
     private const string CategoryPromptInjectie = "promptinjectie";
-    private const string CategoryBuitenScope    = "buiten_scope";
 
     private readonly IKnowledgeRetrievalClient _client;
     private readonly ChunkNeighborExpander     _neighborExpander;
     private readonly IPromptInjectionGuard     _injectionGuard;
     private readonly IPiiGuard                 _piiGuard;
     private readonly IndexerConfig             _config;
+    private readonly ILogger<AgenticRagQueryService> _logger;
 
     public AgenticRagQueryService(
         IndexerConfig                  config,
         IKnowledgeRetrievalClient      client,
         ChunkNeighborExpander          neighborExpander,
         IPromptInjectionGuard          injectionGuard,
-        IPiiGuard                      piiGuard)
+        IPiiGuard                      piiGuard,
+        ILogger<AgenticRagQueryService> logger)
     {
         _client           = client;
         _neighborExpander = neighborExpander;
         _injectionGuard   = injectionGuard;
         _piiGuard         = piiGuard;
         _config           = config;
+        _logger           = logger;
     }
 
     public async Task<RagQueryResult> AskAsync(string question, CancellationToken ct = default)
@@ -59,7 +62,10 @@ public class AgenticRagQueryService : IRagQueryService
 
         // Criterion 5, question side. Must run before the retrieve call, otherwise the PII
         // has already left the process.
-        if (await _piiGuard.ContainsPiiAsync(question, ct))
+        // NOTE: under GuardsLogOnly this no longer stops the question being sent, so PII in a
+        // question does reach Azure AI Search. That is the one guard whose log-only mode is not
+        // merely "answer anyway" - it changes what leaves the process. See IndexerConfig.
+        if (await _piiGuard.ContainsPiiAsync(question, ct) && Enforce("pii", "question"))
             return Blocked(PiiFallback, "blocked_pii", CategoryPrivacy, sw.ElapsedMilliseconds);
 
         var request = new KnowledgeBaseRetrievalRequest
@@ -73,21 +79,61 @@ public class AgenticRagQueryService : IRagQueryService
                 { Role = "user" },
             },
             IncludeActivity = true,
+            // Without these the service returns references with SourceData null, and
+            // KnowledgeBaseReferenceMapper drops every one of them at its `r.SourceData is null`
+            // guard - so initialChunks.Count == 0 and the answer is produced with no grounded
+            // context at all, however good the retrieval was.
+            // That is what the 2026-08-11 eval hit: 31 of 32 answerable golden questions refused,
+            // back when a criterion-6 guard turned that condition into the buiten-scope fallback.
+            // That guard was removed 2026-08-12, so the same fault would now surface as an
+            // ungrounded answer instead - see the ChunksRetrieved == 0 warning below.
+            // A live retrieve on 2026-08-12 returned 13 references and a correct, fully
+            // synthesised Dutch answer with sourceData null on all 13 - the knowledge base was
+            // working the whole time and this method was discarding its output.
+            // These are per-request (KnowledgeSourceParams), not part of the knowledge base
+            // definition: KnowledgeService cannot set them once at deploy time, so they have to
+            // be sent on every retrieve. See docs/2608/260812/knowledgebasefix-action-plan.md.
+            KnowledgeSourceParams =
+            {
+                new SearchIndexKnowledgeSourceParams(_config.KnowledgeSourceName)
+                {
+                    IncludeReferences          = true,
+                    IncludeReferenceSourceData = true,
+                },
+            },
         };
 
         var result = await _client.RetrieveAsync(request, ct);
 
         var initialChunks = KnowledgeBaseReferenceMapper.Map(result.References);
 
-        // Criterion 6 enforcement (buiten_scope in the golden-questions dataset). Zero
-        // documents matched at all - checked before neighbor-page expansion runs, since
-        // there's nothing to expand neighbors of. See po-open-questions.md's proposal: a
-        // relevance-score threshold would catch more (a few weakly-relevant chunks that
-        // still produce a padded answer) but needs a reranker score this codebase doesn't
-        // map anywhere yet, plus eval data to calibrate a cutoff - the zero-chunks floor
-        // needs neither.
+        // Criterion 6's *enforcement* half was removed here on 2026-08-12 by request: zero
+        // mapped chunks no longer short-circuits to BuitenScopeFallback. The knowledge base's
+        // own answer is returned instead, whatever it says.
+        // Criterion 6 is not unguarded - AnswerInstructions still tells the model to reply
+        // "Hier kan ik geen antwoord op geven. Vraag dit na bij je leidinggevende." when the
+        // retrieved documents don't answer the question (KnowledgeService.cs). What is gone is
+        // the deterministic floor underneath that instruction, so an out-of-scope question now
+        // gets a refusal only if the model chooses to give one.
+        // Removing the guard also removed the finish reasons no_relevant_answer and
+        // references_unmappable, which were what distinguished "search matched nothing" from
+        // "the mapper dropped every reference" - the exact 2026-08-11 fault (13 references in,
+        // 0 mapped). Both now return an ordinary FinishReason: stop row carrying an ungrounded
+        // answer, so neither is visible in any aggregate. This log is the replacement: it keeps
+        // the two causes distinguishable at query time even though the response no longer says
+        // which happened. In the eval report, the equivalent signal is ChunksRetrieved == 0 on
+        // an answered row. See docs/2608/260812/knowledgebasefix-action-plan.md.
         if (initialChunks.Count == 0)
-            return Blocked(BuitenScopeFallback, "no_relevant_answer", CategoryBuitenScope, sw.ElapsedMilliseconds);
+        {
+            var referenceCount = result.References?.Count ?? 0;
+            _logger.LogWarning(
+                "Answering with no grounded context: {ReferenceCount} reference(s) returned, 0 mapped - {Cause}.",
+                referenceCount,
+                referenceCount == 0
+                    ? "search matched nothing (index or knowledge-source side)"
+                    : "every reference was dropped by the mapper, so SourceData had no usable 'content' - " +
+                      "check AgenticRagQueryService still sends KnowledgeSourceParams with IncludeReferenceSourceData");
+        }
 
         var chunks = await _neighborExpander.ExpandAsync(initialChunks, ct);
 
@@ -97,7 +143,7 @@ public class AgenticRagQueryService : IRagQueryService
         // no separate pre-retrieval call. The only cost of checking after retrieval rather
         // than before is a wasted read-only Search query on a blocked request, not any
         // actual exposure.
-        if (await _injectionGuard.IsAttackAsync(question, chunks, ct))
+        if (await _injectionGuard.IsAttackAsync(question, chunks, ct) && Enforce("injection", "question+documents"))
             return Blocked(InjectionFallback, "blocked_injection", CategoryPromptInjectie, sw.ElapsedMilliseconds, chunks.Count);
 
         // One citation per distinct (document, page) among the direct hits — grouping by
@@ -120,7 +166,7 @@ public class AgenticRagQueryService : IRagQueryService
         // wholesale rather than redacted in place — a partially redacted Dutch sentence
         // usually reads as broken — and citations are dropped too, since we're not showing
         // sources for a suppressed answer.
-        if (await _piiGuard.ContainsPiiAsync(answer, ct))
+        if (await _piiGuard.ContainsPiiAsync(answer, ct) && Enforce("pii", "answer"))
             return Blocked(PiiFallback, "blocked_pii", CategoryPrivacy, sw.ElapsedMilliseconds, chunks.Count);
 
         var (inputTokens, outputTokens) = KnowledgeBaseActivitySummary.SumTokens(result.Activity);
@@ -151,7 +197,35 @@ public class AgenticRagQueryService : IRagQueryService
             Citations:          citations);
     }
 
-    private RagQueryResult Blocked(string fallbackAnswer, string finishReason, string category, long latencyMs, int chunksRetrieved = 0)
+    // Called only once a guard has already fired. Always logs; returns whether the caller
+    // should actually block. Written as a condition so each call site reads as
+    // "guard tripped AND we're enforcing" and the short-circuit keeps the log out of the
+    // path where nothing tripped.
+    //
+    // Log-only mode exists so one eval run can measure how often each guard fires on the real
+    // corpus before anyone tunes thresholds - two of these three had never executed at all
+    // before 2026-08-12, so their false-positive rate is unmeasured rather than known-bad.
+    // The trade is that while it is on, criteria 4 and 5 are observed but not enforced.
+    private bool Enforce(string guard, string scope)
+    {
+        if (_config.GuardsLogOnly)
+        {
+            _logger.LogWarning(
+                "Guard '{Guard}' ({Scope}) fired but GuardsLogOnly is set - answering anyway. " +
+                "Acceptance criterion is NOT enforced for this request.", guard, scope);
+            return false;
+        }
+
+        _logger.LogWarning("Guard '{Guard}' ({Scope}) fired - blocking the request.", guard, scope);
+        return true;
+    }
+
+    // inputTokens/outputTokens default to 0 for the guard paths that block before any model
+    // work happens (PII on the question side); the post-retrieval blocks pass the real
+    // counts, so a blocked row still shows what the call actually cost.
+    private RagQueryResult Blocked(
+        string fallbackAnswer, string finishReason, string category, long latencyMs,
+        int chunksRetrieved = 0, long inputTokens = 0, long outputTokens = 0)
     {
         var endpoint = new Uri(_config.SearchEndpoint);
         return new RagQueryResult(
@@ -168,9 +242,9 @@ public class AgenticRagQueryService : IRagQueryService
             FinishReason:       finishReason,
             Category:           category,
             LatencyMs:          latencyMs,
-            InputTokens:        0,
-            OutputTokens:       0,
-            TotalTokens:        0,
+            InputTokens:        inputTokens,
+            OutputTokens:       outputTokens,
+            TotalTokens:        inputTokens + outputTokens,
             ContextTokens:      0,
             Temperature:        null, MaxOutputTokens: null, TopP: null, TopK: null,
             FrequencyPenalty:   null, PresencePenalty: null, Seed: null,

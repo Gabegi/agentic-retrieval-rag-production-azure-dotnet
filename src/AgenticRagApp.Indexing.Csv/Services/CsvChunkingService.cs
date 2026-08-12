@@ -67,9 +67,9 @@ public class CsvChunkingService : ICsvChunkingService
                     CheckDate        = ParseDate(doc.Metadata.GetValueOrDefault("check_date")),
                     Version          = doc.Metadata.GetValueOrDefault("version"),
                     Content          = content,
-                    Heading          = chunk.Heading,
-                    PageNumber       = doc.Ordinal,
-                    ChunkIndex       = docChunkIndex,
+                    HeadingText      = chunk.Heading,
+                    PageStart        = doc.Ordinal,
+                    ChildIndex       = docChunkIndex,
                     // Same Summary value on every chunk of a document (the join copies the
                     // index record's summary onto every page) — unlike the title prepend
                     // above, this stays out of Content and lives in its own searchable/

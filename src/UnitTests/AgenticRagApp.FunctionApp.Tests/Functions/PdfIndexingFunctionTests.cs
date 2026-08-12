@@ -9,6 +9,7 @@ using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
+using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 using AgenticRagApp.Querying.Services;
@@ -33,11 +34,15 @@ public class PdfIndexingFunctionTests
         public Mock<IVectorCache>            VectorCache       = new();
         public Mock<IRestoreService>         RestoreService    = new();
 
+        // Real config, not a mock: FullIndexRecreation compares ?confirm= against
+        // SearchIndexName, so the value has to be readable rather than default-null.
+        public IndexerConfig Config = new() { SearchIndexName = "test-index" };
+
         public PdfIndexingFunction Build() => new(
             ExtractionService.Object, ChunkingService.Object, EmbeddingService.Object, UploadService.Object,
             IndexService.Object, KnowledgeService.Object, new Mock<BlobContainerClient>().Object, BlobStore.Object,
             ReportWriter.Object, ArtifactWriter.Object, SnapshotService.Object, VectorCache.Object,
-            RestoreService.Object, NullLogger<PdfIndexingFunction>.Instance);
+            RestoreService.Object, Config, NullLogger<PdfIndexingFunction>.Instance);
     }
 
     private static Mock<TaskOrchestrationContext> MockOrchestrationContext(string instanceId = "instance-1")
@@ -453,7 +458,6 @@ public class PdfIndexingFunctionTests
 
     private static PdfExtractionDocument Doc(string sourceId) => new(
         SourceId:              sourceId,
-        Ordinal:               0,
         Content:               "content",
         Title:                 "",
         Author:                null,
@@ -466,15 +470,17 @@ public class PdfIndexingFunctionTests
         ZenyaStatus:           null,
         ZenyaUrl:              null,
         Bookmarks:             [],
+        PageSpans:             [new PageSpan(1, 0, "content".Length, null, false)],
+        PageBreadcrumbs:       new Dictionary<int, string>(),
         Sections:              [],
-        Breadcrumb:            null,
         Headings:              [],
         Boilerplate:           [],
         Tables:                [],
-        Dimensions:            null,
         SelectionMarks:        [],
         Figures:               [],
-        Lines:                 []);
+        Lines:                 [],
+        Routing:               null,
+        Language:              null);
 
     private static ExtractionStageMetrics ExtractStats() => new(
         Source: "pdf", DocsToProcess: 1, DocsSkipped: 0, DocsNew: 1, DocsUpdated: 0, DocsDeleted: 0,

@@ -70,13 +70,16 @@ public sealed class ChunkNeighborExpander
             return result;
 
         var docId  = group.Key.Replace("'", "''");   // OData string-literal escaping
+        // page_start/child_index replace page_number/chunk_index (action-plan.md §4.6).
+        // page_start is now IsFilterable - it previously was not, so this filter could only
+        // ever have failed with a 400 against the old schema.
         var filter = $"document_id eq '{docId}' and " +
-                     $"({string.Join(" or ", wanted.Select(p => $"page_number eq {p}"))})";
+                     $"({string.Join(" or ", wanted.Select(p => $"page_start eq {p}"))})";
 
         var neighborOpts = new SearchOptions
         {
             Filter = filter,
-            Select = { "id", "document_id", "content", "page_number", "chunk_index" },
+            Select = { "id", "document_id", "content", "page_start", "child_index" },
             Size   = wanted.Count * 4,   // pages are 1-2 chunks each; headroom is cheap
         };
 
@@ -89,8 +92,8 @@ public sealed class ChunkNeighborExpander
             result.Add(new RetrievedChunk(
                 Id:         hit.Document.GetString("id") ?? "",
                 DocumentId: group.Key,
-                Page:       hit.Document.GetInt32("page_number") ?? 0,
-                ChunkIndex: hit.Document.GetInt32("chunk_index") ?? 0,
+                Page:       hit.Document.GetInt32("page_start") ?? 0,
+                ChunkIndex: hit.Document.GetInt32("child_index") ?? 0,
                 Title:      null,
                 Summary:    null,   // already surfaced once on the original matched chunk for this document
                 Content:    content));

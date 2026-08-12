@@ -33,7 +33,7 @@ provider "azurerm" {
 
 provider "azapi" {}
 
-# Hub/connectivity subscription (cor-connectivity-prd) - owns the central
+# Hub/connectivity subscription - owns the central
 # private DNS zones our private endpoints need to resolve against
 # (docs/platform-team-dns-verzoek.md). Read-only use only (data sources) -
 # this repo doesn't manage anything in that subscription. Same OIDC identity
@@ -41,7 +41,7 @@ provider "azapi" {}
 # via the diagnostic step in 1-infra-deploy.yml.
 provider "azurerm" {
   alias           = "hub"
-  subscription_id = "c8e46005-ce0e-4be5-9ded-0178e19fbe28" # cor-connectivity-prd
+  subscription_id = "00000000-0000-0000-0000-000000000000" # hub/connectivity subscription
   features {}
 
   # This alias itself is only ever used for data sources (see data.tf) - no
@@ -52,5 +52,31 @@ provider "azurerm" {
   # on our private endpoints create their A records in the hub zones - that
   # write happens implicitly via ARM when the zone group is created, not
   # through this provider alias.
+  resource_provider_registrations = "none"
+}
+
+# Log Analytics/management subscription - owns the
+# workspace App Insights writes into (IngestionMode: LogAnalytics on
+# cor-appi-cap-*, see data.azurerm_application_insights.main.WorkspaceResourceId).
+# A THIRD subscription, distinct from both the default provider and the hub
+# alias above.
+#
+# CURRENTLY UNUSED - confirmed 2026-08-07 via a real `terraform apply` that
+# this SP has zero access here: even provider initialization itself
+# (Microsoft.Resources/subscriptions/providers/read, evaluated at the
+# subscription scope) 403s, before getting anywhere near an actual resource
+# read. app_insights_privatelink.tf's Log Analytics scoped-service link was
+# dropped rather than blocked on this - see that file's comment. Left
+# declared (not deleted) for when the platform team grants this SP Reader at
+# the subscription scope - see docs/2608/260807/app-insights-private-link.md.
+# The pipeline's 'VERIFY: App Insights private-link DNS zones + Log
+# Analytics access' step still checks for that grant on every Plan run, so
+# re-adding the data source + scoped-service link is a signal away, not a
+# guess.
+provider "azurerm" {
+  alias           = "logmgmt"
+  subscription_id = "00000000-0000-0000-0000-000000000000" # log analytics/management subscription
+  features {}
+
   resource_provider_registrations = "none"
 }

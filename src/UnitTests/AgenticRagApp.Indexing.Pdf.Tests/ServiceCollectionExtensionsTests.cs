@@ -57,7 +57,9 @@ public class ServiceCollectionExtensionsTests
 
         services.AddPdfIndexing(Config());
 
-        AssertSingleton<IChunkingStrategy, PdfChunkingStrategy2>(services);
+        AssertSingleton<ITextSplitter, SectionSplitter>(services);
+        AssertSingleton<SectionCascadeStrategy, SectionCascadeStrategy>(services);
+        AssertSingleton<DocumentStrategySelector, DocumentStrategySelector>(services);
         AssertSingleton<IChunkingService, ChunkingService>(services);
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IDocumentIdentityStore)));
         AssertSingleton<FamilyIdEmbedder, FamilyIdEmbedder>(services);

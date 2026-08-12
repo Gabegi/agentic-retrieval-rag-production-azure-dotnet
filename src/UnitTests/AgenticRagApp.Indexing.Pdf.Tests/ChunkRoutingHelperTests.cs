@@ -19,33 +19,31 @@ public class ChunkRoutingHelperTests
         new(pageNumber, "unselected", Offset: 0, Confidence: 1.0, Polygon: []);
 
     [TestMethod]
-    public void MediumTokenRange_RoutesMedium()
+    public void MidSizedDocument_HasExtractableContent()
     {
         // 10 pages, 2,000 chars each (20,000 chars total): well above the 1,000 chars/page
-        // sparse threshold, small file relative to text so bytes/char stays low. At the
-        // prose ratio (~3.1 chars/token) that's ~6,452 estimated tokens - inside
-        // [4,000, 50,000), so Medium.
+        // sparse threshold, small file relative to text so bytes/char stays low.
         var pages = Enumerable.Range(1, 10).Select(n => Page(n, new string('a', 2_000))).ToList();
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 5_000);
 
-        Assert.AreEqual(ChunkRoute.Medium, routing.Route);
+        Assert.IsTrue(routing.HasExtractableContent);
         Assert.AreEqual(2_000, routing.CharsPerPage);
     }
 
     [TestMethod]
-    public void SparseCharsPerPage_RoutesPicture_EvenAtNormalByteRatio()
+    public void SparseCharsPerPage_FailsExtractionGate_EvenAtNormalByteRatio()
     {
         // 500 chars/page - below the 1,000 threshold - regardless of page count or byte ratio.
         var pages = Enumerable.Range(1, 5).Select(n => Page(n, new string('a', 500))).ToList();
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000);
 
-        Assert.AreEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsFalse(routing.HasExtractableContent);
     }
 
     [TestMethod]
-    public void HighByteRatio_RoutesPicture_EvenAtNormalCharsPerPage()
+    public void HighByteRatio_FailsExtractionGate_EvenAtNormalCharsPerPage()
     {
         // 2,000 chars/page (well above sparse), but a large file size relative to extracted
         // text - the extraction-loss signal, e.g. an image-heavy scan with a thin text layer.
@@ -53,78 +51,96 @@ public class ChunkRoutingHelperTests
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 2_000_000);
 
-        Assert.AreEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsFalse(routing.HasExtractableContent);
     }
 
     [TestMethod]
-    public void CharsPerPageJustAtThreshold_1000_IsNotPicture()
+    public void CharsPerPageJustAtThreshold_1000_PassesExtractionGate()
     {
         // Exactly 1,000 chars/page - the rule is "< 1,000", so 1,000 itself must not trip Picture.
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000);
 
-        Assert.AreNotEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsTrue(routing.HasExtractableContent);
     }
 
     [TestMethod]
-    public void CharsPerPageJustBelowThreshold_999_IsPicture()
+    public void CharsPerPageJustBelowThreshold_999_FailsExtractionGate()
     {
         var pages = new[] { Page(1, new string('a', 999)) };
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 999);
 
-        Assert.AreEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsFalse(routing.HasExtractableContent);
     }
 
     [TestMethod]
-    public void BytesPerCharJustAtThreshold_100_IsPicture()
+    public void BytesPerCharJustAtThreshold_100_FailsExtractionGate()
     {
         // Rule is ">= 100", so exactly 100 must trip Picture.
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 100_000);
 
-        Assert.AreEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsFalse(routing.HasExtractableContent);
         Assert.AreEqual(100, routing.BytesPerChar);
     }
 
     [TestMethod]
-    public void BytesPerCharJustBelowThreshold_IsNotPicture()
+    public void BytesPerCharJustBelowThreshold_PassesExtractionGate()
     {
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 99_000);
 
-        Assert.AreNotEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsTrue(routing.HasExtractableContent);
     }
 
     [TestMethod]
-    public void EstimatedTokensAtOrAboveLargeThreshold_RoutesLarge()
+    public void LargeDocument_StillReportsEstimatedTokens_ButNoSizeTier()
     {
         // 30 pages, 6,000 chars each (180,000 chars total) -> ~58,065 estimated tokens at
-        // the prose ratio, at or above the 50,000 Large threshold - page count alone (30)
-        // would have been Medium under the old page-based rule, confirming this is really
-        // driven by tokens now, not pages.
+        // the prose ratio. EstimatedTokens is still measured and carried; what is gone is
+        // the Large/Medium/Small tier it used to select. Decision 2 answers "is the whole
+        // document a safe return unit" against a MEASURED return bound instead, and that
+        // bound does not exist yet - see DocumentIsSafeReturnUnit.
         var pages = Enumerable.Range(1, 30).Select(n => Page(n, new string('a', 6_000))).ToList();
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 200_000);
 
-        Assert.AreEqual(ChunkRoute.Large, routing.Route);
         Assert.IsTrue(routing.EstimatedTokens >= 50_000);
+        Assert.IsTrue(routing.HasExtractableContent);
+        Assert.IsNull(routing.DocumentIsSafeReturnUnit);
     }
 
     [TestMethod]
-    public void EstimatedTokensBelowMediumThreshold_RoutesSmall()
+    public void SmallDocument_StillReportsEstimatedTokens_ButNoSizeTier()
     {
-        // 2 pages, 2,000 chars each (4,000 chars total) -> ~1,291 estimated tokens,
-        // below the 4,000 Medium threshold.
+        // 2 pages, 2,000 chars each (4,000 chars total) -> ~1,291 estimated tokens.
         var pages = Enumerable.Range(1, 2).Select(n => Page(n, new string('a', 2_000))).ToList();
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 4_000);
 
-        Assert.AreEqual(ChunkRoute.Small, routing.Route);
         Assert.IsTrue(routing.EstimatedTokens < 4_000);
+        Assert.IsTrue(routing.HasExtractableContent);
+        Assert.IsNull(routing.DocumentIsSafeReturnUnit);
+    }
+
+    [TestMethod]
+    public void NavigationSummary_DrivenByHeadingCount_NotTokenCount()
+    {
+        // Decision 3 is a section-count question: a document needs navigation when its
+        // sections compete against each other in a flat ranking. A short document with many
+        // headings needs it; a long one with few does not.
+        var pages    = Enumerable.Range(1, 2).Select(n => Page(n, new string('a', 2_000))).ToList();
+        var headings = Enumerable.Range(0, 120).Select(i => Heading($"H{i}", i * 30)).ToList();
+
+        var many = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 4_000, headings: headings);
+        var few  = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 4_000, headings: [Heading("Only", 0)]);
+
+        Assert.IsTrue(many.NeedsNavigationSummary);
+        Assert.IsFalse(few.NeedsNavigationSummary);
     }
 
     [TestMethod]
@@ -140,22 +156,22 @@ public class ChunkRoutingHelperTests
     }
 
     [TestMethod]
-    public void ZeroPages_DoesNotThrow_RoutesPicture()
+    public void ZeroPages_DoesNotThrow_FailsExtractionGate()
     {
         var routing = ChunkRoutingHelper.Compute([], [], fileSizeBytes: 100);
 
-        Assert.AreEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsFalse(routing.HasExtractableContent);
         Assert.AreEqual(0, routing.CharsPerPage);
     }
 
     [TestMethod]
-    public void ZeroExtractedChars_NonZeroFileSize_DoesNotThrow_RoutesPicture()
+    public void ZeroExtractedChars_NonZeroFileSize_DoesNotThrow_FailsExtractionGate()
     {
         var pages = new[] { Page(1, "") };
 
         var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 5_000);
 
-        Assert.AreEqual(ChunkRoute.Picture, routing.Route);
+        Assert.IsFalse(routing.HasExtractableContent);
         Assert.IsTrue(double.IsPositiveInfinity(routing.BytesPerChar));
     }
 

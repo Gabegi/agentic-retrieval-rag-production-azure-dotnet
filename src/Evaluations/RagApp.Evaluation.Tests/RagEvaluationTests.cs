@@ -90,12 +90,18 @@ public class RagEvaluationTests
             .ConfigureOptions(o => o.MaxOutputTokens ??= 500)
             .Build();
 
-        var knowledgeService = new KnowledgeService(config, new SearchIndexClient(new Uri(config.SearchEndpoint), credential),
+        // This suite builds its own clients rather than resolving them from
+        // AddAgenticRagAppInfrastructure, so it has to pin the api-version itself. If it
+        // doesn't, eval scores the app against a different wire version than production runs
+        // on - and on the knowledge-base surface that is not a cosmetic difference, since the
+        // two preview generations project the resource differently (SearchServiceVersion).
+        var knowledgeService = new KnowledgeService(config,
+            new SearchIndexClient(new Uri(config.SearchEndpoint), credential, SearchServiceVersion.Options()),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeService>.Instance);
         await knowledgeService.EnsureKnowledgeSourceAsync();
         await knowledgeService.EnsureKnowledgeBaseAsync();
 
-        var searchClient = new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential);
+        var searchClient = new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential, SearchServiceVersion.Options());
 
         // Non-destructive health check, not a repair - RecreateIndexAsync/restore is a
         // deliberate manual operation (POST index/restore on the Function App), not something
@@ -115,7 +121,7 @@ public class RagEvaluationTests
             "Function App, see PdfIndexingFunction.RestoreOrchestrator) before this suite can run " +
             "meaningfully.");
 
-        var retrievalClient = new KnowledgeBaseClient(new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential));
+        var retrievalClient = new KnowledgeBaseClient(new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential, SearchServiceVersion.Options()));
         var neighborExpander = new ChunkNeighborExpander(searchClient);
 
         var promptShieldClient = new PromptShieldClient(
@@ -125,7 +131,8 @@ public class RagEvaluationTests
         var textAnalyticsClient = new TextAnalyticsClient(new Uri(config.LanguageEndpoint), credential);
         var piiGuard = new PiiGuard(textAnalyticsClient, NullLogger<PiiGuard>.Instance);
 
-        _ragService = new AgenticRagQueryService(config, retrievalClient, neighborExpander, injectionGuard, piiGuard);
+        _ragService = new AgenticRagQueryService(config, retrievalClient, neighborExpander, injectionGuard, piiGuard,
+            NullLogger<AgenticRagQueryService>.Instance);
         _evaluator = new RagEvaluator(judgeClient);
         _writer = new EvalResultWriter(ResultsFilePath);
     }

@@ -20,7 +20,6 @@ public class FamilyIdEmbedderTests
     private static PdfExtractionDocument Doc(string sourceId, string title, IReadOnlyList<Heading>? headings = null) =>
         new(
             SourceId:         sourceId,
-            Ordinal:          0,
             Content:          "content",
             Title:            title,
             Author:           null,
@@ -33,15 +32,17 @@ public class FamilyIdEmbedderTests
             ZenyaStatus:      null,
             ZenyaUrl:         null,
             Bookmarks:        [],
+            PageSpans:        [new PageSpan(1, 0, "content".Length, null, false)],
+            PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         [],
-            Breadcrumb:       null,
             Headings:         headings ?? [],
             Boilerplate:      [],
             Tables:           [],
-            Dimensions:       null,
             SelectionMarks:   [],
             Figures:          [],
-            Lines:            []);
+            Lines:            [],
+            Routing:          null,
+            Language:         null);
 
     // Each identity text gets whichever vector its title maps to - lets a test force known
     // cosine similarities between specific documents without depending on real embeddings.

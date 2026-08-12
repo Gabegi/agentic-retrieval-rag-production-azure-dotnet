@@ -112,7 +112,7 @@ public sealed record ChunkingStageMetrics(
             }
 
             if (chunk.IsCoherent)      coherent++;
-            if (chunk.Heading != null) headings++;
+            if (chunk.HeadingText != null) headings++;
 
             if (len < smallestLen) { smallestLen = len; smallest = chunk; }
             if (len > largestLen)  { largestLen  = len; largest  = chunk; }
@@ -189,9 +189,9 @@ public sealed record ChunkingStageMetrics(
     private static ChunkSample? ToSample<T>(T? chunk) where T : IChunkStatsSource =>
         chunk is null ? null : new ChunkSample(
             DocumentId:     chunk.DocumentId,
-            PageNumber:     chunk.PageNumber,
-            ChunkIndex:     chunk.ChunkIndex,
-            Heading:        chunk.Heading,
+            PageNumber:     chunk.PageStart,
+            ChunkIndex:     chunk.ChildIndex,
+            Heading:        chunk.HeadingText,
             SizeChars:      chunk.Content.Length,
             ContentExcerpt: Excerpt(chunk.Content),
             Truncated:      chunk.Content.Length > MaxExcerptChars);

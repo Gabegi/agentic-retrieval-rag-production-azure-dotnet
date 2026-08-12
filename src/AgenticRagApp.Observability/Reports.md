@@ -35,16 +35,14 @@ listings.
 | `embedding-artifact` | `.../{ts}-embedding-artifact-{instanceId}.json` | `PdfIndexingFunction.EmbedAndUploadActivity` | Chunk metadata (id, doc id, content hash, vector dims) + embedding stats — never the raw vectors |
 | `snapshot-{source}` | `.../{ts}-snapshot-{source}-{instanceId}.json` | `SnapshotService.UpdateAsync` | Rolling full-corpus snapshot for that source (`pdf`/`csv`) — every chunk believed live in the Search index, merged run over run. Only the 3 most recent generations are kept (older ones pruned). Read back by `RestoreService` to rebuild the index if it's ever wiped/corrupted |
 | `eval-results` / `eval-summary` / `eval-trx` | `.../{ts}-eval-{results\|summary\|trx}-{buildId}.{jsonl\|md\|trx}` | `.pipelines/templates/eval-publish-results.yml` (not app code) | Eval suite output: raw JSONL scoring rows, a generated markdown summary, and the MSTest `.trx` |
-| `run-summary` | `.../{ts}-run-summary-{instanceId}.json` | `SendReportEmailActivity` | Oversized run-email attachment fallback (over `MaxAttachmentBytes`), linked from the email instead of attached |
 
 Plus a handful of fixed-name pointer blobs at the container **root** (not date-folder-scoped —
 there's exactly one current value, not history):
 
 | Path | Written by | Content |
 |---|---|---|
-| `_last-run.json` | `SendReportEmailActivity` | Previous run's summary (`PreviousRunPointer`) — powers the run email's delta section |
 | `_latest-snapshot-{source}.json` | `SnapshotService.UpdateAsync` | Up to 3 most recent snapshot paths + instance IDs for that source, newest first — how `ReadLatestAsync`/pruning find snapshots without a per-source prefix to list |
-| `_latest-eval-results.json` | `.pipelines/templates/eval-publish-results.yml` | `{Path, RanAt}` of the most recent `eval-results` blob — how `RunReportAssembler.TryReadEvalBaselineAsync` finds the eval baseline without listing |
+| `_latest-eval-results.json` | `.pipelines/templates/eval-publish-results.yml` | `{Path, RanAt}` of the most recent `eval-results` blob — points at the newest eval baseline without having to list the container. No app code reads it since the run report email was removed |
 | `indexing/_last-stats-{source}.json` | `RunReportWriter.SaveLastIndexStatsAsync` | Last known index document count/storage size, keyed by source (`pdf`/`csv`) — single rolling baseline for drift detection, **not** per-run history |
 
 All report writes above (except the drift baseline) happen on every run in **every** environment —

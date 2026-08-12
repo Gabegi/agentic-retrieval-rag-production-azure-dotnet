@@ -18,8 +18,8 @@ public class ChunkNeighborExpanderTests
         ["id"]           = id,
         ["document_id"]  = docId,
         ["content"]      = content,
-        ["page_number"]  = page,
-        ["chunk_index"]  = chunkIndex,
+        ["page_start"]   = page,
+        ["child_index"]  = chunkIndex,
     };
 
     private static Response<SearchResults<SearchDocument>> SearchResponse(params SearchDocument[] docs)

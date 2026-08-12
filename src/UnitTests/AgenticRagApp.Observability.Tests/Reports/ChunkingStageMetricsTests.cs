@@ -9,8 +9,8 @@ public class ChunkingStageMetricsTests
     // Minimal IChunkStatsSource - Observability deliberately never references a pipeline's own
     // chunk type (see IChunkStatsSource), so the tests don't either.
     private sealed record TestChunk(
-        string Id, string DocumentId, string Content, string? Heading = null,
-        int PageNumber = 1, int ChunkIndex = 0) : IChunkStatsSource
+        string Id, string DocumentId, string Content, string? HeadingText = null,
+        int PageStart = 1, int ChildIndex = 0) : IChunkStatsSource
     {
         public bool IsCoherent => Content.Length > 0
             && (char.IsUpper(Content[0]) || char.IsDigit(Content[0]))

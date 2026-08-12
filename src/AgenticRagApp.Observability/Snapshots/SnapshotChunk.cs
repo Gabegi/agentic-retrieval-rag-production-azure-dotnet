@@ -15,9 +15,13 @@ public record SnapshotChunk(
     string? Title,
     DateTimeOffset? LastModifiedDate,
     string Content,
-    string? Heading,
-    int PageNumber,
-    int ChunkIndex,
+    // Names follow IChunk's vocabulary (action-plan.md §4.6). This changes the snapshot's
+    // wire format, so snapshots written before the rename do not restore - acceptable
+    // because the field rename lands with a full index rebuild anyway, and a snapshot only
+    // describes what is currently live in the index.
+    string? HeadingText,
+    int PageStart,
+    int ChildIndex,
     string ContentHash)
 {
     public static SnapshotChunk From<T>(T doc) where T : ISnapshotSource => new(
@@ -26,8 +30,8 @@ public record SnapshotChunk(
         Title:            doc.Title,
         LastModifiedDate: doc.LastModifiedDate,
         Content:          doc.Content,
-        Heading:          doc.Heading,
-        PageNumber:       doc.PageNumber,
-        ChunkIndex:       doc.ChunkIndex,
+        HeadingText:      doc.HeadingText,
+        PageStart:        doc.PageStart,
+        ChildIndex:       doc.ChildIndex,
         ContentHash:      doc.ContentHash);
 }

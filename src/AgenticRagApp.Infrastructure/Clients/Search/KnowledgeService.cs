@@ -31,14 +31,17 @@ public class KnowledgeService : IKnowledgeService
             name: _config.KnowledgeSourceName,
             searchIndexParameters: new SearchIndexKnowledgeSourceParameters(_config.SearchIndexName)
             {
-                // Limit BM25 to fields that carry semantic meaning
+                // Limit BM25 to fields that carry semantic meaning. The CSV-era fields
+                // (summary, department) are gone - PDF and CSV no longer share an index
+                // (action-plan.md B2). heading_path is included as well as heading_text:
+                // the chain is the context §1.6 wants contributing to scoring, not just a
+                // label on the row.
                 SearchFields =
                 {
                     new SearchIndexFieldReference("content"),
-                    new SearchIndexFieldReference("summary"),
                     new SearchIndexFieldReference("title"),
-                    new SearchIndexFieldReference("heading"),
-                    new SearchIndexFieldReference("department"),
+                    new SearchIndexFieldReference("heading_text"),
+                    new SearchIndexFieldReference("heading_path"),
                 },
                 // All structured fields returned so the model has full document context
                 SourceDataFields =
@@ -46,23 +49,42 @@ public class KnowledgeService : IKnowledgeService
                     new SearchIndexFieldReference("id"),
                     new SearchIndexFieldReference("document_id"),
                     new SearchIndexFieldReference("title"),
-                    new SearchIndexFieldReference("heading"),
-                    new SearchIndexFieldReference("department"),
-                    new SearchIndexFieldReference("quick_code"),
-                    new SearchIndexFieldReference("relative_path"),
-                    new SearchIndexFieldReference("version"),
+                    new SearchIndexFieldReference("heading_text"),
+                    new SearchIndexFieldReference("heading_path"),
                     new SearchIndexFieldReference("content"),
-                    new SearchIndexFieldReference("summary"),
-                    // page_number/chunk_index — needed for query-time neighboring-page
+                    // The parent section's text, materialized on the child - so an answer
+                    // can be generated over the whole section while retrieval stayed at the
+                    // precise child grain (Q3 option 1).
+                    new SearchIndexFieldReference("parent_text"),
+                    // Two-grain identity: section_id de-duplicates children of one section,
+                    // grain says which cut this row is.
+                    new SearchIndexFieldReference("section_id"),
+                    new SearchIndexFieldReference("grain"),
+                    // Sector/family - the wrong-population failure mode is invisible to any
+                    // similarity score, so the model needs to see which sector a passage is
+                    // about, not just that it is on topic.
+                    new SearchIndexFieldReference("domain_tag"),
+                    new SearchIndexFieldReference("family_id"),
+                    // page_start/child_index — needed for query-time neighboring-page
                     // expansion in ChunkNeighborExpander (page-boundary continuations).
-                    new SearchIndexFieldReference("page_number"),
-                    new SearchIndexFieldReference("chunk_index"),
+                    new SearchIndexFieldReference("page_start"),
+                    new SearchIndexFieldReference("page_end"),
+                    new SearchIndexFieldReference("child_index"),
                     // Native PDF metadata (PdfNativeMetadataExtractor) — page_count for
                     // "page X of Y" citations, created_at/mod_date so a citation can show
                     // how current a policy is. Null for CSV rows.
                     new SearchIndexFieldReference("page_count"),
                     new SearchIndexFieldReference("created_at"),
                     new SearchIndexFieldReference("mod_date"),
+                    // Zenya provenance (IndexService's zenya_* fields). KnowledgeBaseReference-
+                    // Mapper reads all four, but they were missing here, so every Citation came
+                    // back with null document id/version/status/url — silently, since the mapper
+                    // TryGetValue's them. That leaves a citation with no link back to Zenya and
+                    // no way for CitationMatch to resolve an expected source by document id.
+                    new SearchIndexFieldReference("zenya_document_id"),
+                    new SearchIndexFieldReference("zenya_version"),
+                    new SearchIndexFieldReference("zenya_status"),
+                    new SearchIndexFieldReference("zenya_url"),
                 }
                 // note: content_vector is excluded — not needed for LLM context
             }
@@ -104,8 +126,18 @@ public class KnowledgeService : IKnowledgeService
                                  "Always mention which document the information comes from. " +
                                  "Do not summarize or omit steps from procedures or guidelines. " +
                                  "If multiple documents are relevant, discuss each one separately. " +
-                                 "Write the answer in Dutch, at CEFR C1 level: clear, well-structured, " +
-                                 "professional register, no unexplained jargon. " +
+                                 // B1, not C1 (changed 2026-08-12). The audience is the whole
+                                 // workforce - care staff, facilities, students, non-native Dutch
+                                 // speakers - not policy authors. B1 is also the Dutch standard for
+                                 // public-facing communication. Note this contradicts criterion 1 in
+                                 // AcceptatieCriteria.md as written ("C1-level Dutch"); that document
+                                 // needs updating with the PO.
+                                 "Write the answer in simple Dutch at CEFR B1 level, so anyone can " +
+                                 "understand it: short sentences, everyday words, one idea per sentence, " +
+                                 "active voice. Avoid jargon and abbreviations; when a term from the " +
+                                 "document is unavoidable, use it and explain it in plain words. " +
+                                 "Do not simplify by leaving things out - the answer must stay complete " +
+                                 "and accurate, and every step of a procedure must still be there. " +
                                  "State only what the source documents say - never give a personal or " +
                                  "subjective opinion. If asked for one, say explicitly that you can only " +
                                  "share what the documentation says, not an opinion. " +

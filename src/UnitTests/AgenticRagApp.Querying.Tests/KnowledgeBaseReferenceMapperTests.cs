@@ -54,16 +54,17 @@ public class KnowledgeBaseReferenceMapperTests
     [TestMethod]
     public void Reference_WithAllFields_MapsToRetrievedChunk()
     {
+        // summary/quick_code/relative_path are deliberately absent: they were CSV-only
+        // fields, and PDF and CSV no longer share an index (action-plan.md B2). They are
+        // asserted null below rather than dropped from the test, so a future change that
+        // silently starts populating them again fails here.
         var reference = Reference(new()
         {
             ["id"]            = "chunk1",
             ["document_id"]   = "doc1",
             ["title"]         = "Title",
-            ["summary"]       = "Summary",
-            ["page_number"]   = 3,
-            ["chunk_index"]   = 1,
-            ["quick_code"]    = "QC-1",
-            ["relative_path"] = "a/b.pdf",
+            ["page_start"]    = 3,
+            ["child_index"]   = 1,
             ["content"]       = "The chunk content",
             ["page_count"]    = 12,
             ["created_at"]    = "2018-02-01T00:00:00Z",
@@ -77,11 +78,11 @@ public class KnowledgeBaseReferenceMapperTests
         Assert.AreEqual("chunk1", chunk.Id);
         Assert.AreEqual("doc1", chunk.DocumentId);
         Assert.AreEqual("Title", chunk.Title);
-        Assert.AreEqual("Summary", chunk.Summary);
+        Assert.IsNull(chunk.Summary);
         Assert.AreEqual(3, chunk.Page);
         Assert.AreEqual(1, chunk.ChunkIndex);
-        Assert.AreEqual("QC-1", chunk.QuickCode);
-        Assert.AreEqual("a/b.pdf", chunk.RelativePath);
+        Assert.IsNull(chunk.QuickCode);
+        Assert.IsNull(chunk.RelativePath);
         Assert.AreEqual("The chunk content", chunk.Content);
         Assert.AreEqual(12, chunk.PageCount);
         Assert.AreEqual(DateTimeOffset.Parse("2018-02-01T00:00:00Z"), chunk.CreatedAt);

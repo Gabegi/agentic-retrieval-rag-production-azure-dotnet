@@ -24,10 +24,14 @@ public class ChunkingHelperTests
     [TestMethod]
     public void EstimateTokens_Table_UsesTableRatioAndRoundsUp()
     {
-        // 10 chars / 2.2 = 4.545... -> ceil to 5.
+        // 10 chars / 1.8 = 5.55... -> ceil to 6. The table ratio was 2.2 until it was
+        // re-measured with the real tokenizer over the whole cached text of the big four:
+        // two documents came back below 2.20 (CAO VVT 1.88, CAO GHZ 2.00), which made the
+        // old constant underestimate table tokens by ~17% - the direction that silently
+        // overruns a ceiling.
         var tokens = ChunkingHelper.EstimateTokens(new string('a', 10), isTable: true);
 
-        Assert.AreEqual(5, tokens);
+        Assert.AreEqual(6, tokens);
     }
 
     [TestMethod]

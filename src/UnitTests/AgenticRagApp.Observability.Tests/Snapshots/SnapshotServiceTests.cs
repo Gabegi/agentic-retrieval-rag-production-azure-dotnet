@@ -16,7 +16,7 @@ public class SnapshotServiceTests
 
     private sealed record TestChunk(
         string Id, string DocumentId, string? Title, DateTimeOffset? LastModifiedDate,
-        string Content, string? Heading, int PageNumber, int ChunkIndex, string ContentHash) : ISnapshotSource;
+        string Content, string? HeadingText, int PageStart, int ChildIndex, string ContentHash) : ISnapshotSource;
 
     private static SnapshotService BuildService(Mock<IBlobStore> blobStore) =>
         new(blobStore.Object, new Mock<BlobContainerClient>().Object, NullLogger<SnapshotService>.Instance);

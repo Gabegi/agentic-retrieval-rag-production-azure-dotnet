@@ -3,7 +3,10 @@
 Business requirements for the chatbot's answering behavior. Not yet implemented/validated
 against `AgenticRagQueryService` and related services in this project.
 
-1. All answers are generated in C1-level Dutch.
+1. ~~All answers are generated in C1-level Dutch.~~ **Changed 2026-08-12 to B1-level Dutch** — plain
+   language so the whole workforce can follow it, not just policy authors. Implemented in
+   `KnowledgeService.AnswerInstructions`. **Needs PO sign-off**, since this rewrites the criterion as
+   originally agreed; the golden-questions expected answers may also need rewording to match.
 
 2. The chatbot gives NO medical advice — clear fallback message.
 

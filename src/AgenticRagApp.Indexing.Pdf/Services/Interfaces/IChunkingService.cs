@@ -8,10 +8,12 @@ public interface IChunkingService
 {
     string Name { get; }
 
-    // Low-level: splits raw text into TextChunks using the configured strategy.
-    IReadOnlyList<TextChunk> Chunk(string content);
+    // The low-level Chunk(string) passthrough is gone with the flat strategy interface it
+    // wrapped: a strategy now needs the whole document (headings, section tree, page map,
+    // routing measurements), so there is nothing meaningful a bare string can be chunked
+    // against. It had no callers outside its own tests.
 
-    // High-level: converts ExtractionDocuments into indexed DocumentChunks,
+    // Converts ExtractionDocuments into indexed DocumentChunks,
     // computes ChunkingStageMetrics, and emits all chunk telemetry. Async - resolves
     // family/domain identity (FamilyIdEmbedder) via an embedding call before splitting.
     Task<(IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(

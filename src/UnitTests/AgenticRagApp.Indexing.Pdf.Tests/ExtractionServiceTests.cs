@@ -14,7 +14,6 @@ public class ExtractionServiceTests
 {
     private static PdfExtractionDocument Doc(string sourceId) => new(
         SourceId:              sourceId,
-        Ordinal:               0,
         Content:               "content",
         Title:                 "",
         Author:                null,
@@ -27,15 +26,17 @@ public class ExtractionServiceTests
         ZenyaStatus:           null,
         ZenyaUrl:              null,
         Bookmarks:             [],
+        PageSpans:        [new PageSpan(1, 0, "content".Length, null, false)],
+        PageBreadcrumbs:  new Dictionary<int, string>(),
         Sections:              [],
-        Breadcrumb:            null,
         Headings:              [],
         Boilerplate:           [],
         Tables:                [],
-        Dimensions:            null,
         SelectionMarks:        [],
         Figures:               [],
-        Lines:                 []);
+        Lines:            [],
+        Routing:          null,
+        Language:         null);
 
     private static PdfExtractionOutput BuildOutput(IEnumerable<PdfExtractionDocument> docs) => new(docs.ToList())
     {
