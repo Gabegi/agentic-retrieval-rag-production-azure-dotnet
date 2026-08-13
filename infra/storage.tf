@@ -21,7 +21,7 @@
 # ---------------------------------------------------------------------------
 
 resource "azurerm_storage_account" "func" {
-  name                     = lower("corstfunccap${local.env}${local.region}")
+  name                     = lower("constfunccap${local.env}${local.region}")
   resource_group_name      = data.azurerm_resource_group.data.name
   location                 = var.location
   account_tier             = "Standard"
@@ -54,7 +54,7 @@ resource "azurerm_storage_account" "func" {
 }
 
 resource "azurerm_storage_account" "data" {
-  name                     = lower("corstdatacap${local.env}${local.region}")
+  name                     = lower("constdatacap${local.env}${local.region}")
   resource_group_name      = data.azurerm_resource_group.data.name
   location                 = var.location
   account_tier             = "Standard"
@@ -175,14 +175,14 @@ resource "azurerm_storage_container" "eval_results" {
 # account ("OnlyOneGroupIdPermitted... first-party resource"), so blob/queue/
 # table each need their own private endpoint rather than one bundled PE.
 resource "azurerm_private_endpoint" "stfunc_blob" {
-  name                          = "cor-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_storage_account.func.id
     subresource_names              = ["blob"]
     is_manual_connection           = false
@@ -197,14 +197,14 @@ resource "azurerm_private_endpoint" "stfunc_blob" {
 }
 
 resource "azurerm_private_endpoint" "stfunc_queue" {
-  name                          = "cor-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_storage_account.func.id
     subresource_names              = ["queue"]
     is_manual_connection           = false
@@ -219,14 +219,14 @@ resource "azurerm_private_endpoint" "stfunc_queue" {
 }
 
 resource "azurerm_private_endpoint" "stfunc_table" {
-  name                          = "cor-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_storage_account.func.id
     subresource_names              = ["table"]
     is_manual_connection           = false
@@ -241,14 +241,14 @@ resource "azurerm_private_endpoint" "stfunc_table" {
 }
 
 resource "azurerm_private_endpoint" "stfunc_file" {
-  name                          = "cor-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_storage_account.func.id
     subresource_names              = ["file"]
     is_manual_connection           = false
@@ -263,14 +263,14 @@ resource "azurerm_private_endpoint" "stfunc_file" {
 }
 
 resource "azurerm_private_endpoint" "stdata" {
-  name                          = "cor-pep-stdata-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-stdata-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-stdata-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-stdata-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-stdata-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-stdata-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_storage_account.data.id
     subresource_names              = ["blob"]
     is_manual_connection           = false

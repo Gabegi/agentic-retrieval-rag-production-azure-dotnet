@@ -21,8 +21,8 @@ header comment for the same note from the infra side.
 
 ## All principals with access to the Foundry account (dev)
 
-The eval SPN isn't the only identity granted on `cor-ais-cap-dev-we-001` (resource group
-`cor-cap-ai-dev-we-001`, subscription `cor-cap-dev`). Pulled via `az role assignment list --scope
+The eval SPN isn't the only identity granted on `con-ais-cap-dev-we-001` (resource group
+`con-cap-ai-dev-we-001`, subscription `con-cap-dev`). Pulled via `az role assignment list --scope
 <foundry-account-id>` on 2026-08-06 — re-run that command rather than trusting this table if it's
 been a while, since grants can drift independently of Terraform (e.g. manual portal changes):
 
@@ -54,9 +54,9 @@ matching identity, not by resolved name.
    one passing run.
 
 2. **Storage `AuthorizationFailure` (403) on `EvalResultWriter.WriteAsync`** — confirmed live via
-   `az rest` against the roleAssignments API in dev (`corstdatacapdevwe`): the deployer SP has
+   `az rest` against the roleAssignments API in dev (`constdatacapdevwe`): the deployer SP has
    `Storage Blob Data Contributor` directly on the storage account. Not yet confirmed in prod
-   (`corstdatacapprdwe`) — no CLI visibility into that resource group from this session. If it
+   (`constdatacapprdwe`) — no CLI visibility into that resource group from this session. If it
    recurs after confirming the role is live, also rule out an IP-firewall rejection: Azure Storage
    returns the same `AuthorizationFailure` error for a blocked IP as for a missing RBAC role, and
    the pipeline's "Open network access for eval run" step needs to have actually landed the

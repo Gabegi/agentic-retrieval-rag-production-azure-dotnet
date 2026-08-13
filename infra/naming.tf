@@ -4,13 +4,13 @@ locals {
   # resource builds its own name from these primitives, inline, where it's
   # defined - this file only holds the shared convention, not concrete names.
   #
-  #   Resource groups : cor-cap-<workload>-<env>-<region>-<instance>
-  #   Most resources  : cor-<type>-cap-<env>-<region>-<instance>
-  #   Multi-target       cor-<type>-<target>-cap-<env>-<region>-<instance>
-  #     resources (eg      (private endpoints: cor-pep-ais-cap-dev-we-001)
+  #   Resource groups : con-cap-<workload>-<env>-<region>-<instance>
+  #   Most resources  : con-<type>-cap-<env>-<region>-<instance>
+  #   Multi-target       con-<type>-<target>-cap-<env>-<region>-<instance>
+  #     resources (eg      (private endpoints: con-pep-ais-cap-dev-we-001)
   #     private            NIC = "<private endpoint name>_nic"
   #     endpoints)
-  #   Subnets         : cor-snet-cap-<purpose>-<instance>   (no env/region)
+  #   Subnets         : con-snet-cap-<purpose>-<instance>   (no env/region)
   #   Storage accounts: cor + st + <purpose> + cap + <env> + <region>
   #                     (no dashes/instance - alphanumeric, <=24 chars)
   #
@@ -18,7 +18,7 @@ locals {
   # 1-infra-deploy.yml's envName so the ADO Environment gate name and the
   # Terraform variable use the same spelling) maps to the compact "dev"/"prd"
   # already baked into every deployed resource name (see
-  # .pipelines/1-infra-deploy.yml backendRgName: cor-cap-cicd-prd-we-001) -
+  # .pipelines/1-infra-deploy.yml backendRgName: con-cap-cicd-prd-we-001) -
   # that shorthand can't change without renaming live resources, so it stays
   # as its own, third, deliberately different spelling.
   # ---------------------------------------------------------------------------

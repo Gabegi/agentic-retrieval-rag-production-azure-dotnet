@@ -4,7 +4,7 @@
 # ---------------------------------------------------------------------------
 
 resource "azurerm_service_plan" "api" {
-  name                = "cor-plan-api-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-plan-api-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = azurerm_resource_group.api.name
   location            = var.location
   os_type             = "Linux"
@@ -14,7 +14,7 @@ resource "azurerm_service_plan" "api" {
 }
 
 resource "azurerm_linux_web_app" "api" {
-  name                           = "cor-app-api-cap-${local.env}-${local.region}-${local.instance}"
+  name                           = "con-app-api-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name            = azurerm_resource_group.api.name
   location                       = var.location
   service_plan_id                = azurerm_service_plan.api.id
@@ -49,14 +49,14 @@ resource "azurerm_linux_web_app" "api" {
 }
 
 resource "azurerm_private_endpoint" "api" {
-  name                          = "cor-pep-api-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-api-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = azurerm_resource_group.api.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-api-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-api-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-api-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-api-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_linux_web_app.api.id
     subresource_names              = ["sites"]
     is_manual_connection           = false

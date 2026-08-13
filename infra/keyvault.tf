@@ -6,7 +6,7 @@ resource "azurerm_key_vault" "main" {
   # 2026-09-22) - names must be globally unique per region+sub even while
   # soft-deleted, and recovery only targets the original RG. Reclaim "001"
   # after the scheduled purge date if it matters.
-  name                = "cor-kv-cap-${local.env}-${local.region}-002"
+  name                = "con-kv-cap-${local.env}-${local.region}-002"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.data.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
@@ -21,14 +21,14 @@ resource "azurerm_key_vault" "main" {
 }
 
 resource "azurerm_private_endpoint" "kv" {
-  name                          = "cor-pep-kv-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-kv-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-kv-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-kv-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-kv-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-kv-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_key_vault.main.id
     subresource_names              = ["vault"]
     is_manual_connection           = false

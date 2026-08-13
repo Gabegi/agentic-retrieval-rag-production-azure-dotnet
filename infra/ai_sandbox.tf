@@ -49,7 +49,7 @@ resource "azapi_resource" "sandbox_rai_policy" {
   count = var.environment == "development" ? 1 : 0
 
   type      = "Microsoft.CognitiveServices/accounts/raiPolicies@2025-06-01"
-  name      = "cor-cap-sandbox-strict"
+  name      = "con-cap-sandbox-strict"
   parent_id = data.azurerm_cognitive_account.foundry.id
 
   body = {

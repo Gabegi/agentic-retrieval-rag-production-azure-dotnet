@@ -104,7 +104,7 @@ variable "dev_developer_object_ids" {
 
 variable "dev_eval_service_principal_object_id" {
   type        = string
-  description = "Object ID of the service principal (cor-cap-app-dev-spn) that runs the eval pipeline against dev, e.g. .pipelines/base/run-eval-tests.yml. Granted fixed role assignments in dev_access.tf, independent of data.azurerm_client_config.current (eval_access.tf), so they don't shift if a human applies dev locally. Empty string disables these grants."
+  description = "Object ID of the service principal (con-cap-app-dev-spn) that runs the eval pipeline against dev, e.g. .pipelines/base/run-eval-tests.yml. Granted fixed role assignments in dev_access.tf, independent of data.azurerm_client_config.current (eval_access.tf), so they don't shift if a human applies dev locally. Empty string disables these grants."
   default     = ""
 }
 

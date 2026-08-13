@@ -1,5 +1,5 @@
 resource "azurerm_search_service" "main" {
-  name                = "cor-srch-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-srch-cap-${local.env}-${local.region}-${local.instance}"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.data.name
   sku                 = "standard"
@@ -46,7 +46,7 @@ resource "azurerm_search_service" "main" {
 # Created in "Pending" status - see the azapi block below for how it gets
 # approved.
 resource "azurerm_search_shared_private_link_service" "openai" {
-  name               = "cor-spl-srch-openai-cap-${local.env}-${local.region}-${local.instance}"
+  name               = "con-spl-srch-openai-cap-${local.env}-${local.region}-${local.instance}"
   search_service_id  = azurerm_search_service.main.id
   subresource_name   = "openai_account"
   target_resource_id = data.azurerm_cognitive_account.foundry.id
@@ -121,14 +121,14 @@ resource "azurerm_role_assignment" "search_openai_user" {
 }
 
 resource "azurerm_private_endpoint" "search" {
-  name                          = "cor-pep-srch-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-srch-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-srch-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-srch-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-srch-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-srch-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_search_service.main.id
     subresource_names              = ["searchService"]
     is_manual_connection           = false

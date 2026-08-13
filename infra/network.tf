@@ -22,7 +22,7 @@ locals {
 
 resource "azurerm_subnet" "workload" {
   for_each             = local.workload_subnets
-  name                 = "cor-snet-cap-${each.key}-${local.instance}"
+  name                 = "con-snet-cap-${each.key}-${local.instance}"
   resource_group_name  = data.azurerm_resource_group.network.name
   virtual_network_name = data.azurerm_virtual_network.main.name
   address_prefixes     = [each.value]
@@ -43,7 +43,7 @@ resource "azurerm_subnet" "workload" {
 # subnets above their rule sets are expected to diverge (func vs api may need
 # different rules), which a for_each would make more awkward, not less.
 resource "azurerm_network_security_group" "func" {
-  name                = "cor-nsg-func-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-nsg-func-cap-${local.env}-${local.region}-${local.instance}"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.network.name
   tags                = local.common_tags
@@ -62,7 +62,7 @@ resource "azurerm_network_security_group" "func" {
 }
 
 resource "azurerm_network_security_group" "api" {
-  name                = "cor-nsg-api-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-nsg-api-cap-${local.env}-${local.region}-${local.instance}"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.network.name
   tags                = local.common_tags

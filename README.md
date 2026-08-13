@@ -11,8 +11,8 @@ PDF/CSV sources ──▶ Indexing.Pdf / Indexing.Csv ──▶ Azure AI Search 
                      User question ──▶ Querying ──▶ Knowledge Base retrieval ──▶ cited answer
 ```
 
-- **Indexing** (`AgenticRagApp.Indexing.Pdf`/`.Csv`): extracts source documents (via Document Intelligence for PDFs), chunks and embeds them, and uploads to the Azure AI Search index. Runs as a Durable Functions orchestration in `AgenticRagApp.FunctionApp` (`cor-func-idx-*`).
-- **Querying** (`AgenticRagApp.Querying`): takes a user question, retrieves relevant chunks from the Search knowledge base, and generates a cited answer. Currently also exposed through `AgenticRagApp.FunctionApp` (`/api/query`); `infra/app_service.tf` provisions a separate Linux App Service (`cor-app-api-*`) for this, for a future split-out query API deployment.
+- **Indexing** (`AgenticRagApp.Indexing.Pdf`/`.Csv`): extracts source documents (via Document Intelligence for PDFs), chunks and embeds them, and uploads to the Azure AI Search index. Runs as a Durable Functions orchestration in `AgenticRagApp.FunctionApp` (`con-func-idx-*`).
+- **Querying** (`AgenticRagApp.Querying`): takes a user question, retrieves relevant chunks from the Search knowledge base, and generates a cited answer. Currently also exposed through `AgenticRagApp.FunctionApp` (`/api/query`); `infra/app_service.tf` provisions a separate Linux App Service (`con-app-api-*`) for this, for a future split-out query API deployment.
 - **Observability** (`AgenticRagApp.Observability`): cross-cutting run reports, snapshots (for index restore), and telemetry shared by both sides.
 - **Infrastructure** (`AgenticRagApp.Infrastructure`): the Azure client wiring (Search, Blob, Document Intelligence, Embedding, Knowledge Base) both sides depend on.
 

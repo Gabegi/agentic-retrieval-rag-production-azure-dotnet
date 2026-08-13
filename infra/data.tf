@@ -6,45 +6,45 @@
 # --- Networking (owned by the platform/network team) ------------------------
 
 data "azurerm_resource_group" "network" {
-  name = "cor-cap-network-${local.env}-${local.region}-${local.instance}"
+  name = "con-cap-network-${local.env}-${local.region}-${local.instance}"
 }
 
 data "azurerm_virtual_network" "main" {
-  name                = "cor-vnet-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-vnet-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.network.name
 }
 
 data "azurerm_subnet" "pe" {
-  name                 = "cor-snet-cap-pe-${local.instance}"
+  name                 = "con-snet-cap-pe-${local.instance}"
   virtual_network_name = data.azurerm_virtual_network.main.name
   resource_group_name  = data.azurerm_resource_group.network.name
 }
 
 data "azurerm_route_table" "spoke" {
-  name                = "cor-rt-spoke-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-rt-spoke-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.network.name
 }
 
 # --- Foundry / AI -------------------------------------------------------------
 
 data "azurerm_resource_group" "ai" {
-  name = "cor-cap-ai-${local.env}-${local.region}-${local.instance}"
+  name = "con-cap-ai-${local.env}-${local.region}-${local.instance}"
 }
 
 data "azurerm_cognitive_account" "foundry" {
-  name                = "cor-ais-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-ais-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.ai.name
 }
 
 data "azurerm_application_insights" "main" {
-  name                = "cor-appi-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-appi-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.ai.name
 }
 
 # --- Data tier ------------------------------------------------------------
 
 data "azurerm_resource_group" "data" {
-  name = "cor-cap-data-${local.env}-${local.region}-${local.instance}"
+  name = "con-cap-data-${local.env}-${local.region}-${local.instance}"
 }
 
 # --- Private DNS zones (hub, owned by platform team) -----------------------

@@ -57,7 +57,7 @@ provider "azurerm" {
 
 # Log Analytics/management subscription - owns the
 # workspace App Insights writes into (IngestionMode: LogAnalytics on
-# cor-appi-cap-*, see data.azurerm_application_insights.main.WorkspaceResourceId).
+# con-appi-cap-*, see data.azurerm_application_insights.main.WorkspaceResourceId).
 # A THIRD subscription, distinct from both the default provider and the hub
 # alias above.
 #

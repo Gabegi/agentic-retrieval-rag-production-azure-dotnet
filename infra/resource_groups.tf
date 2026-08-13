@@ -5,7 +5,7 @@
 
 # Hosts the query API App Service (app_service.tf).
 resource "azurerm_resource_group" "api" {
-  name     = "cor-cap-api-${local.env}-${local.region}-${local.instance}"
+  name     = "con-cap-api-${local.env}-${local.region}-${local.instance}"
   location = var.location
   tags     = local.common_tags
 }

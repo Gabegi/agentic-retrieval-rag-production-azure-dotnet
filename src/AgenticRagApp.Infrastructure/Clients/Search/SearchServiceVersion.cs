@@ -15,7 +15,7 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 // eval failure look like data loss when nothing had been lost.
 // See docs/2608/260812/knowledgebasefix-action-plan.md §1.2.
 //
-// cor-srch-cap-dev-we-001 was probed on 2026-08-12 and serves 2025-11-01-preview, 2026-04-01
+// con-srch-cap-dev-we-001 was probed on 2026-08-12 and serves 2025-11-01-preview, 2026-04-01
 // and 2026-05-01-preview on /knowledgebases (and only 2025-08-01-preview on the retired
 // /agents path). This pin is therefore behind what the service supports, deliberately: it is
 // the version the app has been running and evaluated against. Moving it forward is a

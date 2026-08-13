@@ -13,7 +13,7 @@
 # through the ARM REST passthrough provider - same reason as the private
 # endpoint connection approval in search.tf.
 #
-# Prerequisite, verified 2026-08-06 on cor-ais-cap-dev-we-001:
+# Prerequisite, verified 2026-08-06 on con-ais-cap-dev-we-001:
 # properties.allowProjectManagement = true on the account. Without it ARM
 # rejects project creation. That flag is owned by the landing-zone team, not
 # this config.
@@ -31,11 +31,11 @@ resource "azapi_resource" "sandbox" {
   type = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
 
   # Deliberately follows the naming of the project the landing-zone team
-  # already created on this account (cor-cap-dvt-dev) rather than the
-  # cor-<type>-cap-<env>-<region>-<instance> convention in naming.tf - the
+  # already created on this account (con-cap-dvt-dev) rather than the
+  # con-<type>-cap-<env>-<region>-<instance> convention in naming.tf - the
   # project name ends up verbatim in the data-plane endpoint below, and the
   # two projects on one account should read as siblings there.
-  name      = "cor-cap-sandbox-${local.env}"
+  name      = "con-cap-sandbox-${local.env}"
   parent_id = data.azurerm_cognitive_account.foundry.id
   location  = var.location
 
@@ -60,7 +60,7 @@ resource "azapi_resource" "sandbox" {
     }
   }
 
-  # isDefault is left unset on purpose: cor-cap-dvt-dev is currently the
+  # isDefault is left unset on purpose: con-cap-dvt-dev is currently the
   # account's default project, and claiming that flag here would silently move
   # it off a resource this config doesn't own.
 

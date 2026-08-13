@@ -7,7 +7,7 @@
 # ---------------------------------------------------------------------------
 
 resource "azurerm_service_plan" "func" {
-  name                = "cor-plan-func-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-plan-func-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.data.name
   location            = var.location
   os_type             = "Windows"
@@ -19,7 +19,7 @@ resource "azurerm_service_plan" "func" {
 }
 
 resource "azurerm_windows_function_app" "indexer" {
-  name                          = "cor-func-idx-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-func-idx-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name           = data.azurerm_resource_group.data.name
   location                      = var.location
   service_plan_id               = azurerm_service_plan.func.id
@@ -154,7 +154,7 @@ resource "azurerm_windows_function_app" "indexer" {
 
 #  need this on any EP1 Function App
 resource "azurerm_storage_share" "func_content" {
-  name               = "cor-func-idx-cap-${local.env}-${local.region}-${local.instance}"
+  name               = "con-func-idx-cap-${local.env}-${local.region}-${local.instance}"
   storage_account_id = azurerm_storage_account.func.id
   quota              = 100
 }
@@ -169,14 +169,14 @@ resource "azurerm_storage_container" "indexing_pipeline" {
 }
 
 resource "azurerm_private_endpoint" "func" {
-  name                          = "cor-pep-func-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-func-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-func-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-func-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-func-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-func-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_windows_function_app.indexer.id
     subresource_names              = ["sites"]
     is_manual_connection           = false

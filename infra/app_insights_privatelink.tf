@@ -12,7 +12,7 @@
 # silent-failure the console-exporter diagnostics in Program.cs were added to
 # investigate.
 #
-# Public ingestion/query on cor-appi-cap-* is left untouched
+# Public ingestion/query on con-appi-cap-* is left untouched
 # (data.azurerm_application_insights.main, publicNetworkAccessForIngestion:
 # Enabled) - this only adds a second, private path via longest-prefix-match
 # routing (same mechanism as every other private endpoint in this repo), so
@@ -23,7 +23,7 @@
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_private_link_scope" "main" {
-  name                = "cor-ampls-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-ampls-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.ai.name
 
   tags = local.common_tags
@@ -32,7 +32,7 @@ resource "azurerm_monitor_private_link_scope" "main" {
 # Links App Insights into the scope - required before its telemetry can flow
 # over the private endpoint below.
 resource "azurerm_monitor_private_link_scoped_service" "app_insights" {
-  name                = "cor-ampls-svc-appi-cap-${local.env}-${local.region}-${local.instance}"
+  name                = "con-ampls-svc-appi-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.ai.name
   scope_name          = azurerm_monitor_private_link_scope.main.name
   linked_resource_id  = data.azurerm_application_insights.main.id
@@ -59,14 +59,14 @@ resource "azurerm_monitor_private_link_scoped_service" "app_insights" {
 # AMPLS's "azuremonitor" subresource fronts every service linked into it via
 # the scoped-service resources above.
 resource "azurerm_private_endpoint" "ampls" {
-  name                          = "cor-pep-ampls-cap-${local.env}-${local.region}-${local.instance}"
+  name                          = "con-pep-ampls-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.ai.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "cor-pep-ampls-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-ampls-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "cor-pep-ampls-cap-${local.env}-${local.region}-${local.instance}-psc"
+    name                           = "con-pep-ampls-cap-${local.env}-${local.region}-${local.instance}-psc"
     private_connection_resource_id = azurerm_monitor_private_link_scope.main.id
     subresource_names              = ["azuremonitor"]
     is_manual_connection           = false
