@@ -550,7 +550,7 @@ public class PdfExtractionPipelineTests
     }
 
     [TestMethod]
-    public void BuildDocuments_CarriesRoutingAndLanguage()
+    public void BuildDocuments_CarriesProfileAndLanguage()
     {
         // Both were computed at extraction and read by nothing at all before C7.
         var result = SuccessResult("a.pdf") with { Language = "nl" };

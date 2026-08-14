@@ -42,8 +42,9 @@ public class SnapshotServiceTests
 
         var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-1", StartedAt);
 
-        Assert.AreEqual(1, hashes.Count);
-        Assert.IsTrue(hashes.Contains("hash1"));
+        Assert.AreEqual(1, hashes.ContentHashes.Count);
+        Assert.IsTrue(hashes.ContentHashes.Contains("hash1"));
+        Assert.IsTrue(hashes.DocumentIds.Contains("doc1"));
     }
 
     [TestMethod]
@@ -60,9 +61,15 @@ public class SnapshotServiceTests
 
         var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-2", StartedAt);
 
-        Assert.AreEqual(2, hashes.Count);
-        Assert.IsTrue(hashes.Contains("old-hash"));
-        Assert.IsTrue(hashes.Contains("new-hash"));
+        Assert.AreEqual(2, hashes.ContentHashes.Count);
+        Assert.IsTrue(hashes.ContentHashes.Contains("old-hash"));
+        Assert.IsTrue(hashes.ContentHashes.Contains("new-hash"));
+
+        // Both grains come off the same merged list, so the document ids agree with the hashes
+        // about what survived - the identity store's eviction depends on that.
+        Assert.AreEqual(2, hashes.DocumentIds.Count);
+        Assert.IsTrue(hashes.DocumentIds.Contains("doc-untouched"));
+        Assert.IsTrue(hashes.DocumentIds.Contains("doc-new"));
     }
 
     [TestMethod]
@@ -82,9 +89,13 @@ public class SnapshotServiceTests
 
         var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2", StartedAt);
 
-        Assert.AreEqual(1, hashes.Count);
-        Assert.IsTrue(hashes.Contains("keep-hash"));
-        Assert.IsFalse(hashes.Contains("stale-hash"));
+        Assert.AreEqual(1, hashes.ContentHashes.Count);
+        Assert.IsTrue(hashes.ContentHashes.Contains("keep-hash"));
+        Assert.IsFalse(hashes.ContentHashes.Contains("stale-hash"));
+
+        // The removed document must not appear live, or the identity store would keep its
+        // record forever.
+        Assert.IsFalse(hashes.DocumentIds.Contains("doc-stale"));
     }
 
     [TestMethod]
@@ -100,7 +111,8 @@ public class SnapshotServiceTests
 
         var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2", StartedAt);
 
-        Assert.AreEqual(0, hashes.Count);
+        Assert.AreEqual(0, hashes.ContentHashes.Count);
+        Assert.AreEqual(0, hashes.DocumentIds.Count);
     }
 
     [TestMethod]

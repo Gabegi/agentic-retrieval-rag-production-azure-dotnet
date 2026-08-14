@@ -6,7 +6,7 @@ namespace AgenticRagApp.Indexing.Pdf.Utils;
 // pre-chunking-action-items.md): "don't pay a model for what a filename already says."
 // GGZ/GHZ/VVT/V&V/VGZ already appear verbatim in titles for the sector-specific CAOs and
 // brochures, so a plain regex over the title is free and deterministic, unlike
-// embedding-based clustering (FamilyIdEmbedder), which only ever gets a probabilistic
+// embedding-based clustering (DocumentIdentityResolver), which only ever gets a probabilistic
 // answer.
 public static partial class DomainTagger
 {

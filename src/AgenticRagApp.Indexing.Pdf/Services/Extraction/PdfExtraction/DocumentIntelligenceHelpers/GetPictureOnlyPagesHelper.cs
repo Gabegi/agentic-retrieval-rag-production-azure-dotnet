@@ -4,7 +4,7 @@ using AgenticRagApp.Indexing.Pdf.Models;
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
 // C5 (docs/2608/260811/pre-chunking-action-items.md) - "join FigureInfo.PageNumber against
-// ZeroWordsOnPage/EmptyPageContent". Document-level Picture routing (ChunkRoutingHelper)
+// ZeroWordsOnPage/EmptyPageContent". Document-level Picture routing (DocumentProfileHelper)
 // can't catch a mixed document (38 normal pages + 2 diagram pages) - those 2 pages currently
 // produce vector-residue chunks or nothing. This flags the individual pages responsible,
 // reusing the exact same predicates GetQualityWarningsHelper.GetZeroWordWarnings and

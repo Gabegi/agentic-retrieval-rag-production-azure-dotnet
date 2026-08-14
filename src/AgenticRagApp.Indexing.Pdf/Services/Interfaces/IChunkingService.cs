@@ -1,4 +1,4 @@
-using AgenticRagApp.Indexing.Pdf.Models;
+﻿using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Common.Models;
 using AgenticRagApp.Observability.Reports;
 
@@ -15,7 +15,15 @@ public interface IChunkingService
 
     // Converts ExtractionDocuments into indexed DocumentChunks,
     // computes ChunkingStageMetrics, and emits all chunk telemetry. Async - resolves
-    // family/domain identity (FamilyIdEmbedder) via an embedding call before splitting.
+    // family/domain identity (DocumentIdentityResolver) via an embedding call before splitting.
+    //
+    // Also writes the stage's own run report (one blob covering identity resolution, strategy
+    // routing, heading location and the chunks), including when the stage throws - which is
+    // why it needs instanceId/startedAt to name the blob. Both are optional: a caller outside
+    // an orchestration gets the id-less path, same as StageReportPath's other callers.
     Task<(IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
-        IReadOnlyList<PdfExtractionDocument> docs, CancellationToken ct = default);
+        IReadOnlyList<PdfExtractionDocument> docs,
+        string?                              instanceId = null,
+        DateTimeOffset?                      startedAt  = null,
+        CancellationToken                    ct         = default);
 }

@@ -118,7 +118,7 @@ public class RagEvaluationTests
             "every query as 'no relevant content found' instead of testing anything real. This means " +
             "the indexing pipeline isn't populating the index (check the Function App's indexing run " +
             "reports) or the index schema is stale and needs a restore (POST index/restore on the " +
-            "Function App, see PdfIndexingFunction.RestoreOrchestrator) before this suite can run " +
+            "Function App, see IndexRestoreFunction.RestoreOrchestrator) before this suite can run " +
             "meaningfully.");
 
         var retrievalClient = new KnowledgeBaseClient(new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential, SearchServiceVersion.Options()));

@@ -167,5 +167,6 @@ public class ServiceCollectionExtensionsTests
         Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IBlobStore"));
         Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IIndexService"));
         Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IIndexDocumentService"));
+        Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IIndexRebuildService"));
     }
 }

@@ -17,7 +17,7 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 // The raw counts are kept alongside the derived ratios and the decisions, not just the
 // decisions alone, so a threshold can be re-argued later against the same numbers without
 // re-running extraction.
-public sealed record DocumentRouting(
+public sealed record DocumentProfile(
     // ExtractedPageCount/TotalChars come from the actual cleaned pages a document's chunks
     // are built from - not native PDF metadata's PageCount, which can be null and can
     // diverge from what Document Intelligence actually extracted. Page count is a
@@ -94,4 +94,11 @@ public sealed record DocumentRouting(
     // explains more of the duplicate-chunk boilerplate: a page of empty rating-grid
     // checkboxes produces near-identical low-content chunks across documents sharing a
     // template.
-    double SelectionMarksPerPage);
+    double SelectionMarksPerPage,
+
+    // Fraction of the document's characters living in table blocks, measured on the same
+    // block split chunking cuts on (SplitIntoBlocks) - the "is this document table-shaped"
+    // routing signal (TableChecker). Trailing with a default so snapshots written before
+    // the field existed deserialize as 0, which routes as not-table-shaped - the safe
+    // default - until the document is next extracted.
+    double TableCharShare = 0);

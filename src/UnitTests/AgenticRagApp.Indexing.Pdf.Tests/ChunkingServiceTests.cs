@@ -1,11 +1,13 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Indexing.Pdf.Utils;
 using AgenticRagApp.Common.Models;
+using AgenticRagApp.Observability.Reports;
 
 namespace RagApp.UnitTests.Indexing;
 
@@ -17,9 +19,9 @@ namespace RagApp.UnitTests.Indexing;
 public class ChunkingServiceTests
 {
     // No persisted identity; the embedding call echoes back one arbitrary vector per input.
-    // ChunkingService's own behaviour is what these exercise, not FamilyIdEmbedder's
-    // clustering (see FamilyIdEmbedderTests for that).
-    private static FamilyIdEmbedder BuildFamilyIdEmbedder()
+    // ChunkingService's own behaviour is what these exercise, not DocumentIdentityResolver's
+    // clustering (see DocumentIdentityResolverTests for that).
+    private static DocumentIdentityResolver BuildDocumentIdentityResolver()
     {
         var embeddingClient = new Mock<IEmbeddingClient>();
         embeddingClient
@@ -30,15 +32,47 @@ public class ChunkingServiceTests
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
-        return new FamilyIdEmbedder(embeddingClient.Object, store.Object, new IndexerConfig(), NullLogger<FamilyIdEmbedder>.Instance);
+        // Dimensions match the 3-float vectors above - DocumentIdentityResolver rejects a vector whose
+        // length is not the configured dimension count.
+        return new DocumentIdentityResolver(
+            embeddingClient.Object, store.Object,
+            new IndexerConfig { OpenAiEmbeddingDimensions = 3 },
+            NullLogger<DocumentIdentityResolver>.Instance);
+    }
+
+    // Captures whatever ChunkingService writes, so the report-shape tests can assert on it
+    // without a blob store. Null resolver means "use the default", so a test can substitute
+    // one that throws.
+    private static (ChunkingService Service, List<ChunkingRunReport> Reports) BuildWithReports(
+        int tokenCeiling = SectionSplitter.DefaultTokenCeiling,
+        DocumentIdentityResolver? resolver = null)
+    {
+        var reports = new List<ChunkingRunReport>();
+        var writer  = new Mock<IPipelineArtifactWriter>();
+        writer
+            .Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<ChunkingRunReport>(), It.IsAny<CancellationToken>()))
+            .Callback<string, ChunkingRunReport, CancellationToken>((_, r, _) => reports.Add(r))
+            .Returns(Task.CompletedTask);
+
+        var cascade  = new SectionCascadeStrategy(new SectionSplitter(), tokenCeiling);
+        var selector = new ChunkingStrategySelector();
+
+        var service = new ChunkingService(
+            selector, cascade, resolver ?? BuildDocumentIdentityResolver(), writer.Object,
+            NullLogger<ChunkingService>.Instance);
+
+        return (service, reports);
     }
 
     private static ChunkingService BuildService(int tokenCeiling = SectionSplitter.DefaultTokenCeiling)
     {
         var cascade  = new SectionCascadeStrategy(new SectionSplitter(), tokenCeiling);
-        var selector = new DocumentStrategySelector(cascade, NullLogger<DocumentStrategySelector>.Instance);
+        var selector = new ChunkingStrategySelector();
 
-        return new ChunkingService(selector, BuildFamilyIdEmbedder(), NullLogger<ChunkingService>.Instance);
+        return new ChunkingService(
+            selector, cascade, BuildDocumentIdentityResolver(),
+            new Mock<IPipelineArtifactWriter>().Object,
+            NullLogger<ChunkingService>.Instance);
     }
 
     private static PdfExtractionDocument Doc(
@@ -60,7 +94,7 @@ public class ChunkingServiceTests
         IReadOnlyList<Heading>? boilerplate      = null,
         IReadOnlyList<TableInfo>? tables         = null,
         IReadOnlyList<FigureInfo>? figures       = null,
-        DocumentRouting?        routing          = null,
+        DocumentProfile?        profile          = null,
         string?                 language         = null) =>
         new(
             SourceId:         sourceId,
@@ -85,13 +119,13 @@ public class ChunkingServiceTests
             SelectionMarks:   [],
             Figures:          figures ?? [],
             Lines:            [],
-            Routing:          routing,
+            Profile:          profile,
             Language:         language);
 
     private static Heading H(string content, int offset, int page = 1, int depth = 1) =>
         new(content, "sectionHeading", offset, page, depth);
 
-    private static DocumentRouting Routing(bool hasContent) =>
+    private static DocumentProfile Profile(bool hasContent) =>
         new(ExtractedPageCount: 1, TotalChars: 100, FileSizeBytes: 1000,
             CharsPerPage: 100, BytesPerChar: 10, FiguresPerPage: 0, EstimatedTokens: 30,
             HasExtractableContent: hasContent, DocumentIsSafeReturnUnit: null,
@@ -297,7 +331,7 @@ public class ChunkingServiceTests
     {
         // A document with no extractable text produces vector-residue chunks (the corpus has a
         // literal "£ £" 30-character chunk). Emitting those is worse than emitting nothing.
-        var doc = Doc("doc1", "£ £", routing: Routing(hasContent: false));
+        var doc = Doc("doc1", "£ £", profile: Profile(hasContent: false));
 
         var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
@@ -305,10 +339,10 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public async Task NoRoutingComputed_IsTreatedAsHavingContent()
+    public async Task NoProfileComputed_IsTreatedAsHavingContent()
     {
         // A missing measurement must never silently drop a document.
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", routing: null)]);
+        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", profile: null)]);
 
         Assert.AreEqual(1, docs.Count);
     }
@@ -358,11 +392,20 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task DocumentsAreOrderedBySourceId()
     {
-        var docs = new[] { Doc("docC", "c"), Doc("docA", "a"), Doc("docB", "b") };
+        // Bodies have to clear the minimum-content rule, or every unit is dropped as vector
+        // residue and there is nothing left to assert an order on.
+        var docs = new[]
+        {
+            Doc("docC", "Body of the third document."),
+            Doc("docA", "Body of the first document."),
+            Doc("docB", "Body of the second document."),
+        };
 
         var (result, _) = await BuildService().ChunkDocumentsAsync(docs);
 
-        CollectionAssert.AreEqual(new[] { "a", "b", "c" }, result.Select(d => d.Content).ToList());
+        CollectionAssert.AreEqual(
+            new[] { "Body of the first document.", "Body of the second document.", "Body of the third document." },
+            result.Select(d => d.Content).ToList());
     }
 
     [TestMethod]
@@ -381,5 +424,117 @@ public class ChunkingServiceTests
 
         Assert.AreEqual("TwoAxisChunking", stats.Strategy);
         Assert.AreEqual(docs.Count, stats.ChunksProduced);
+    }
+
+    // ── run report ────────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task RunReport_IsWritten_WithOneRowPerDocument()
+    {
+        var (service, reports) = BuildWithReports();
+
+        await service.ChunkDocumentsAsync(
+            [Doc("docA", "body a", title: "CAO GGZ"), Doc("docB", "body b")], "instance-1");
+
+        var report = reports.Single();
+        Assert.IsTrue(report.Success);
+        Assert.IsNull(report.FailedAtStage);
+        Assert.AreEqual("instance-1", report.InstanceId);
+        CollectionAssert.AreEqual(new[] { "docA", "docB" }, report.Documents.Select(d => d.SourceId).ToList());
+        Assert.IsTrue(report.Documents.All(d => d.Outcome == "chunked"));
+        Assert.IsTrue(report.Documents.All(d => d.ChunkCount > 0));
+    }
+
+    [TestMethod]
+    public async Task RunReport_CarriesResolvedIdentityPerDocument()
+    {
+        var (service, reports) = BuildWithReports();
+
+        await service.ChunkDocumentsAsync([Doc("doc1", "body", title: "CAO GGZ 2025")], "instance-1");
+
+        var row = reports.Single().Documents.Single();
+        Assert.AreEqual("GGZ", row.DomainTag);
+        Assert.AreEqual("doc1", row.FamilyId);
+        // Nothing else in the run to cluster with, so this is a family of one - the flag is
+        // what distinguishes that from a real near-duplicate group.
+        Assert.IsFalse(row.IsInMultiMemberFamily);
+        Assert.AreEqual("embedded", row.IdentityVectorSource);
+    }
+
+    [TestMethod]
+    public async Task RunReport_DocumentFailingTheExtractionGate_IsFlaggedButStillChunked()
+    {
+        // The gate was demoted from filter to flag on 260814: it used to drop the document,
+        // which is how 20 of 51 documents were absent from the index while every stage reported
+        // success (calibration-findings.md §1 measured all 20, several at 3,000+ chars/page -
+        // they were failing on bytes/char, not on being text-poor).
+        //
+        // The document now chunks, and the gate's verdict travels as a flag on its report row -
+        // still visible, no longer destructive.
+        var (service, reports) = BuildWithReports();
+        var doc = Doc("gated", "body", profile: Profile(hasContent: false));
+
+        var (chunks, _) = await service.ChunkDocumentsAsync([doc], "instance-1");
+
+        Assert.IsTrue(chunks.Count > 0, "a gated document must still produce chunks");
+
+        var row = reports.Single().Documents.Single();
+        Assert.AreEqual("chunked", row.Outcome);
+        Assert.IsTrue(row.FailedExtractionGate, "the gate's verdict must still be reported");
+        Assert.AreEqual(chunks.Count, row.ChunkCount);
+    }
+
+    [TestMethod]
+    public async Task RunReport_IsStillWritten_WhenTheStageThrows()
+    {
+        // The whole point of writing from a finally: identity resolution throws on a
+        // wrong-dimension vector, and that run is exactly the one worth diagnosing.
+        var client = new Mock<IEmbeddingClient>();
+        client
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((new float[][] { [1f, 0f] }, 0));
+
+        var store = new Mock<IDocumentIdentityStore>();
+        store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var resolver = new DocumentIdentityResolver(
+            client.Object, store.Object,
+            new IndexerConfig { OpenAiEmbeddingDimensions = 3 },
+            NullLogger<DocumentIdentityResolver>.Instance);
+
+        var (service, reports) = BuildWithReports(resolver: resolver);
+
+        // Needs a title: a document with no title and no headings has nothing to embed, so
+        // resolution would skip it and never reach the dimension check.
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => service.ChunkDocumentsAsync([Doc("doc1", "body", title: "CAO GGZ")], "instance-1"));
+
+        var report = reports.Single();
+        Assert.IsFalse(report.Success);
+        Assert.AreEqual("identity-resolution", report.FailedAtStage);
+        StringAssert.Contains(report.Error, "expected 3");
+
+        // The document is still accounted for, as never-reached rather than missing.
+        var row = report.Documents.Single();
+        Assert.AreEqual("doc1", row.SourceId);
+        Assert.AreEqual("not_reached", row.Outcome);
+    }
+
+    [TestMethod]
+    public async Task RunReport_WriteFailure_DoesNotFailTheStage()
+    {
+        var writer = new Mock<IPipelineArtifactWriter>();
+        writer
+            .Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<ChunkingRunReport>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("blob storage is down"));
+
+        var cascade  = new SectionCascadeStrategy(new SectionSplitter(), SectionSplitter.DefaultTokenCeiling);
+        var selector = new ChunkingStrategySelector();
+        var service  = new ChunkingService(
+            selector, cascade, BuildDocumentIdentityResolver(), writer.Object, NullLogger<ChunkingService>.Instance);
+
+        var (chunks, _) = await service.ChunkDocumentsAsync([Doc("doc1", "body")], "instance-1");
+
+        Assert.AreEqual(1, chunks.Count);
     }
 }

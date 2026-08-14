@@ -113,7 +113,7 @@ public class PdfExtractor : IPdfExtractor
             // returned true above), but computed defensively via ?? [] rather than a
             // null-forgiving operator - a routing computation is not the place to newly
             // introduce a throw on a shape another gate was supposed to have already caught.
-            Routing = ChunkRoutingHelper.Compute(
+            Profile = DocumentProfileHelper.Compute(
                 documentAnalyzed.Pages ?? [],
                 documentAnalyzed.Structure?.Figures ?? [],
                 fileSizeBytes,

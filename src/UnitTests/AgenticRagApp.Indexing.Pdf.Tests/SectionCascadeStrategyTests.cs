@@ -26,7 +26,7 @@ public class SectionCascadeStrategyTests
             PageBreadcrumbs: new Dictionary<int, string>(),
             Sections: sections ?? [], Headings: headings ?? [], Boilerplate: [],
             Tables: [], SelectionMarks: [], Figures: [], Lines: [],
-            Routing: null, Language: null);
+            Profile: null, Language: null);
 
     private static string Prose(int chars) =>
         string.Join(" ", Enumerable.Repeat("woord", chars / 6)) + ".";

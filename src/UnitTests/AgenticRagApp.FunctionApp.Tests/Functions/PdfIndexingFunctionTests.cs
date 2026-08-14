@@ -1,6 +1,4 @@
-using System.Net;
 using Azure.Storage.Blobs;
-using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.DurableTask;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -8,6 +6,7 @@ using AgenticRagApp.Functions;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Infrastructure.Clients.Blob;
+using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Observability;
@@ -26,23 +25,18 @@ public class PdfIndexingFunctionTests
         public Mock<IEmbeddingService>       EmbeddingService  = new();
         public Mock<IUploadService>          UploadService     = new();
         public Mock<IIndexService>           IndexService      = new();
-        public Mock<IKnowledgeService>       KnowledgeService  = new();
         public Mock<IBlobStore>              BlobStore         = new();
         public Mock<IRunReportWriter>        ReportWriter      = new();
         public Mock<IPipelineArtifactWriter> ArtifactWriter    = new();
         public Mock<ISnapshotService>        SnapshotService   = new();
         public Mock<IVectorCache>            VectorCache       = new();
-        public Mock<IRestoreService>         RestoreService    = new();
-
-        // Real config, not a mock: FullIndexRecreation compares ?confirm= against
-        // SearchIndexName, so the value has to be readable rather than default-null.
-        public IndexerConfig Config = new() { SearchIndexName = "test-index" };
+        public Mock<IDocumentIdentityStore>  IdentityStore     = new();
 
         public PdfIndexingFunction Build() => new(
             ExtractionService.Object, ChunkingService.Object, EmbeddingService.Object, UploadService.Object,
-            IndexService.Object, KnowledgeService.Object, new Mock<BlobContainerClient>().Object, BlobStore.Object,
+            IndexService.Object, new Mock<BlobContainerClient>().Object, BlobStore.Object,
             ReportWriter.Object, ArtifactWriter.Object, SnapshotService.Object, VectorCache.Object,
-            RestoreService.Object, Config, NullLogger<PdfIndexingFunction>.Instance);
+            IdentityStore.Object, NullLogger<PdfIndexingFunction>.Instance);
     }
 
     private static Mock<TaskOrchestrationContext> MockOrchestrationContext(string instanceId = "instance-1")
@@ -159,7 +153,11 @@ public class PdfIndexingFunctionTests
         var stats = ChunkingStageMetrics.Empty("v1");
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<PdfExtractionDocument>>(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(docs);
-        deps.ChunkingService.Setup(c => c.ChunkDocumentsAsync(docs, It.IsAny<CancellationToken>())).ReturnsAsync(([chunk], stats));
+        // The chunking stage writes its own report now, so the activity passes the run's
+        // instance id and start time down rather than writing an artifact itself.
+        deps.ChunkingService
+            .Setup(c => c.ChunkDocumentsAsync(docs, "instance-1", It.IsAny<DateTimeOffset?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(([chunk], stats));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
@@ -177,7 +175,9 @@ public class PdfIndexingFunctionTests
         var deps = new Deps();
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<PdfExtractionDocument>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([Doc("doc1.pdf")]);
-        deps.ChunkingService.Setup(c => c.ChunkDocumentsAsync(It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<CancellationToken>())).ThrowsAsync(new Exception("boom"));
+        deps.ChunkingService
+            .Setup(c => c.ChunkDocumentsAsync(It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<string?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("boom"));
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
@@ -205,8 +205,11 @@ public class PdfIndexingFunctionTests
             .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
         deps.SnapshotService.Setup(s => s.UpdateAsync(
                 "pdf", It.IsAny<IReadOnlyList<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlySet<string>)new HashSet<string> { "hash1" });
+            .ReturnsAsync(new SnapshotLiveSet(
+                new HashSet<string> { "hash1" },
+                new HashSet<string> { "doc1.pdf" }));
         deps.VectorCache.Setup(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>())).ReturnsAsync(2);
+        deps.IdentityStore.Setup(s => s.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>())).ReturnsAsync(1);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
@@ -215,6 +218,12 @@ public class PdfIndexingFunctionTests
         Assert.AreEqual(1, result.DocsUploaded);
         Assert.AreEqual(1, result.VectorCacheHits);
         deps.VectorCache.Verify(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()), Times.Once);
+
+        // The identity store is evicted against the snapshot's live DOCUMENT ids, not its
+        // content hashes - the two stores are keyed differently and passing the wrong grain
+        // would delete every identity record.
+        deps.IdentityStore.Verify(s => s.EvictOrphanedAsync(
+            It.Is<IReadOnlySet<string>>(ids => ids.Contains("doc1.pdf")), It.IsAny<CancellationToken>()), Times.Once);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()), Times.Once);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -274,185 +283,8 @@ public class PdfIndexingFunctionTests
         deps.ReportWriter.Verify(w => w.WriteReportAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // ── RunRestoreOrchestrator ───────────────────────────────────────────────
-
-    [TestMethod]
-    public async Task RunRestoreOrchestrator_Success_SavesSuccessReportAndDoesNotThrow()
-    {
-        var deps    = new Deps();
-        var context = MockOrchestrationContext();
-        context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
-        context.Setup(c => c.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ReturnsAsync(new RestoreResult("snap-1", 5, 0, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
-        context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
-        var function = deps.Build();
-
-        await function.RunRestoreOrchestrator(context.Object);
-
-        context.Verify(c => c.CallActivityAsync("SaveRestoreReportActivity",
-            It.Is<PdfRestoreRunReport>(r => r.Success && r.ChunksRestored == 5), It.IsAny<TaskOptions>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task RunRestoreOrchestrator_ChunksFailed_SavesFailureReportAndThrows()
-    {
-        var deps    = new Deps();
-        var context = MockOrchestrationContext();
-        context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
-        context.Setup(c => c.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ReturnsAsync(new RestoreResult("snap-1", 5, 3, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
-        context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
-        var function = deps.Build();
-
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => function.RunRestoreOrchestrator(context.Object));
-
-        context.Verify(c => c.CallActivityAsync("SaveRestoreReportActivity",
-            It.Is<PdfRestoreRunReport>(r => !r.Success && r.ChunksRestored == 5 && r.ChunksFailed == 3), It.IsAny<TaskOptions>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task RunRestoreOrchestrator_RecreateIndexThrows_SavesFailureReportAndRethrows()
-    {
-        var deps    = new Deps();
-        var context = MockOrchestrationContext();
-        context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ThrowsAsync(new InvalidOperationException("RecreateIndexActivity failed: boom"));
-        context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
-        var function = deps.Build();
-
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => function.RunRestoreOrchestrator(context.Object));
-
-        context.Verify(c => c.CallActivityAsync("SaveRestoreReportActivity",
-            It.Is<PdfRestoreRunReport>(r => !r.Success && r.ChunksRestored == 0), It.IsAny<TaskOptions>()), Times.Once);
-        context.Verify(c => c.CallActivityAsync<RestoreResult>(It.IsAny<TaskName>(), It.IsAny<object>(), It.IsAny<TaskOptions>()), Times.Never);
-    }
-
-    // ── RecreateIndexActivity / RestoreFromSnapshotActivity ─────────────────
-
-    [TestMethod]
-    public async Task RecreateIndexActivity_Success_DeletesKnowledgeBaseAndSourceBeforeIndexThenRebuildsAfter()
-    {
-        var deps = new Deps();
-        var callOrder = new List<string>();
-        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeBaseAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add("delete-base")).Returns(Task.CompletedTask);
-        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeSourceAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add("delete-source")).Returns(Task.CompletedTask);
-        deps.IndexService.Setup(s => s.RecreateIndexAsync())
-            .Callback(() => callOrder.Add("recreate-index")).Returns(Task.CompletedTask);
-        deps.KnowledgeService.Setup(s => s.EnsureKnowledgeSourceAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add("ensure-source")).Returns(Task.CompletedTask);
-        deps.KnowledgeService.Setup(s => s.EnsureKnowledgeBaseAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add("ensure-base")).Returns(Task.CompletedTask);
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-
-        await function.RecreateIndexActivity(null, context);
-
-        CollectionAssert.AreEqual(
-            new[] { "delete-base", "delete-source", "recreate-index", "ensure-source", "ensure-base" }, callOrder);
-    }
-
-    [TestMethod]
-    public async Task RecreateIndexActivity_Throws_WrapsInInvalidOperationException()
-    {
-        var deps = new Deps();
-        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeBaseAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        deps.KnowledgeService.Setup(s => s.DeleteKnowledgeSourceAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        deps.IndexService.Setup(s => s.RecreateIndexAsync()).ThrowsAsync(new Exception("boom"));
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-
-        var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => function.RecreateIndexActivity(null, context));
-
-        StringAssert.Contains(ex.Message, "RecreateIndexActivity failed");
-    }
-
-    [TestMethod]
-    public async Task RestoreFromSnapshotActivity_Success_ReturnsRestoreResult()
-    {
-        var deps   = new Deps();
-        var result = new RestoreResult("snap-1", 5, 0, 0, 10, 100, "index", "model", "deployment");
-        deps.RestoreService.Setup(s => s.RestoreFromLatestSnapshotAsync(It.IsAny<CancellationToken>())).ReturnsAsync(result);
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-
-        var actual = await function.RestoreFromSnapshotActivity(null, context);
-
-        Assert.AreEqual(result, actual);
-    }
-
-    [TestMethod]
-    public async Task RestoreFromSnapshotActivity_Throws_WrapsInInvalidOperationException()
-    {
-        var deps = new Deps();
-        deps.RestoreService.Setup(s => s.RestoreFromLatestSnapshotAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new Exception("boom"));
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-
-        var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => function.RestoreFromSnapshotActivity(null, context));
-
-        StringAssert.Contains(ex.Message, "RestoreFromSnapshotActivity failed");
-    }
-
-    // ── SaveRestoreReportActivity ────────────────────────────────────────────
-
-    [TestMethod]
-    public async Task SaveRestoreReportActivity_ReportWriterEnabled_WritesReport()
-    {
-        var deps = new Deps();
-        deps.ReportWriter.SetupGet(w => w.IsEnabled).Returns(true);
-        deps.ReportWriter.Setup(w => w.WriteReportAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-        var report   = new PdfRestoreRunReport(
-            InstanceId: "instance-1", StartedAt: DateTimeOffset.UtcNow, FinishedAt: DateTimeOffset.UtcNow,
-            Success: true, ErrorMessage: null, SnapshotInstanceId: "snap-1", ChunksRestored: 5,
-            ChunksFailed: 0, ChunksMissingVector: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100,
-            SearchIndexName: "index", EmbeddingModel: "model", EmbeddingDeployment: "deployment");
-
-        await function.SaveRestoreReportActivity(report, context);
-
-        deps.ReportWriter.Verify(w => w.WriteReportAsync(
-            It.Is<string>(p => p.Contains("instance-1")), report, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task SaveRestoreReportActivity_ReportWriterDisabled_DoesNotWrite()
-    {
-        var deps = new Deps();
-        deps.ReportWriter.SetupGet(w => w.IsEnabled).Returns(false);
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-        var report   = new PdfRestoreRunReport(
-            InstanceId: "instance-1", StartedAt: DateTimeOffset.UtcNow, FinishedAt: DateTimeOffset.UtcNow,
-            Success: true, ErrorMessage: null, SnapshotInstanceId: "snap-1", ChunksRestored: 5,
-            ChunksFailed: 0, ChunksMissingVector: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100,
-            SearchIndexName: "index", EmbeddingModel: "model", EmbeddingDeployment: "deployment");
-
-        await function.SaveRestoreReportActivity(report, context);
-
-        deps.ReportWriter.Verify(w => w.WriteReportAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    // ── RunSetupKnowledgeBase ────────────────────────────────────────────────
-
-    [TestMethod]
-    public async Task RunSetupKnowledgeBase_EnsuresKnowledgeSourceAndBase_ReturnsOk()
-    {
-        var deps = new Deps();
-        deps.KnowledgeService.Setup(s => s.EnsureKnowledgeSourceAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        deps.KnowledgeService.Setup(s => s.EnsureKnowledgeBaseAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        var function = deps.Build();
-        var context  = new FakeFunctionContext();
-        var request  = new FakeHttpRequestData(context, "");
-
-        var response = (FakeHttpResponseData)await function.RunSetupKnowledgeBase(request, context);
-
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-        deps.KnowledgeService.Verify(s => s.EnsureKnowledgeSourceAsync(It.IsAny<CancellationToken>()), Times.Once);
-        deps.KnowledgeService.Verify(s => s.EnsureKnowledgeBaseAsync(It.IsAny<CancellationToken>()), Times.Once);
-    }
+    // Restore orchestration and knowledge-base setup moved out with the functions
+    // themselves - see IndexRestoreFunctionTests and IndexAdminFunctionTests.
 
     // ── fixtures ─────────────────────────────────────────────────────────────
 
@@ -479,7 +311,7 @@ public class PdfIndexingFunctionTests
         SelectionMarks:        [],
         Figures:               [],
         Lines:                 [],
-        Routing:               null,
+        Profile:               null,
         Language:              null);
 
     private static ExtractionStageMetrics ExtractStats() => new(

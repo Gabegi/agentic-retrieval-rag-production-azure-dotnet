@@ -3,7 +3,9 @@
 Progress reporting for `StartIndexing` and `StartRestore`. Two mechanisms, one for
 runs in flight and one for runs that have finished.
 
-Code: `IndexingFunctions/PdfIndexingFunction.cs`, `Models/IndexingProgress.cs`.
+Code: `IndexingFunctions/IndexingStatusFunction.cs` (the status endpoint),
+`IndexingFunctions/PdfIndexingFunction.cs` and `IndexingFunctions/IndexRestoreFunction.cs`
+(the orchestrators that write the status), `Models/IndexingProgress.cs`.
 
 ## Why this exists
 

@@ -4,7 +4,7 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 //
 // Plain string constants rather than an enum: this value round-trips through Azure AI
 // Search as a string, and an enum would serialize as an integer unless every write path
-// remembered a converter - the same trap DocumentRouting's now-deleted ChunkRoute fell
+// remembered a converter - the same trap DocumentProfile's now-deleted ChunkRoute fell
 // into, where a stored number told a later reader nothing about what it meant.
 //
 // Deliberately explicit rather than inferred from "SectionId == Id": Q3 option 2 (parents

@@ -18,8 +18,8 @@ public sealed record ChunkingOutcome(
     public static readonly ChunkingOutcome Empty = new([], 0, 0, 0);
 }
 
-// Axis 1 of the two-axis model: one strategy per document, selected by the three first-split
-// decisions (see DocumentStrategySelector).
+// Axis 1 of the two-axis model: one strategy per document. ChunkingStrategySelector decides
+// each document's route; ChunkingService dispatches the decision onto an implementation.
 //
 // Takes the whole document rather than a string, which the interface it replaces could not
 // do - a heading-aware strategy needs the headings, the section tree, the page map and the
@@ -28,5 +28,10 @@ public interface IDocumentChunkingStrategy
 {
     string Name { get; }
 
-    ChunkingOutcome Chunk(PdfExtractionDocument doc);
+    // domainTag is the document's resolved sector tag (family identity), passed in because it
+    // ends up inside the embedded prefix ChunkingService prepends to every chunk - and the
+    // token ceiling governs the WHOLE embedded text, so the strategy has to know the prefix's
+    // size before it cuts. Without it, every chunk exceeded its own ceiling by the length of
+    // its prefix, up to ~220 tokens on deep heading chains (first-run-findings.md §2).
+    ChunkingOutcome Chunk(PdfExtractionDocument doc, string? domainTag = null);
 }

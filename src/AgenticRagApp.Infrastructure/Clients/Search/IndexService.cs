@@ -182,7 +182,7 @@ public class IndexService : IIndexService
                 // The sector-ambiguity failure mode returns a well-formed, on-topic,
                 // WRONG-POPULATION chunk that no similarity score can flag. A metadata
                 // filter is the only deterministic fix, so these must be filterable - they
-                // were computed by FamilyIdEmbedder and carried on DocumentChunk already,
+                // were computed by DocumentIdentityResolver and carried on DocumentChunk already,
                 // but never reached the index.
                 new SimpleField("family_id",          SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
                 // Sector code from the title (DomainTagger): GGZ/GHZ/VGZ/VVT. This IS the

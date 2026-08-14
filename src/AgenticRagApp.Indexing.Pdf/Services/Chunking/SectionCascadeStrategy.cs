@@ -27,20 +27,38 @@ public sealed class SectionCascadeStrategy : IDocumentChunkingStrategy
         _tokenCeiling = tokenCeiling;
     }
 
-    public ChunkingOutcome Chunk(PdfExtractionDocument doc)
+    // The ceiling never hands the splitter less than this, however deep the heading chain:
+    // a pathological prefix must degrade to slightly-over-ceiling chunks, not to confetti.
+    private const int MinBodyTokenBudget = 128;
+
+    public ChunkingOutcome Chunk(PdfExtractionDocument doc, string? domainTag = null)
     {
         if (string.IsNullOrWhiteSpace(doc.Content))
             return ChunkingOutcome.Empty;
 
-        var located = HeadingLocator.Locate(doc.Content, doc.Headings, doc.PageSpans, doc.Sections);
-        var units   = new List<ChunkUnit>();
+        var located   = HeadingLocator.Locate(doc.Content, doc.Headings, doc.PageSpans, doc.Sections);
+        var units     = new List<ChunkUnit>();
+        var titleLine = ChunkingHelper.TitleLine(doc.Title, domainTag);
 
         foreach (var section in located.Sections)
         {
             var sectionText = doc.Content[section.Start..section.End];
             if (string.IsNullOrWhiteSpace(sectionText)) continue;
 
-            var pieces = _splitter.Split(sectionText, _tokenCeiling);
+            // The ceiling governs the whole EMBEDDED text, but this splitter only sees the
+            // body - the prefix (title line + heading chain) is prepended afterwards in
+            // ChunkingService.ToChunk. Budgeting the body against the full ceiling made every
+            // chunk exceed it by its prefix's length, up to ~220 tokens on deep chains
+            // (first-run-findings.md §2) - so the prefix is charged here, before the cut.
+            var prefix = string.Join("\n\n",
+                new[] { titleLine, section.HeadingPath }.Where(p => !string.IsNullOrWhiteSpace(p)));
+            var prefixTokens = prefix.Length == 0
+                ? 0
+                : ChunkingHelper.EstimateTokens($"{prefix}\n\n", isTable: false);
+
+            var bodyCeiling = Math.Max(_tokenCeiling - prefixTokens, MinBodyTokenBudget);
+
+            var pieces = _splitter.Split(sectionText, bodyCeiling);
             if (pieces.Count == 0) continue;
 
             // ParentText is only worth storing when the section was actually split. On a

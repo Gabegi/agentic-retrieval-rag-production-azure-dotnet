@@ -3,9 +3,9 @@ using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
-// Computes DocumentRouting (docs/2608/260811/chunkRoutes.md step 1 for Picture,
+// Computes DocumentProfile (docs/2608/260811/chunkRoutes.md step 1 for Picture,
 // chunking-signals-map.md §4 for Large/Medium/Small - see ChunkRoute.cs) from the raw
-// counts that decide it. Both ChunkRoute.cs and DocumentRouting.cs already referenced a
+// counts that decide it. Both ChunkRoute.cs and DocumentProfile.cs already referenced a
 // class named exactly this in their own comments before it existed; nothing populated
 // either type until pre-chunking-action-items.md item B1, page-based at first.
 //
@@ -15,7 +15,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // still match exclusion-list.md/chunkRoutes.md exactly, and must stay identical to the
 // frozen exclusion list used for the strategy comparison, so they're constants, not
 // per-caller configuration - same as before B6, no change here.
-internal static class ChunkRoutingHelper
+internal static class DocumentProfileHelper
 {
     private const double SparseCharsPerPageThreshold   = 1_000;
     private const double HighLossBytesPerCharThreshold = 100;
@@ -33,7 +33,7 @@ internal static class ChunkRoutingHelper
     // Decision 2's measured return bound.
     private const int NavigationSummaryHeadingThreshold = 100;
 
-    public static DocumentRouting Compute(
+    public static DocumentProfile Compute(
         IReadOnlyList<PdfPageRecord> pages,
         IReadOnlyList<FigureInfo> figures,
         long fileSizeBytes,
@@ -63,9 +63,22 @@ internal static class ChunkRoutingHelper
         // Same per-block prose/table split ChunkingHelper.SplitIntoBlocks/EstimateTokens
         // use to compute B2's real per-chunk TokenCount, applied here at document scope
         // instead of per-chunk - the routing decision and the actual token counts chunking
-        // later produces are never two different numbers for the same content.
-        var estimatedTokens = pages.Sum(p => ChunkingHelper.SplitIntoBlocks(p.PageContent)
-            .Sum(block => ChunkingHelper.EstimateTokens(block.Text, block.IsTable)));
+        // later produces are never two different numbers for the same content. The same
+        // pass also measures TableCharShare: which fraction of the document's characters
+        // live in table blocks - the "is this document table-shaped" routing signal
+        // (TableChecker), measured on the block shapes chunking will actually cut on.
+        var estimatedTokens = 0;
+        var tableChars      = 0L;
+        foreach (var page in pages)
+        {
+            foreach (var (isTable, text) in ChunkingHelper.SplitIntoBlocks(page.PageContent))
+            {
+                estimatedTokens += ChunkingHelper.EstimateTokens(text, isTable);
+                if (isTable) tableChars += text.Length;
+            }
+        }
+
+        var tableCharShare = totalChars == 0 ? 0 : tableChars / (double)totalChars;
 
         // Decision 1 - the extraction gate. Same two frozen thresholds as before; the only
         // change is that this is now its own answer rather than one branch of a four-way
@@ -93,7 +106,7 @@ internal static class ChunkRoutingHelper
 
         var selectionMarksPerPage = pageCount == 0 ? 0 : (double)selectionMarks.Count / pageCount;
 
-        return new DocumentRouting(
+        return new DocumentProfile(
             pageCount, totalChars, fileSizeBytes, charsPerPage, bytesPerChar, figuresPerPage,
             estimatedTokens,
             hasExtractableContent,
@@ -103,7 +116,8 @@ internal static class ChunkRoutingHelper
             DocumentIsSafeReturnUnit: null,
             needsNavigationSummary,
             headingsPerThousandChars, numberedHeadingShare, maxSectionSizeChars,
-            boilerplateShare, selectionMarksPerPage);
+            boilerplateShare, selectionMarksPerPage,
+            TableCharShare: tableCharShare);
     }
 
     // Widest span any single section boundary would have to cover: document start (0) and

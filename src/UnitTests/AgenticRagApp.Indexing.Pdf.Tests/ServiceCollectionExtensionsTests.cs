@@ -1,4 +1,4 @@
-using Azure.Storage.Blobs;
+﻿using Azure.Storage.Blobs;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
@@ -6,6 +6,8 @@ using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Indexing.Pdf.Utils;
+using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
+using AgenticRagApp.Observability.Reports;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -59,16 +61,19 @@ public class ServiceCollectionExtensionsTests
 
         AssertSingleton<ITextSplitter, SectionSplitter>(services);
         AssertSingleton<SectionCascadeStrategy, SectionCascadeStrategy>(services);
-        AssertSingleton<DocumentStrategySelector, DocumentStrategySelector>(services);
+        AssertSingleton<ChunkingStrategySelector, ChunkingStrategySelector>(services);
         AssertSingleton<IChunkingService, ChunkingService>(services);
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IDocumentIdentityStore)));
-        AssertSingleton<FamilyIdEmbedder, FamilyIdEmbedder>(services);
+        AssertSingleton<DocumentIdentityResolver, DocumentIdentityResolver>(services);
+
+        // IDocumentIdentityStore is deliberately NOT registered here - it moved to
+        // AddAgenticRagAppInfrastructure() with the other storage clients.
+        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IDocumentIdentityStore)));
     }
 
     // The assertions above only inspect ServiceDescriptors, so they pass even when a
     // constructor takes something the container cannot supply (a bare string, say) - that
     // only surfaces the first time the graph is actually built, in the Functions host.
-    // Resolving ChunkingService for real covers FamilyIdEmbedder and IDocumentIdentityStore
+    // Resolving ChunkingService for real covers DocumentIdentityResolver and IDocumentIdentityStore
     // along with it.
     [TestMethod]
     public void AddPdfIndexing_ChunkingServiceGraph_IsResolvable()
@@ -76,18 +81,22 @@ public class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddLogging();
 
-        // Stands in for what AddAgenticRagAppInfrastructure() contributes. No calls are made
-        // against these during resolution, so a bare endpoint and a mock are enough.
+        // Stands in for what AddAgenticRagAppInfrastructure() and the Functions host
+        // contribute. No calls are made against these during resolution, so a bare endpoint
+        // and a mock are enough. IPipelineArtifactWriter comes from the host (Program.cs) -
+        // ChunkingService takes it because the chunking stage writes its own run report.
         services.AddSingleton(Config());
         services.AddSingleton(new BlobServiceClient(new Uri("https://storage.example.com")));
         services.AddSingleton(new Mock<IEmbeddingClient>().Object);
+        services.AddSingleton(new Mock<IPipelineArtifactWriter>().Object);
+        services.AddSingleton(new Mock<IDocumentIdentityStore>().Object);
 
         services.AddPdfIndexing(Config());
 
         using var provider = services.BuildServiceProvider(validateScopes: true);
 
         Assert.IsNotNull(provider.GetRequiredService<IChunkingService>());
-        Assert.IsNotNull(provider.GetRequiredService<FamilyIdEmbedder>());
+        Assert.IsNotNull(provider.GetRequiredService<DocumentIdentityResolver>());
     }
 
     [TestMethod]

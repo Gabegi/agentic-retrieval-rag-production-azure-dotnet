@@ -59,7 +59,7 @@ internal static partial class GetHeadingsHelper
     // shapes confirmed in the corpus: a word+number label at the very start ("Artikel 9
     // Vakantie", "Hoofdstuk IV") and a pure dotted-number prefix ("1.1 Voedselveiligheid...",
     // "10. Producten bereiden" - the exact regex hygienecode-numbering-findings.md already
-    // validated reproduces Pass 2's 32% figure). ChunkRoutingHelper uses this for B4's
+    // validated reproduces Pass 2's 32% figure). DocumentProfileHelper uses this for B4's
     // per-document numbered-heading share.
     // Roman branch requires 2+ letters for the same reason as
     // BareNumberedLabelWithWord above - the two must agree on what counts as a
@@ -115,7 +115,7 @@ internal static partial class GetHeadingsHelper
             // Every merge is recorded in PairedHeadingMerges (surfaced as a warning by
             // GetQualityWarningsHelper.HeadingWarnings) precisely because this rule is
             // structural rather than vocabulary-scoped and hasn't been checked against the
-            // live corpus yet - see FamilyIdEmbedder's threshold comments for the same
+            // live corpus yet - see DocumentIdentityResolver's threshold comments for the same
             // "flag for calibration" reasoning. A run that shows this firing somewhere that
             // isn't a real zero-body pair (e.g. two independently meaningful headings that
             // simply happen to be adjacent) is exactly the signal to narrow this rule further.

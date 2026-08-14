@@ -4,7 +4,7 @@ using AgenticRagApp.Indexing.Pdf.Services;
 namespace RagApp.UnitTests.PdfExtraction;
 
 [TestClass]
-public class ChunkRoutingHelperTests
+public class DocumentProfileHelperTests
 {
     private static PdfPageRecord Page(int pageNumber, string content) =>
         new() { BlobName = "doc.pdf", PageNumber = pageNumber, PageContent = content, Title = "doc" };
@@ -19,16 +19,53 @@ public class ChunkRoutingHelperTests
         new(pageNumber, "unselected", Offset: 0, Confidence: 1.0, Polygon: []);
 
     [TestMethod]
+    public void TableCharShare_MeasuresTableBlockFraction()
+    {
+        // One markdown table block (>= 2 consecutive row lines - the same rule
+        // SplitIntoBlocks applies at chunk time) inside surrounding prose.
+        var table = "| kolom a | kolom b |\n| 10 | 20 |";
+        var prose = new string('a', 2_000);
+        var pages = new List<PdfPageRecord> { Page(1, $"{prose}\n{table}") };
+
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
+
+        Assert.IsTrue(profile.TableCharShare > 0, "table block characters must be counted");
+        Assert.IsTrue(profile.TableCharShare < 0.5, "a table sliver must not read as table-shaped");
+    }
+
+    [TestMethod]
+    public void TableCharShare_TableDominatedDocument_IsAboveHalf()
+    {
+        var rows  = string.Join("\n", Enumerable.Range(1, 60).Select(n => $"| rij {n} | waarde {n} |"));
+        var pages = new List<PdfPageRecord> { Page(1, $"korte inleiding\n{rows}") };
+
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
+
+        Assert.IsTrue(profile.TableCharShare >= 0.5,
+            $"a table-dominated document must clear the table-shaped bar (was {profile.TableCharShare:F2})");
+    }
+
+    [TestMethod]
+    public void TableCharShare_NoTables_IsZero()
+    {
+        var pages = new List<PdfPageRecord> { Page(1, new string('a', 2_000)) };
+
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
+
+        Assert.AreEqual(0, profile.TableCharShare);
+    }
+
+    [TestMethod]
     public void MidSizedDocument_HasExtractableContent()
     {
         // 10 pages, 2,000 chars each (20,000 chars total): well above the 1,000 chars/page
         // sparse threshold, small file relative to text so bytes/char stays low.
         var pages = Enumerable.Range(1, 10).Select(n => Page(n, new string('a', 2_000))).ToList();
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 5_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 5_000);
 
-        Assert.IsTrue(routing.HasExtractableContent);
-        Assert.AreEqual(2_000, routing.CharsPerPage);
+        Assert.IsTrue(profile.HasExtractableContent);
+        Assert.AreEqual(2_000, profile.CharsPerPage);
     }
 
     [TestMethod]
@@ -37,9 +74,9 @@ public class ChunkRoutingHelperTests
         // 500 chars/page - below the 1,000 threshold - regardless of page count or byte ratio.
         var pages = Enumerable.Range(1, 5).Select(n => Page(n, new string('a', 500))).ToList();
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
 
-        Assert.IsFalse(routing.HasExtractableContent);
+        Assert.IsFalse(profile.HasExtractableContent);
     }
 
     [TestMethod]
@@ -49,9 +86,9 @@ public class ChunkRoutingHelperTests
         // text - the extraction-loss signal, e.g. an image-heavy scan with a thin text layer.
         var pages = Enumerable.Range(1, 5).Select(n => Page(n, new string('a', 2_000))).ToList();
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 2_000_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 2_000_000);
 
-        Assert.IsFalse(routing.HasExtractableContent);
+        Assert.IsFalse(profile.HasExtractableContent);
     }
 
     [TestMethod]
@@ -60,9 +97,9 @@ public class ChunkRoutingHelperTests
         // Exactly 1,000 chars/page - the rule is "< 1,000", so 1,000 itself must not trip Picture.
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
 
-        Assert.IsTrue(routing.HasExtractableContent);
+        Assert.IsTrue(profile.HasExtractableContent);
     }
 
     [TestMethod]
@@ -70,9 +107,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 999)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 999);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 999);
 
-        Assert.IsFalse(routing.HasExtractableContent);
+        Assert.IsFalse(profile.HasExtractableContent);
     }
 
     [TestMethod]
@@ -81,10 +118,10 @@ public class ChunkRoutingHelperTests
         // Rule is ">= 100", so exactly 100 must trip Picture.
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 100_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 100_000);
 
-        Assert.IsFalse(routing.HasExtractableContent);
-        Assert.AreEqual(100, routing.BytesPerChar);
+        Assert.IsFalse(profile.HasExtractableContent);
+        Assert.AreEqual(100, profile.BytesPerChar);
     }
 
     [TestMethod]
@@ -92,9 +129,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 99_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 99_000);
 
-        Assert.IsTrue(routing.HasExtractableContent);
+        Assert.IsTrue(profile.HasExtractableContent);
     }
 
     [TestMethod]
@@ -107,11 +144,11 @@ public class ChunkRoutingHelperTests
         // bound does not exist yet - see DocumentIsSafeReturnUnit.
         var pages = Enumerable.Range(1, 30).Select(n => Page(n, new string('a', 6_000))).ToList();
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 200_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 200_000);
 
-        Assert.IsTrue(routing.EstimatedTokens >= 50_000);
-        Assert.IsTrue(routing.HasExtractableContent);
-        Assert.IsNull(routing.DocumentIsSafeReturnUnit);
+        Assert.IsTrue(profile.EstimatedTokens >= 50_000);
+        Assert.IsTrue(profile.HasExtractableContent);
+        Assert.IsNull(profile.DocumentIsSafeReturnUnit);
     }
 
     [TestMethod]
@@ -120,11 +157,11 @@ public class ChunkRoutingHelperTests
         // 2 pages, 2,000 chars each (4,000 chars total) -> ~1,291 estimated tokens.
         var pages = Enumerable.Range(1, 2).Select(n => Page(n, new string('a', 2_000))).ToList();
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 4_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 4_000);
 
-        Assert.IsTrue(routing.EstimatedTokens < 4_000);
-        Assert.IsTrue(routing.HasExtractableContent);
-        Assert.IsNull(routing.DocumentIsSafeReturnUnit);
+        Assert.IsTrue(profile.EstimatedTokens < 4_000);
+        Assert.IsTrue(profile.HasExtractableContent);
+        Assert.IsNull(profile.DocumentIsSafeReturnUnit);
     }
 
     [TestMethod]
@@ -136,8 +173,8 @@ public class ChunkRoutingHelperTests
         var pages    = Enumerable.Range(1, 2).Select(n => Page(n, new string('a', 2_000))).ToList();
         var headings = Enumerable.Range(0, 120).Select(i => Heading($"H{i}", i * 30)).ToList();
 
-        var many = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 4_000, headings: headings);
-        var few  = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 4_000, headings: [Heading("Only", 0)]);
+        var many = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 4_000, headings: headings);
+        var few  = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 4_000, headings: [Heading("Only", 0)]);
 
         Assert.IsTrue(many.NeedsNavigationSummary);
         Assert.IsFalse(few.NeedsNavigationSummary);
@@ -148,20 +185,20 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 3_100)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 3_100);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 3_100);
 
         // ceil(3,100 / 3.1) = 1,000 - exact round number picked so the assertion doesn't
         // itself depend on rounding behaviour.
-        Assert.AreEqual(1_000, routing.EstimatedTokens);
+        Assert.AreEqual(1_000, profile.EstimatedTokens);
     }
 
     [TestMethod]
     public void ZeroPages_DoesNotThrow_FailsExtractionGate()
     {
-        var routing = ChunkRoutingHelper.Compute([], [], fileSizeBytes: 100);
+        var profile = DocumentProfileHelper.Compute([], [], fileSizeBytes: 100);
 
-        Assert.IsFalse(routing.HasExtractableContent);
-        Assert.AreEqual(0, routing.CharsPerPage);
+        Assert.IsFalse(profile.HasExtractableContent);
+        Assert.AreEqual(0, profile.CharsPerPage);
     }
 
     [TestMethod]
@@ -169,10 +206,10 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, "") };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 5_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 5_000);
 
-        Assert.IsFalse(routing.HasExtractableContent);
-        Assert.IsTrue(double.IsPositiveInfinity(routing.BytesPerChar));
+        Assert.IsFalse(profile.HasExtractableContent);
+        Assert.IsTrue(double.IsPositiveInfinity(profile.BytesPerChar));
     }
 
     [TestMethod]
@@ -181,9 +218,9 @@ public class ChunkRoutingHelperTests
         var pages   = Enumerable.Range(1, 4).Select(n => Page(n, new string('a', 2_000))).ToList();
         var figures = new[] { Figure(1), Figure(1), Figure(3) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, figures, fileSizeBytes: 10_000);
+        var profile = DocumentProfileHelper.Compute(pages, figures, fileSizeBytes: 10_000);
 
-        Assert.AreEqual(0.75, routing.FiguresPerPage);
+        Assert.AreEqual(0.75, profile.FiguresPerPage);
     }
 
     [TestMethod]
@@ -191,11 +228,11 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 1_500)), Page(2, new string('a', 2_500)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 12_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 12_000);
 
-        Assert.AreEqual(2, routing.ExtractedPageCount);
-        Assert.AreEqual(4_000, routing.TotalChars);
-        Assert.AreEqual(12_000, routing.FileSizeBytes);
+        Assert.AreEqual(2, profile.ExtractedPageCount);
+        Assert.AreEqual(4_000, profile.TotalChars);
+        Assert.AreEqual(12_000, profile.FileSizeBytes);
     }
 
     // ── B3 - headings per 1,000 chars ────────────────────────────────────────
@@ -206,9 +243,9 @@ public class ChunkRoutingHelperTests
         var pages    = new[] { Page(1, new string('a', 2_000)) };
         var headings = new[] { Heading("A", 0), Heading("B", 10), Heading("C", 20), Heading("D", 30) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 2_000, headings: headings);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 2_000, headings: headings);
 
-        Assert.AreEqual(2.0, routing.HeadingsPerThousandChars);
+        Assert.AreEqual(2.0, profile.HeadingsPerThousandChars);
     }
 
     [TestMethod]
@@ -216,9 +253,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 2_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 2_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 2_000);
 
-        Assert.AreEqual(0, routing.HeadingsPerThousandChars);
+        Assert.AreEqual(0, profile.HeadingsPerThousandChars);
     }
 
     [TestMethod]
@@ -226,9 +263,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, "") };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 0, headings: [Heading("A", 0)]);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 0, headings: [Heading("A", 0)]);
 
-        Assert.AreEqual(0, routing.HeadingsPerThousandChars);
+        Assert.AreEqual(0, profile.HeadingsPerThousandChars);
     }
 
     // ── B4 - numbered-heading share ──────────────────────────────────────────
@@ -245,9 +282,9 @@ public class ChunkRoutingHelperTests
             Heading("Scope", 50),                // not numbered
         };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000, headings: headings);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000, headings: headings);
 
-        Assert.AreEqual(0.5, routing.NumberedHeadingShare);
+        Assert.AreEqual(0.5, profile.NumberedHeadingShare);
     }
 
     [TestMethod]
@@ -255,9 +292,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
 
-        Assert.AreEqual(0, routing.NumberedHeadingShare);
+        Assert.AreEqual(0, profile.NumberedHeadingShare);
     }
 
     [TestMethod]
@@ -266,9 +303,9 @@ public class ChunkRoutingHelperTests
         var pages    = new[] { Page(1, new string('a', 1_000)) };
         var headings = new[] { Heading("Definities", 0), Heading("Scope", 20) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000, headings: headings);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000, headings: headings);
 
-        Assert.AreEqual(0, routing.NumberedHeadingShare);
+        Assert.AreEqual(0, profile.NumberedHeadingShare);
     }
 
     // ── B5 - max section size (largest gap between headings) ────────────────
@@ -278,9 +315,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 2_668)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 2_668);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 2_668);
 
-        Assert.AreEqual(2_668, routing.MaxSectionSizeChars);
+        Assert.AreEqual(2_668, profile.MaxSectionSizeChars);
     }
 
     [TestMethod]
@@ -291,9 +328,9 @@ public class ChunkRoutingHelperTests
         var pages    = new[] { Page(1, new string('a', 300)) };
         var headings = new[] { Heading("A", 0), Heading("B", 100), Heading("C", 200) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 300, headings: headings);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 300, headings: headings);
 
-        Assert.AreEqual(100, routing.MaxSectionSizeChars);
+        Assert.AreEqual(100, profile.MaxSectionSizeChars);
     }
 
     [TestMethod]
@@ -303,9 +340,9 @@ public class ChunkRoutingHelperTests
         var pages    = new[] { Page(1, new string('a', 1_000)) };
         var headings = new[] { Heading("A", 10), Heading("B", 20), Heading("C", 900) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000, headings: headings);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000, headings: headings);
 
-        Assert.AreEqual(880, routing.MaxSectionSizeChars);
+        Assert.AreEqual(880, profile.MaxSectionSizeChars);
     }
 
     [TestMethod]
@@ -314,9 +351,9 @@ public class ChunkRoutingHelperTests
         var pages    = new[] { Page(1, new string('a', 500)) };
         var headings = new[] { Heading("A", 0), Heading("Unknown offset", null), Heading("B", 250) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 500, headings: headings);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 500, headings: headings);
 
-        Assert.AreEqual(250, routing.MaxSectionSizeChars);
+        Assert.AreEqual(250, profile.MaxSectionSizeChars);
     }
 
     // ── A2 - boilerplate share ───────────────────────────────────────────────
@@ -327,9 +364,9 @@ public class ChunkRoutingHelperTests
         var pages       = new[] { Page(1, new string('a', 1_000)) };
         var boilerplate = new[] { Heading(new string('b', 100), 0, role: "pageHeader"), Heading(new string('b', 150), 0, role: "pageFooter") };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000, boilerplate: boilerplate);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000, boilerplate: boilerplate);
 
-        Assert.AreEqual(0.25, routing.BoilerplateShare);
+        Assert.AreEqual(0.25, profile.BoilerplateShare);
     }
 
     [TestMethod]
@@ -337,9 +374,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 1_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 1_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 1_000);
 
-        Assert.AreEqual(0, routing.BoilerplateShare);
+        Assert.AreEqual(0, profile.BoilerplateShare);
     }
 
     [TestMethod]
@@ -347,9 +384,9 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, "") };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 0, boilerplate: [Heading("b", 0, role: "pageFooter")]);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 0, boilerplate: [Heading("b", 0, role: "pageFooter")]);
 
-        Assert.AreEqual(0, routing.BoilerplateShare);
+        Assert.AreEqual(0, profile.BoilerplateShare);
     }
 
     // ── A5 - selection marks per page ────────────────────────────────────────
@@ -360,9 +397,9 @@ public class ChunkRoutingHelperTests
         var pages          = Enumerable.Range(1, 4).Select(n => Page(n, new string('a', 2_000))).ToList();
         var selectionMarks = new[] { SelectionMark(1), SelectionMark(1), SelectionMark(1) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 8_000, selectionMarks: selectionMarks);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 8_000, selectionMarks: selectionMarks);
 
-        Assert.AreEqual(0.75, routing.SelectionMarksPerPage);
+        Assert.AreEqual(0.75, profile.SelectionMarksPerPage);
     }
 
     [TestMethod]
@@ -370,16 +407,16 @@ public class ChunkRoutingHelperTests
     {
         var pages = new[] { Page(1, new string('a', 2_000)) };
 
-        var routing = ChunkRoutingHelper.Compute(pages, [], fileSizeBytes: 2_000);
+        var profile = DocumentProfileHelper.Compute(pages, [], fileSizeBytes: 2_000);
 
-        Assert.AreEqual(0, routing.SelectionMarksPerPage);
+        Assert.AreEqual(0, profile.SelectionMarksPerPage);
     }
 
     [TestMethod]
     public void SelectionMarksPerPage_ZeroPages_DoesNotThrow_IsZero()
     {
-        var routing = ChunkRoutingHelper.Compute([], [], fileSizeBytes: 0, selectionMarks: [SelectionMark(1)]);
+        var profile = DocumentProfileHelper.Compute([], [], fileSizeBytes: 0, selectionMarks: [SelectionMark(1)]);
 
-        Assert.AreEqual(0, routing.SelectionMarksPerPage);
+        Assert.AreEqual(0, profile.SelectionMarksPerPage);
     }
 }

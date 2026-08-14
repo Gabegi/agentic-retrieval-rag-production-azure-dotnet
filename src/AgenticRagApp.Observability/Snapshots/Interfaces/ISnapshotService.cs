@@ -18,11 +18,12 @@ public interface ISnapshotService
     // staleDocumentIds: document ids (updated + removed) whose old snapshot entries must be
     // dropped before the new ones are merged in.
     //
-    // Returns the set of content hashes now live in the merged snapshot. Vector-cache eviction
-    // is deliberately NOT done here — it's indexing-pipeline infra, not an observability
-    // concern — the caller (which already owns the vector cache) uses this return value to
-    // do its own IVectorCache.EvictOrphanedAsync call.
-    Task<IReadOnlySet<string>> UpdateAsync<T>(
+    // Returns what is now live in the merged snapshot, at both grains the pipeline's two
+    // corpus-scoped stores are keyed by: content hashes for the vector cache, document ids for
+    // the document-identity store. Eviction itself is deliberately NOT done here — it's
+    // indexing-pipeline infra, not an observability concern — the caller (which owns both
+    // stores) uses this return value for its own EvictOrphanedAsync calls.
+    Task<SnapshotLiveSet> UpdateAsync<T>(
         string                source,
         IReadOnlyList<T>      newChunks,
         IReadOnlyList<string> staleDocumentIds,
@@ -37,3 +38,10 @@ public interface ISnapshotService
     Task<(IReadOnlyList<SnapshotChunk> Chunks, string? InstanceId)> ReadLatestAsync(
         string source, CancellationToken ct = default);
 }
+
+// The merged snapshot's live set, at the two grains the pipeline's corpus-scoped stores are
+// keyed by. Both are derived from the same merged list, so they cannot disagree about what
+// survived this run - which matters, because each one drives a delete.
+public sealed record SnapshotLiveSet(
+    IReadOnlySet<string> ContentHashes,
+    IReadOnlySet<string> DocumentIds);

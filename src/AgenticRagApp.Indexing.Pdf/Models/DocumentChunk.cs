@@ -231,7 +231,7 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
 
     public string? Breadcrumb { get; set; }
 
-    // Family/domain identity resolved once per document by FamilyIdEmbedder, before
+    // Family/domain identity resolved once per document by DocumentIdentityResolver, before
     // chunking, then carried onto every chunk of that document - same pattern as
     // Title/Breadcrumb. Not Search-indexed yet: nothing filters/routes on family or domain
     // today (chunking strategy itself is deliberately out of scope for pre-chunking action
@@ -244,7 +244,7 @@ public class DocumentChunk : ISnapshotSource, IChunkStatsSource
     public string? DomainTag { get; set; }
 
     // SourceIds of other documents this one's title is lexically close to but NOT clustered
-    // with by FamilyId (e.g. Medido/Medimo - see FamilyIdEmbedder's C3 check) - a possible-
+    // with by FamilyId (e.g. Medido/Medimo - see DocumentIdentityResolver's C3 check) - a possible-
     // confusion flag, not a family relationship. SourceIds rather than titles so a consumer
     // can look the other document up directly, same identifier shape as FamilyId itself.
     public IReadOnlyList<string> ConfusableWith { get; set; } = [];

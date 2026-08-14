@@ -1,4 +1,3 @@
-using System.Net;
 using Azure.Storage.Blobs;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
@@ -9,8 +8,8 @@ using Microsoft.Extensions.Logging;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Infrastructure.Clients.Blob;
+using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Search;
-using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 
@@ -18,6 +17,10 @@ namespace AgenticRagApp.Functions;
 
 // PDF indexing entrypoint - Durable Functions orchestrator driving the
 // extract/chunk/embed-and-upload pipeline.
+//
+// Sibling classes hold the operations around this pipeline rather than the pipeline itself:
+// IndexingStatusFunction (progress of a run in flight), IndexRestoreFunction (wipe and
+// repopulate from snapshot), IndexAdminFunction (destructive recreate, knowledge-base setup).
 //
 // Payload pattern: extracted docs, chunks, and stale document IDs are all written to blob
 // (container: indexing-pipeline, paths: {date}/{instanceId}/extracted.json,
@@ -35,15 +38,13 @@ public class PdfIndexingFunction
     private readonly IEmbeddingService         _embeddingService;
     private readonly IUploadService            _uploadService;
     private readonly IIndexService             _indexService;
-    private readonly IKnowledgeService         _knowledgeService;
     private readonly BlobContainerClient       _pipelineContainer;
     private readonly IBlobStore                _blobStore;
     private readonly IRunReportWriter          _reportWriter;
     private readonly IPipelineArtifactWriter   _artifactWriter;
     private readonly ISnapshotService          _snapshotService;
     private readonly IVectorCache              _vectorCache;
-    private readonly IRestoreService           _restoreService;
-    private readonly IndexerConfig             _config;
+    private readonly IDocumentIdentityStore    _identityStore;
     private readonly ILogger<PdfIndexingFunction> _logger;
 
     public PdfIndexingFunction(
@@ -52,15 +53,13 @@ public class PdfIndexingFunction
         IEmbeddingService         embeddingService,
         IUploadService            uploadService,
         IIndexService             indexService,
-        IKnowledgeService         knowledgeService,
         [FromKeyedServices("pipeline-temp")] BlobContainerClient pipelineContainer,
         IBlobStore                blobStore,
         IRunReportWriter          reportWriter,
         IPipelineArtifactWriter   artifactWriter,
         ISnapshotService          snapshotService,
         IVectorCache              vectorCache,
-        IRestoreService           restoreService,
-        IndexerConfig             config,
+        IDocumentIdentityStore    identityStore,
         ILogger<PdfIndexingFunction> logger)
     {
         _extractionService = extractionService;
@@ -68,15 +67,13 @@ public class PdfIndexingFunction
         _embeddingService  = embeddingService;
         _uploadService     = uploadService;
         _indexService      = indexService;
-        _knowledgeService  = knowledgeService;
         _pipelineContainer = pipelineContainer;
         _blobStore         = blobStore;
         _reportWriter      = reportWriter;
         _artifactWriter    = artifactWriter;
         _snapshotService   = snapshotService;
         _vectorCache       = vectorCache;
-        _restoreService    = restoreService;
-        _config            = config;
+        _identityStore     = identityStore;
         _logger            = logger;
     }
 
@@ -91,122 +88,6 @@ public class PdfIndexingFunction
             "IndexingOrchestrator", new PdfIndexRequest(forceReindex));
         _logger.LogInformation("Indexing started — instance {InstanceId}", instanceId);
         return client.CreateCheckStatusResponse(req, instanceId);
-    }
-
-    // How far back GetIndexingStatus looks when no instanceId is given, and how many
-    // instances it will page through before giving up. Durable's query API can't filter by
-    // orchestration name, so the name filter is client-side and the scan is capped rather
-    // than unbounded - a status check must stay cheap even once the task hub has a long
-    // history behind it.
-    private const int LatestRunLookbackDays = 14;
-    private const int MaxInstancesScanned   = 500;
-
-    // Progress for a run in flight, without needing the instance ID or the Durable
-    // statusQueryGetUri handed back by StartIndexing - "is it still going, which stage, how
-    // long has it been there". Defaults to the most recent indexing run; pass ?instanceId= to
-    // pin a specific one (including a restore run, whose stage vocabulary differs but whose
-    // status payload is the same shape).
-    //
-    // Resolution is stage-level only: extraction is a single long activity, so a run sits on
-    // "extracting" for however long extraction takes. See IndexingProgress for why finer
-    // progress needs more than custom status.
-    [Function("GetIndexingStatus")]
-    public async Task<HttpResponseData> GetIndexingStatus(
-        [HttpTrigger(AuthorizationLevel.Function, "get", Route = "index/status")] HttpRequestData req,
-        [DurableClient] DurableTaskClient client)
-    {
-        var ct         = req.FunctionContext.CancellationToken;
-        var instanceId = req.Query["instanceId"];
-
-        // getInputsAndOutputs/FetchInputsAndOutputs is what makes the custom status payload
-        // come back at all - without it the stage would always read as unknown.
-        var metadata = string.IsNullOrWhiteSpace(instanceId)
-            ? await FindLatestIndexingRunAsync(client, ct)
-            : await client.GetInstanceAsync(instanceId, getInputsAndOutputs: true, ct);
-
-        if (metadata is null)
-        {
-            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-            await notFound.WriteAsJsonAsync(new
-            {
-                message = string.IsNullOrWhiteSpace(instanceId)
-                    ? $"No indexing run found in the last {LatestRunLookbackDays} days."
-                    : $"No orchestration found with instance ID '{instanceId}'.",
-            });
-            return notFound;
-        }
-
-        var progress = ReadProgress(metadata);
-        var running  = metadata.RuntimeStatus is OrchestrationRuntimeStatus.Running
-                                              or OrchestrationRuntimeStatus.Pending
-                                              or OrchestrationRuntimeStatus.Suspended;
-
-        // LastUpdatedAt is the finish time only once the run is terminal; while it's still
-        // going it's just the last checkpoint, so elapsed has to run against the wall clock.
-        DateTimeOffset? finishedAt = running ? null : metadata.LastUpdatedAt;
-        var elapsed = (finishedAt ?? DateTimeOffset.UtcNow) - metadata.CreatedAt;
-
-        var response = req.CreateResponse(HttpStatusCode.OK);
-        await response.WriteAsJsonAsync(new
-        {
-            instanceId     = metadata.InstanceId,
-            orchestration  = metadata.Name,
-            runtimeStatus  = metadata.RuntimeStatus.ToString(),
-            // "starting" covers the window between scheduling and the orchestrator's first
-            // SetCustomStatus, where there is genuinely no stage yet.
-            stage          = progress?.Stage ?? "starting",
-            startedAt      = metadata.CreatedAt,
-            finishedAt,
-            elapsed        = elapsed.ToString(@"hh\:mm\:ss"),
-            // Null until the stage that measures them completed - "not measured yet", not zero,
-            // the same distinction PdfIndexRunReport draws.
-            docsExtracted  = progress?.DocsExtracted,
-            chunksProduced = progress?.ChunksProduced,
-            docsUploaded   = progress?.DocsUploaded,
-            error          = metadata.FailureDetails?.ErrorMessage,
-        });
-        return response;
-    }
-
-    private static async Task<OrchestrationMetadata?> FindLatestIndexingRunAsync(
-        DurableTaskClient client, CancellationToken ct)
-    {
-        var query = new OrchestrationQuery
-        {
-            CreatedFrom           = DateTimeOffset.UtcNow.AddDays(-LatestRunLookbackDays),
-            FetchInputsAndOutputs = true,
-        };
-
-        OrchestrationMetadata? latest = null;
-        var scanned = 0;
-
-        await foreach (var instance in client.GetAllInstancesAsync(query).WithCancellation(ct))
-        {
-            if (++scanned > MaxInstancesScanned) break;
-            if (instance.Name != "IndexingOrchestrator") continue;
-            // Ordering isn't guaranteed by the query API, so pick the newest explicitly
-            // rather than trusting the first result.
-            if (latest is null || instance.CreatedAt > latest.CreatedAt) latest = instance;
-        }
-
-        return latest;
-    }
-
-    // Custom status is absent before the orchestrator's first SetCustomStatus, and could be
-    // an older shape for a run still in flight across a deployment - neither is worth failing
-    // a status check over, so both degrade to "stage unknown" rather than throwing.
-    private static IndexingProgress? ReadProgress(OrchestrationMetadata metadata)
-    {
-        if (string.IsNullOrWhiteSpace(metadata.SerializedCustomStatus)) return null;
-
-        try
-        {
-            return metadata.ReadCustomStatusAs<IndexingProgress>();
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     // Manual-upload path (Zenya source connection isn't live yet) - the timer provides the
@@ -358,12 +239,17 @@ public class PdfIndexingFunction
         try
         {
             var docs           = await ReadBlobAsync<List<PdfExtractionDocument>>(req.InputBlob, context.CancellationToken);
-            var (chunks, stats) = await _chunkingService.ChunkDocumentsAsync(docs, context.CancellationToken);
+
+            // The chunking-artifact report is written by ChunkingService itself, not here:
+            // it covers the whole stage (identity resolution, routing, heading location,
+            // chunks) and has to be written even when the stage throws, which this method
+            // cannot do - the exception passes straight through it. Hence instanceId and
+            // startedAt travelling in.
+            var (chunks, stats) = await _chunkingService.ChunkDocumentsAsync(
+                docs, req.InstanceId, req.StartedAt, context.CancellationToken);
+
             await DeleteBlobAsync(req.InputBlob, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, chunks, context.CancellationToken);
-
-            await _artifactWriter.WriteArtifactAsync(
-                ReportPath.Build(req.StartedAt, "chunking-artifact", req.InstanceId), new { Chunks = chunks, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks → {Blob}", docs.Count, chunks.Count, req.OutputBlob);
             return stats;
@@ -419,17 +305,27 @@ public class PdfIndexingFunction
                 embeddedDocs, staleDocumentIds, context.CancellationToken);
             LogProcessMemory("upload complete", chunks.Count);
 
-            // Rolling full-corpus snapshot (source-scoped) + the vector-cache eviction that
-            // rides along with it. Best-effort against uploadResult.DocsFailed - a chunk that
-            // failed to upsert is still folded into the snapshot as if it succeeded
-            // (UploadService doesn't report which specific chunks failed, only the count) -
-            // rare, self-corrects whenever that document is next reprocessed.
-            var liveHashes = await _snapshotService.UpdateAsync(
+            // Rolling full-corpus snapshot (source-scoped) + the two evictions that ride along
+            // with it. Best-effort against uploadResult.DocsFailed - a chunk that failed to
+            // upsert is still folded into the snapshot as if it succeeded (UploadService
+            // doesn't report which specific chunks failed, only the count) - rare,
+            // self-corrects whenever that document is next reprocessed.
+            var live = await _snapshotService.UpdateAsync(
                 Source, embeddedDocs, staleDocumentIds, req.InstanceId, req.StartedAt, context.CancellationToken);
-            var evictedCount = await _vectorCache.EvictOrphanedAsync(liveHashes, context.CancellationToken);
+
+            var evictedCount = await _vectorCache.EvictOrphanedAsync(live.ContentHashes, context.CancellationToken);
             if (evictedCount > 0)
                 _logger.LogInformation("Vector cache eviction — {Count} orphaned entr{Suffix} deleted",
                     evictedCount, evictedCount == 1 ? "y" : "ies");
+
+            // Same treatment for the identity store, which until now was the one corpus-scoped
+            // store that never forgot a deleted document. A ghost identity record keeps
+            // clustering: single-linkage means one sitting between two live documents merges
+            // their families, and it can even be the family's id.
+            var evictedIdentities = await _identityStore.EvictOrphanedAsync(live.DocumentIds, context.CancellationToken);
+            if (evictedIdentities > 0)
+                _logger.LogInformation("Identity store eviction — {Count} orphaned record(s) deleted",
+                    evictedIdentities);
 
             await DeleteBlobAsync(req.ChunksBlob, context.CancellationToken);
             await DeleteBlobAsync(req.StaleIdsBlob, context.CancellationToken);
@@ -503,216 +399,6 @@ public class PdfIndexingFunction
                 report.InstanceId, false, duration, report.Run.ForceReindex,
                 report.DocsToProcess, report.ChunksProduced, report.DocsUploaded, failed, redFlags,
                 report.ErrorMessage);
-    }
-
-    // Recovery entrypoint, distinct from StartIndexing/force=true: wipes the index outright
-    // (RecreateIndexActivity) and repopulates it from the rolling full-corpus snapshot
-    // (RestoreFromSnapshotActivity) instead of re-extracting/re-chunking/re-embedding every
-    // source document. Use when the index itself is suspected corrupt/incomplete, not just stale.
-    [Function("StartRestore")]
-    public async Task<HttpResponseData> StartRestore(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "index/restore")] HttpRequestData req,
-        [DurableClient] DurableTaskClient client)
-    {
-        var instanceId = await client.ScheduleNewOrchestrationInstanceAsync("RestoreOrchestrator", new object());
-        _logger.LogWarning("Index restore started — instance {InstanceId}. Index will be wiped and repopulated from the latest snapshot.", instanceId);
-        return client.CreateCheckStatusResponse(req, instanceId);
-    }
-
-    [Function("RestoreOrchestrator")]
-    public async Task RunRestoreOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)
-    {
-        var startedAt = context.CurrentUtcDateTime;
-
-        RestoreResult? result  = null;
-        bool           success = false;
-        string?        error   = null;
-
-        context.SetCustomStatus(new IndexingProgress(IndexingProgress.RecreatingIndex, startedAt));
-
-        try
-        {
-            await context.CallActivityAsync("RecreateIndexActivity");
-            context.SetCustomStatus(new IndexingProgress(IndexingProgress.Restoring, startedAt));
-
-            result  = await context.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity");
-
-            // Gate on the upsert's own per-document result, not IndexDocumentCountSnapshot -
-            // that stats call lags live writes by minutes (see UploadService) and reporting
-            // Success:true next to a stale 0 there masked a real empty-index incident.
-            if (result.ChunksFailed > 0)
-                error = $"{result.ChunksFailed} of {result.ChunksFailed + result.ChunksRestored} chunk(s) failed to upload during restore.";
-            else
-                success = true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.ToString();
-        }
-
-        context.SetCustomStatus(new IndexingProgress(
-            success ? IndexingProgress.Completed : IndexingProgress.Failed, startedAt,
-            DocsUploaded: result?.ChunksRestored));
-
-        await context.CallActivityAsync("SaveRestoreReportActivity",
-            BuildRestoreReport(context, startedAt, result, success, error));
-
-        if (!success)
-            throw new InvalidOperationException(error ?? "Index restore failed");
-    }
-
-    // Knowledge base references knowledge source references index, so teardown goes
-    // base -> source -> index and rebuild goes index -> source -> base - Azure AI Search
-    // refuses to delete an index while a knowledge source still references it (see
-    // docs/260730/index-restore-knowledge-source-plan.md).
-    [Function("RecreateIndexActivity")]
-    public async Task RecreateIndexActivity([ActivityTrigger] object? _, FunctionContext context)
-    {
-        try
-        {
-            await _knowledgeService.DeleteKnowledgeBaseAsync(context.CancellationToken);
-            await _knowledgeService.DeleteKnowledgeSourceAsync(context.CancellationToken);
-            await _indexService.RecreateIndexAsync();
-            await _knowledgeService.EnsureKnowledgeSourceAsync(context.CancellationToken);
-            await _knowledgeService.EnsureKnowledgeBaseAsync(context.CancellationToken);
-        }
-        catch (Exception ex)
-        {
-            Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "restore-recreate-index"));
-            _logger.LogError(ex, "RecreateIndexActivity failed");
-            throw new InvalidOperationException($"RecreateIndexActivity failed: {ex}");
-        }
-    }
-
-    [Function("RestoreFromSnapshotActivity")]
-    public async Task<RestoreResult> RestoreFromSnapshotActivity([ActivityTrigger] object? _, FunctionContext context)
-    {
-        try
-        {
-            return await _restoreService.RestoreFromLatestSnapshotAsync(context.CancellationToken);
-        }
-        catch (Exception ex)
-        {
-            Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "restore-upload"));
-            _logger.LogError(ex, "RestoreFromSnapshotActivity failed");
-            throw new InvalidOperationException($"RestoreFromSnapshotActivity failed: {ex}");
-        }
-    }
-
-    [Function("SaveRestoreReportActivity")]
-    public async Task SaveRestoreReportActivity([ActivityTrigger] PdfRestoreRunReport report, FunctionContext context)
-    {
-        if (!_reportWriter.IsEnabled) return;
-
-        // Under runs/ for the same reason as the index run report above, so one Event Grid
-        // subject filter covers both. The restore/ segment keeps the two distinguishable -
-        // the email handler branches on it to pick the renderer, since a restore has no
-        // extraction/chunking/embedding stages to report.
-        await _reportWriter.WriteReportAsync(
-            RunReportPath.Build(RunReportKind.Restore, report.StartedAt, report.InstanceId),
-            report, context.CancellationToken);
-        _logger.LogInformation(
-            "Index restore report saved — instance={InstanceId}, restored={Restored}, success={Success}",
-            report.InstanceId, report.ChunksRestored, report.Success);
-    }
-
-    private static PdfRestoreRunReport BuildRestoreReport(
-        TaskOrchestrationContext context,
-        DateTimeOffset           startedAt,
-        RestoreResult?           result,
-        bool                     success,
-        string?                  error) => new(
-            InstanceId:                    context.InstanceId,
-            StartedAt:                     startedAt,
-            FinishedAt:                    context.CurrentUtcDateTime,
-            Success:                       success,
-            ErrorMessage:                  error,
-            SnapshotInstanceId:            result?.SnapshotInstanceId,
-            ChunksRestored:                result?.ChunksRestored       ?? 0,
-            ChunksFailed:                  result?.ChunksFailed         ?? 0,
-            ChunksMissingVector:           result?.ChunksMissingVector  ?? 0,
-            IndexDocumentCountSnapshot:    result?.IndexDocumentCountSnapshot,
-            IndexStorageSizeBytesSnapshot: result?.IndexStorageSizeBytesSnapshot,
-            SearchIndexName:               result?.SearchIndexName      ?? "",
-            EmbeddingModel:                result?.EmbeddingModel       ?? "",
-            EmbeddingDeployment:           result?.EmbeddingDeployment  ?? "");
-
-    // Drops the index and rebuilds it EMPTY on the current schema, then rebuilds the
-    // knowledge source and base on top of it. Nothing is repopulated - run StartIndexing
-    // afterwards.
-    //
-    // This exists because EnsureIndexAsync is deliberately get-or-create: it never updates an
-    // existing index, so a schema change cannot reach a live index through the normal indexing
-    // run at all. The only other path that recreates is RestoreOrchestrator, and that
-    // immediately repopulates from the rolling snapshot - useless after a field rename, since
-    // the snapshot is in the previous shape.
-    //
-    // Destructive and irreversible: every indexed chunk is gone until a reindex completes, and
-    // if the snapshot predates the current schema there is no restore path either. The caller
-    // must therefore name the index in ?confirm=, which is checked against the configured name
-    // - a function key proves you may call this, not that you meant to call it on THIS index.
-    [Function("FullIndexRecreation")]
-    public async Task<HttpResponseData> RunFullIndexRecreation(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "index/full-recreation")] HttpRequestData req,
-        FunctionContext context)
-    {
-        var confirm = req.Query["confirm"];
-
-        if (!string.Equals(confirm, _config.SearchIndexName, StringComparison.Ordinal))
-        {
-            _logger.LogWarning("FullIndexRecreation refused - confirm='{Confirm}' does not name the configured index", confirm);
-
-            var refused = req.CreateResponse(HttpStatusCode.BadRequest);
-            await refused.WriteStringAsync(
-                $"Refused. This DELETES every indexed chunk in '{_config.SearchIndexName}' and rebuilds it empty. " +
-                $"Re-send with ?confirm={_config.SearchIndexName} if that is what you want, " +
-                "then run POST /api/index?force=true to repopulate it.");
-            return refused;
-        }
-
-        _logger.LogWarning(
-            "FullIndexRecreation triggered - index '{Name}' will be dropped and rebuilt empty on the current schema",
-            _config.SearchIndexName);
-
-        try
-        {
-            // Teardown order is base -> source -> index, rebuild is index -> source -> base:
-            // Azure AI Search refuses to delete an index while a knowledge source still
-            // references it. Same order RecreateIndexActivity uses.
-            await _knowledgeService.DeleteKnowledgeBaseAsync(context.CancellationToken);
-            await _knowledgeService.DeleteKnowledgeSourceAsync(context.CancellationToken);
-            await _indexService.RecreateIndexAsync();
-            await _knowledgeService.EnsureKnowledgeSourceAsync(context.CancellationToken);
-            await _knowledgeService.EnsureKnowledgeBaseAsync(context.CancellationToken);
-        }
-        catch (Exception ex)
-        {
-            Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "full-index-recreation"));
-            _logger.LogError(ex, "FullIndexRecreation failed");
-
-            var failed = req.CreateResponse(HttpStatusCode.InternalServerError);
-            await failed.WriteStringAsync($"Recreate failed: {ex.Message}");
-            return failed;
-        }
-
-        var response = req.CreateResponse(HttpStatusCode.OK);
-        await response.WriteStringAsync(
-            $"Index '{_config.SearchIndexName}' recreated empty on the current schema, knowledge source and base rebuilt. " +
-            "It holds no documents until POST /api/index?force=true completes.");
-        return response;
-    }
-
-    [Function("SetupKnowledgeBase")]
-    public async Task<HttpResponseData> RunSetupKnowledgeBase(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "setup-knowledge-base")] HttpRequestData req,
-        FunctionContext context)
-    {
-        _logger.LogInformation("SetupKnowledgeBase triggered");
-        await _knowledgeService.EnsureKnowledgeSourceAsync(context.CancellationToken);
-        await _knowledgeService.EnsureKnowledgeBaseAsync(context.CancellationToken);
-        var response = req.CreateResponse(HttpStatusCode.OK);
-        await response.WriteStringAsync("Knowledge source and knowledge base created or updated");
-        return response;
     }
 
     private async Task WriteBlobAsync<T>(string blobPath, T data, CancellationToken ct)

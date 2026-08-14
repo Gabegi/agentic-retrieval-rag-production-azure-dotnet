@@ -515,7 +515,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
             // succeeded (see ExtractPdfsFromBlobAsync's `if (extracted.Ok)` before CleanPdf), so
             // every blob that reaches this loop has an Ok result. The file?. guards below are
             // defence against that invariant being broken later, not a reachable state - a
-            // document with null Routing/Language and empty structure is not something this
+            // document with null Profile/Language and empty structure is not something this
             // pipeline can currently produce.
             resultByBlob.TryGetValue(group.Key, out var file);
             var nativeMetadata = nativeMetadataByBlob.GetValueOrDefault(group.Key);
@@ -590,7 +590,7 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
                 SelectionMarks:   structure?.SelectionMarks ?? [],
                 Figures:          structure?.Figures        ?? [],
                 Lines:            structure?.Lines          ?? [],
-                Routing:          file?.Routing,
+                Profile:          file?.Profile,
                 Language:         file?.Language));
         }
 

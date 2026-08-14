@@ -5,7 +5,7 @@ public interface IKnowledgeService
     Task EnsureKnowledgeSourceAsync(CancellationToken ct = default);
     Task EnsureKnowledgeBaseAsync(CancellationToken ct = default);
 
-    // Teardown counterparts, used by the index restore path (RecreateIndexActivity):
+    // Teardown counterparts, sequenced by IIndexRebuildService (the only caller):
     // Azure AI Search refuses to delete an index while a knowledge source still
     // references it, so the knowledge base and source must be deleted first (base before
     // source - the base references the source, not the other way round) and rebuilt

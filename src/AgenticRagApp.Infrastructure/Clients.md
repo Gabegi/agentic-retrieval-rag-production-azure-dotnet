@@ -11,6 +11,7 @@ Every generic wrapper around a raw Azure SDK client in `AgenticRagApp.Infrastruc
 | `Clients/Search/` | `IIndexDocumentService` | `IndexDocumentService` | `SearchClient` + `SearchIndexClient` | `UpsertDocumentsAsync<T>`<br>`GetCurrentIndexedDocumentDatesAsync`<br>`GetChunkIdsForDocumentsAsync`<br>`DeleteChunksByIdAsync`<br>`GetStatisticsAsync` |
 | `Clients/Search/` | `IIndexService` | `IndexService` | `SearchIndexClient` | `EnsureIndexAsync`<br>`RecreateIndexAsync` |
 | `Clients/Search/` | `IKnowledgeService` | `KnowledgeService` | `SearchIndexClient` | `EnsureKnowledgeSourceAsync`<br>`EnsureKnowledgeBaseAsync`<br>`DeleteKnowledgeSourceAsync`<br>`DeleteKnowledgeBaseAsync` |
+| `Clients/Search/` | `IIndexRebuildService` | `IndexRebuildService` | `IIndexService` + `IKnowledgeService` | `RecreateEmptyAsync` |
 | `Clients/Search/` | `ICurrentIndexNameProvider` | `CurrentIndexNameProvider` | `IBlobStore` (pointer blob) | `GetCurrentIndexNameAsync`<br>`SetCurrentIndexNameAsync` |
 | `Clients/Search/` | `ICurrentSearchClientProvider` | `CurrentSearchClientProvider` | `ICurrentIndexNameProvider` | `GetClientAsync` |
 

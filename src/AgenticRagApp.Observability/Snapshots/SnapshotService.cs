@@ -32,7 +32,7 @@ public class SnapshotService : ISnapshotService
 
     private static string PointerPath(string source) => $"_latest-snapshot-{source}.json";
 
-    public async Task<IReadOnlySet<string>> UpdateAsync<T>(
+    public async Task<SnapshotLiveSet> UpdateAsync<T>(
         string source, IReadOnlyList<T> newChunks, IReadOnlyList<string> staleDocumentIds, string instanceId, DateTimeOffset startedAt, CancellationToken ct = default)
         where T : ISnapshotSource
     {
@@ -76,7 +76,12 @@ public class SnapshotService : ISnapshotService
         if (!saved)
             _logger.LogWarning("Lost the race updating the snapshot pointer for source '{Source}' — this run's snapshot at '{Path}' was still written, just not pointed to.", source, path);
 
-        return merged.Select(c => c.ContentHash).ToHashSet();
+        // Document ids are compared case-insensitively, matching staleSet above and the rest of
+        // the pipeline's SourceId handling - a case-only difference must never read as "this
+        // document is gone", since the caller turns that into a delete.
+        return new SnapshotLiveSet(
+            merged.Select(c => c.ContentHash).ToHashSet(),
+            merged.Select(c => c.DocumentId).ToHashSet(StringComparer.OrdinalIgnoreCase));
     }
 
     public async Task<(IReadOnlyList<SnapshotChunk> Chunks, string? InstanceId)> ReadLatestAsync(

@@ -19,7 +19,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // just uninformative) when Lines is empty.
 //
 // Thresholds are a starting point, not calibrated against the real corpus yet - same caveat
-// FamilyIdEmbedder's clustering thresholds carry. Revisit once run against the 51-document
+// DocumentIdentityResolver's clustering thresholds carry. Revisit once run against the 51-document
 // corpus and checked by hand against known over-firing (Buddy) and under-firing (Checklist)
 // cases.
 internal static class GetFontSizeWarningsHelper

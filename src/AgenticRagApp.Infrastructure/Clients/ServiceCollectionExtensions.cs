@@ -16,6 +16,7 @@ using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Clients.KnowledgeRetrieval;
 using AgenticRagApp.Infrastructure.Clients.DocumentIntelligence;
+using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Clients.ContentSafety;
 
@@ -151,11 +152,21 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IKnowledgeRetrievalClient, KnowledgeBaseClient>();
         services.AddSingleton<IEmbeddingClient, EmbeddingClient>();
 
+        // Corpus-wide family/domain identity store — "pipeline-artifacts" container, under its
+        // own document-identity/ path prefix (see DocumentIdentityStore), the same container
+        // Indexing.Pdf's VectorCache uses. Consumed by DocumentIdentityResolver over there;
+        // registered here because it is a storage client holding a raw BlobContainerClient.
+        services.AddSingleton<IDocumentIdentityStore>(sp =>
+            new DocumentIdentityStore(
+                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-artifacts")));
+
         // Shared Search index lifecycle + document CRUD — one instance for both PDF and
         // CSV, since both write into the same index (see IndexService's own comment).
         services.AddSingleton<IIndexService, IndexService>();
         services.AddSingleton<IIndexDocumentService, IndexDocumentService>();
         services.AddSingleton<IKnowledgeService, KnowledgeService>();
+        // Composes the two above - owns the order they must be torn down and rebuilt in.
+        services.AddSingleton<IIndexRebuildService, IndexRebuildService>();
 
         return config;
     }

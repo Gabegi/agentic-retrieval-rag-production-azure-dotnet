@@ -35,7 +35,7 @@ public class ExtractionServiceTests
         SelectionMarks:        [],
         Figures:               [],
         Lines:            [],
-        Routing:          null,
+        Profile:          null,
         Language:         null);
 
     private static PdfExtractionOutput BuildOutput(IEnumerable<PdfExtractionDocument> docs) => new(docs.ToList())

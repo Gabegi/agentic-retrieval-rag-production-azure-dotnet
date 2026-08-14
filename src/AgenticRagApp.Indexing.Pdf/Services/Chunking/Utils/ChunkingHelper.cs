@@ -48,6 +48,13 @@ public static class ChunkingHelper
         Convert.ToBase64String(Encoding.UTF8.GetBytes($"{blobName}::{index}"))
             .Replace('+', '-').Replace('/', '_');
 
+    // The first line of every chunk's embedded prefix: document title, plus the sector tag
+    // when the document has one. Shared by SectionCascadeStrategy (which charges the prefix
+    // against the token ceiling before cutting) and ChunkingService.ToChunk (which builds the
+    // actual prefix) - one rule, so the budgeted text and the embedded text never diverge.
+    public static string TitleLine(string? title, string? domainTag) =>
+        string.IsNullOrEmpty(domainTag) ? title ?? "" : $"{title} [{domainTag}]";
+
     // Splits on sentence-ending punctuation followed by whitespace or end-of-string.
     public static IEnumerable<string> SplitSentences(string text)
     {

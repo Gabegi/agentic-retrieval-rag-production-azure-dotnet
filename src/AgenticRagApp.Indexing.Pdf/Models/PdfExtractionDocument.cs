@@ -5,7 +5,7 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 // One whole PDF handed to the chunking pipeline - not one page (action-plan.md §3.1, C8).
 //
 // This used to be a per-PAGE record, and every consumer that needed document semantics
-// undid that split itself: FamilyIdEmbedder grouped by SourceId to gather headings,
+// undid that split itself: DocumentIdentityResolver grouped by SourceId to gather headings,
 // ExtractionService counted distinct SourceIds to get a document count, ChunkingService
 // ordered by SourceId then Ordinal to rebuild reading order. Three regroups, each with a
 // comment apologising for the shape. Meanwhile Document Intelligence analyses a whole
@@ -85,14 +85,14 @@ public sealed record PdfExtractionDocument(
     IReadOnlyList<FigureInfo>        Figures,
     IReadOnlyList<LineInfo>          Lines,
 
-    // ── Routing measurements (action-plan.md C7) ────────────────────────────
+    // ── Profile measurements (action-plan.md C7) ────────────────────────────
 
     // Computed at extraction and, until now, read by nothing at all. Carries the measured
     // inputs to all three first-split decisions (chars/page and bytes/char for the
     // extraction gate, EstimatedTokens for the parent grain, heading counts for the
     // navigation grain). The old Route enum is gone - it fused a density test and a token
     // tier into one four-way value that could not express "large but unstructured".
-    DocumentRouting? Routing,
+    DocumentProfile? Profile,
 
     // "nl"/"en" from DI's own AnalyzeResult.Languages. The corpus is Dutch plus one
     // 36-page English document whose chars/token ratio is ~4 rather than ~3.2, which makes

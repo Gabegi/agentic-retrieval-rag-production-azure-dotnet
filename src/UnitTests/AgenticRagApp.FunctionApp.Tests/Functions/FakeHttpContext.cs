@@ -37,11 +37,13 @@ internal sealed class FakeFunctionContext : FunctionContext
 
 internal sealed class FakeHttpRequestData : HttpRequestData
 {
-    public FakeHttpRequestData(FunctionContext ctx, string body, string method = "POST") : base(ctx)
+    // query is appended to Url rather than exposed directly: the base class derives
+    // HttpRequestData.Query from Url.Query, which is what functions reading ?confirm= see.
+    public FakeHttpRequestData(FunctionContext ctx, string body, string method = "POST", string? query = null) : base(ctx)
     {
         Body    = new MemoryStream(Encoding.UTF8.GetBytes(body));
         Method  = method;
-        Url     = new Uri("http://localhost/api/query");
+        Url     = new Uri($"http://localhost/api/query{(string.IsNullOrEmpty(query) ? "" : $"?{query}")}");
         Headers = new HttpHeadersCollection();
     }
 

@@ -30,24 +30,19 @@ public static class ServiceCollectionExtensions
         // Axis 2 - the leaf splitter, chosen per block inside a section.
         services.AddSingleton<ITextSplitter, SectionSplitter>();
 
-        // Axis 1 - one strategy per document, chosen by DocumentStrategySelector from the
-        // three first-split decisions. Only the section cascade is registered: the
-        // whole-document strategy has no selector until the return bound is measured, and the
-        // picture/fallback branch has no implementation until the Content Understanding spike
-        // reports. Registering either now would mean routing documents to code that cannot
-        // yet be right about them.
+        // Axis 1 - routing. ChunkingStrategySelector decides each document's route (the five
+        // selection steps in Services/Chunking/Selection); ChunkingService dispatches the
+        // decision onto an implementation. Only the section cascade exists, so all four
+        // routes run it today - see ChunkingService.ChunkWithStrategy for why.
         services.AddSingleton<SectionCascadeStrategy>();
-        services.AddSingleton<DocumentStrategySelector>();
+        services.AddSingleton<ChunkingStrategySelector>();
 
         services.AddSingleton<IChunkingService, ChunkingService>();
 
-        // Corpus-wide family/domain identity store - "pipeline-artifacts" container, under
-        // its own document-identity/ path prefix (see DocumentIdentityStore), same container
-        // VectorCache uses below.
-        services.AddSingleton<IDocumentIdentityStore>(sp =>
-            new DocumentIdentityStore(
-                sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-artifacts")));
-        services.AddSingleton<FamilyIdEmbedder>();
+        // IDocumentIdentityStore, the corpus-wide family/domain identity store this depends on,
+        // is registered by AddAgenticRagAppInfrastructure() - it is a storage client, so it
+        // lives with the other ones rather than here.
+        services.AddSingleton<DocumentIdentityResolver>();
 
         // PDF extraction backend — only registered when Document Intelligence is
         // configured (Infrastructure only registers the DocumentIntelligenceClient itself
