@@ -54,24 +54,37 @@ public class ChunkingServiceTests
             .Callback<string, ChunkingRunReport, CancellationToken>((_, r, _) => reports.Add(r))
             .Returns(Task.CompletedTask);
 
-        var cascade  = new SectionCascadeStrategy(new SectionSplitter(), tokenCeiling);
         var selector = new ChunkingStrategySelector();
 
-        var service = new ChunkingService(
-            selector, cascade, resolver ?? BuildDocumentIdentityResolver(), writer.Object,
-            NullLogger<ChunkingService>.Instance);
+        var service = BuildChunkingService(
+            selector, tokenCeiling, resolver ?? BuildDocumentIdentityResolver(), writer.Object);
 
         return (service, reports);
     }
 
     private static ChunkingService BuildService(int tokenCeiling = SectionSplitter.DefaultTokenCeiling)
     {
-        var cascade  = new SectionCascadeStrategy(new SectionSplitter(), tokenCeiling);
-        var selector = new ChunkingStrategySelector();
+        return BuildChunkingService(
+            new ChunkingStrategySelector(), tokenCeiling, BuildDocumentIdentityResolver(),
+            new Mock<IPipelineArtifactWriter>().Object);
+    }
+
+    // All four route strategies wrap the one cascade, exactly as DI wires them.
+    private static ChunkingService BuildChunkingService(
+        ChunkingStrategySelector selector,
+        int                      tokenCeiling,
+        DocumentIdentityResolver resolver,
+        IPipelineArtifactWriter  writer)
+    {
+        var cascade = new SectionCascadeStrategy(new SectionSplitter(), tokenCeiling);
 
         return new ChunkingService(
-            selector, cascade, BuildDocumentIdentityResolver(),
-            new Mock<IPipelineArtifactWriter>().Object,
+            selector,
+            new HeadingBasedStrategy(cascade),
+            new TableAwareStrategy(cascade),
+            new SingleSectionStrategy(cascade),
+            new FallbackStrategy(cascade),
+            resolver, writer,
             NullLogger<ChunkingService>.Instance);
     }
 
@@ -528,10 +541,9 @@ public class ChunkingServiceTests
             .Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<ChunkingRunReport>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("blob storage is down"));
 
-        var cascade  = new SectionCascadeStrategy(new SectionSplitter(), SectionSplitter.DefaultTokenCeiling);
-        var selector = new ChunkingStrategySelector();
-        var service  = new ChunkingService(
-            selector, cascade, BuildDocumentIdentityResolver(), writer.Object, NullLogger<ChunkingService>.Instance);
+        var service = BuildChunkingService(
+            new ChunkingStrategySelector(), SectionSplitter.DefaultTokenCeiling,
+            BuildDocumentIdentityResolver(), writer.Object);
 
         var (chunks, _) = await service.ChunkDocumentsAsync([Doc("doc1", "body")], "instance-1");
 

@@ -20,23 +20,23 @@ public class ChunkingService : IChunkingService
     // in ChunkDocumentsAsync.
     private const double HeadingEscalationThreshold = 0.02;
 
-    private readonly ChunkingStrategySelector  _chunkingStrategySelector;
-    private readonly SectionCascadeStrategy    _sectionCascade;
-    private readonly DocumentIdentityResolver  _identityResolver;
-    private readonly IPipelineArtifactWriter   _artifactWriter;
-    private readonly ILogger<ChunkingService>  _logger;
+    private readonly IDocumentChunkingStrategy   _declaredBoundary;
+    private readonly IDocumentChunkingStrategy   _recursive;
+    private readonly DocumentIdentityResolver    _identityResolver;
+    private readonly IPipelineArtifactWriter     _artifactWriter;
+    private readonly ILogger<ChunkingService>    _logger;
 
     public string Name => "TwoAxisChunking";
 
     public ChunkingService(
-        ChunkingStrategySelector strategySelector,
-        SectionCascadeStrategy   sectionCascade,
+        DeclaredBoundaryStrategy declaredBoundary,
+        RecursiveStrategy        recursive,
         DocumentIdentityResolver identityResolver,
         IPipelineArtifactWriter  artifactWriter,
         ILogger<ChunkingService> logger)
     {
-        _chunkingStrategySelector = strategySelector;
-        _sectionCascade   = sectionCascade;
+        _declaredBoundary = declaredBoundary;
+        _recursive        = recursive;
         _identityResolver = identityResolver;
         _artifactWriter   = artifactWriter;
         _logger           = logger;
@@ -78,30 +78,28 @@ public class ChunkingService : IChunkingService
             //    runs once for the whole batch before anything is cut.
             var resolved = await _identityResolver.ResolveDocumentIdentityAsync(docs, ct);
             identity     = resolved.Diagnostics;
-            failedAtStage = "strategy-selection";
+            failedAtStage = "heading-section-gate";
 
-            // 2. Selection: every routing signal gathered and each document's strategy
-            //    decided BEFORE any chunking starts - see ChunkingStrategySelector. Not
-            //    overlapped with chunking: selection reads profile fields and counts,
-            //    microseconds against chunking's seconds.
-            var plans = _chunkingStrategySelector.SelectStrategies(docs, resolved);
+            // 2. Read the declared structure and gate on it: every document's route decided
+            //    BEFORE any chunking starts - see ReadHeadingsAndSections. Not overlapped with
+            //    chunking: the gate reads counts and profile fields, microseconds against
+            //    chunking's seconds.
+            var routed = ReadHeadingsAndSections(docs, resolved);
 
             // One routing line per run instead of a warning per picture document - the
             // per-document detail is on the report rows (SizeClass, Strategy,
             // FailedExtractionGate).
             _logger.LogInformation(
-                "Strategy routing: {HeadingBased} heading-based, {TableAware} table-aware, " +
-                "{SingleSection} single-section, {Fallback} fallback (of which {Picture} picture/CU candidates)",
-                plans.Count(p => p.Decision.Strategy == ChunkingStrategyKind.HeadingBased),
-                plans.Count(p => p.Decision.Strategy == ChunkingStrategyKind.TableAware),
-                plans.Count(p => p.Decision.Strategy == ChunkingStrategyKind.SingleSection),
-                plans.Count(p => p.Decision.Strategy == ChunkingStrategyKind.Fallback),
-                plans.Count(p => p.Decision.SizeClass == DocumentSizeClass.Picture));
+                "Route: {DeclaredBoundary} declared-boundary, {Recursive} recursive " +
+                "(of which {Picture} picture/CU candidates)",
+                routed.Count(r => r.Gate.Route == ChunkingRoute.DeclaredBoundary),
+                routed.Count(r => r.Gate.Route == ChunkingRoute.Recursive),
+                routed.Count(r => r.Gate.SizeClass == DocumentSizeClass.Picture));
 
             failedAtStage = "chunking";
 
-            // 3. Chunking: the decided strategy cuts each document - see ChunkAll.
-            var chunked = ChunkAll(plans, ct);
+            // 3. Chunking: the routed strategy cuts each document - see ChunkAll.
+            var chunked = ChunkAll(routed, ct);
 
             // 4. Every document becomes a report row; its kept units become indexed rows.
             var (headingsTotal, headingsFound, pairsMerged) =
@@ -186,37 +184,50 @@ public class ChunkingService : IChunkingService
         }
     }
 
-    private sealed record ChunkedDocument(DocumentPlan Plan, ChunkingOutcome Outcome, Exception? Error);
+    // Step 2. One routed document per input, in deterministic order, each pairing the document
+    // with the identity resolved in step 1 and the gate's verdict on its declared structure.
+    //
+    // A separate pass from chunking on purpose: the verdicts feed the run report as well as the
+    // chunker, so a run that dies mid-chunking can still say what every document's route was.
+    private static IReadOnlyList<RoutedDocument> ReadHeadingsAndSections(
+        IReadOnlyList<PdfExtractionDocument> docs, IdentityResolutionResult resolved) =>
+        docs.OrderBy(d => d.SourceId, StringComparer.Ordinal)
+            .Select(doc => new RoutedDocument(
+                doc,
+                resolved.Families.GetValueOrDefault(doc.SourceId),
+                resolved.IdentityVectorSourceOf.GetValueOrDefault(doc.SourceId),
+                HeadingSectionGate.Read(doc)))
+            .ToList();
 
-    // Step 3. Documents are independent and the cascade is CPU-bound and stateless, so they
+    private sealed record ChunkedDocument(RoutedDocument Routed, ChunkingOutcome Outcome, Exception? Error);
+
+    // Step 3. Documents are independent and both strategies are CPU-bound and stateless, so they
     // chunk in parallel; AsOrdered keeps the output - and therefore every id and report
     // row - deterministic. A per-document failure is captured rather than thrown, so one bad
     // document cannot hide the fate of the rest; the caller records it and fails the stage
     // once every document has been processed.
-    private List<ChunkedDocument> ChunkAll(IReadOnlyList<DocumentPlan> plans, CancellationToken ct) =>
-        plans.AsParallel().AsOrdered().WithCancellation(ct)
-             .Select(plan =>
+    private List<ChunkedDocument> ChunkAll(IReadOnlyList<RoutedDocument> routed, CancellationToken ct) =>
+        routed.AsParallel().AsOrdered().WithCancellation(ct)
+             .Select(doc =>
              {
                  try
                  {
-                     // The decision names the route; this switch maps it onto an
-                     // implementation. All four run the section cascade today: tables are
-                     // an atomicity constraint inside its splitter rather than a separate
-                     // cutter, SingleSection is the cascade's own no-headings degenerate
-                     // case, and Fallback chunks whatever text exists until the Content
-                     // Understanding branch lands (E6). This is the socket future
-                     // implementations plug into without touching selection.
-                     var outcome = plan.Decision.Strategy switch
+                     // The gate named the route; this switch maps it onto its implementation in
+                     // Services/Chunking/ChunkingStrategies. Two arms, both real algorithms -
+                     // the four-arm version dispatched onto four classes that all delegated to
+                     // one shared cascade. Exhaustive on purpose: an unhandled value throws
+                     // rather than silently cutting the document the wrong way.
+                     var strategy = doc.Gate.Route switch
                      {
-                         ChunkingStrategyKind.HeadingBased  or
-                         ChunkingStrategyKind.TableAware    or
-                         ChunkingStrategyKind.SingleSection or
-                         ChunkingStrategyKind.Fallback => _sectionCascade.Chunk(plan.Doc, plan.Family?.DomainTag),
+                         ChunkingRoute.DeclaredBoundary => _declaredBoundary,
+                         ChunkingRoute.Recursive        => _recursive,
                          _ => throw new ArgumentOutOfRangeException(
-                                  nameof(plans), plan.Decision.Strategy, "unhandled chunking strategy"),
+                                  nameof(routed), doc.Gate.Route, "unhandled chunking route"),
                      };
 
-                     return new ChunkedDocument(plan, outcome, null);
+                     var outcome = strategy.Chunk(doc.Doc, doc.Family?.DomainTag);
+
+                     return new ChunkedDocument(doc, outcome, null);
                  }
                  catch (OperationCanceledException)
                  {
@@ -224,7 +235,7 @@ public class ChunkingService : IChunkingService
                  }
                  catch (Exception ex)
                  {
-                     return new ChunkedDocument(plan, ChunkingOutcome.Empty, ex);
+                     return new ChunkedDocument(doc, ChunkingOutcome.Empty, ex);
                  }
              })
              .ToList();
@@ -243,14 +254,14 @@ public class ChunkingService : IChunkingService
         var headingsFound = 0;
         var pairsMerged   = 0;
 
-        foreach (var (plan, outcome, error) in chunked)
+        foreach (var (routed, outcome, error) in chunked)
         {
-            var (doc, family, vectorSource, decision) = plan;
+            var (doc, family, vectorSource, gate) = routed;
 
             if (error is not null)
             {
                 outcomes.Add(NotChunked(doc, family, vectorSource, "failed",
-                    $"the {decision.Strategy} strategy threw: {error.Message}", decision));
+                    $"the {gate.Route} strategy threw: {error.Message}", gate));
                 continue;
             }
 
@@ -266,6 +277,9 @@ public class ChunkingService : IChunkingService
             var kept    = outcome.Units.Where(u => !IsResidue(u.Content)).ToList();
             var dropped = outcome.Units.Count - kept.Count;
 
+            // 4. Metadata: each kept unit becomes an indexed row. ToChunk below is this step
+            //    today; ChunkMetadataBuilder is where it moves, organised as the four metadata
+            //    scopes - see docs/2608/260818/chunking-service-refactor.md step 4.
             foreach (var unit in kept)
                 result.Add(ToChunk(doc, unit, family));
 
@@ -278,7 +292,7 @@ public class ChunkingService : IChunkingService
                                            : dropped > 0
                                                ? $"every unit the strategy emitted ({dropped}) was vector residue below the minimum-content rule"
                                                : "the strategy ran but emitted no units - empty or whitespace after cleaning",
-                FailedExtractionGate:  decision.SizeClass == DocumentSizeClass.Picture,
+                FailedExtractionGate:  gate.SizeClass == DocumentSizeClass.Picture,
                 ResidueChunksDropped:  dropped,
                 FamilyId:              family?.FamilyId,
                 IsInMultiMemberFamily: IsMultiMember(identity, family?.FamilyId),
@@ -288,8 +302,8 @@ public class ChunkingService : IChunkingService
                 ChunkCount:            kept.Count,
                 HeadingsTotal:         outcome.HeadingsTotal,
                 HeadingsLocated:       outcome.HeadingsLocated,
-                SizeClass:             decision.SizeClass.ToString(),
-                Strategy:              decision.Strategy.ToString()));
+                SizeClass:             gate.SizeClass.ToString(),
+                Strategy:              gate.Route.ToString()));
         }
 
         // Documents the resolver dropped for having nothing to embed never reach the loop
@@ -310,7 +324,7 @@ public class ChunkingService : IChunkingService
 
         throw new AggregateException(
             $"{failed.Count} document(s) failed chunking - see their rows in the run report: " +
-            string.Join(", ", failed.Select(f => f.Plan.Doc.SourceId)),
+            string.Join(", ", failed.Select(f => f.Routed.Doc.SourceId)),
             failed.Select(f => f.Error!));
     }
 
@@ -333,16 +347,16 @@ public class ChunkingService : IChunkingService
 
     private static DocumentOutcome NotChunked(
         PdfExtractionDocument doc, DocumentFamily? family, string? vectorSource,
-        string outcome, string? reason, ChunkingStrategyDecision? decision = null) =>
+        string outcome, string? reason, SectionGateVerdict? gate = null) =>
         new(SourceId:              doc.SourceId,
             Title:                 doc.Title,
             Outcome:               outcome,
             Reason:                reason,
-            // From the decision when selection ran; otherwise derived from the profile so
-            // rows written before selection (identity_skipped, not_reached) stay truthful.
-            FailedExtractionGate:  decision is null
+            // From the gate when it ran; otherwise derived from the profile so rows written
+            // before the gate (identity_skipped, not_reached) stay truthful.
+            FailedExtractionGate:  gate is null
                                        ? doc.Profile is { HasExtractableContent: false }
-                                       : decision.SizeClass == DocumentSizeClass.Picture,
+                                       : gate.SizeClass == DocumentSizeClass.Picture,
             ResidueChunksDropped:  0,
             FamilyId:              family?.FamilyId,
             IsInMultiMemberFamily: false,
@@ -352,8 +366,8 @@ public class ChunkingService : IChunkingService
             ChunkCount:            0,
             HeadingsTotal:         0,
             HeadingsLocated:       0,
-            SizeClass:             decision?.SizeClass.ToString(),
-            Strategy:              decision?.Strategy.ToString());
+            SizeClass:             gate?.SizeClass.ToString(),
+            Strategy:              gate?.Route.ToString());
 
     private static DocumentChunk ToChunk(PdfExtractionDocument doc, ChunkUnit unit, DocumentFamily? family)
     {

@@ -32,9 +32,14 @@ public static class ServiceCollectionExtensions
 
         // Axis 1 - routing. ChunkingStrategySelector decides each document's route (the five
         // selection steps in Services/Chunking/Selection); ChunkingService dispatches the
-        // decision onto an implementation. Only the section cascade exists, so all four
-        // routes run it today - see ChunkingService.ChunkWithStrategy for why.
+        // decision onto one strategy per route (Services/Chunking/Strategies). All four
+        // delegate to the shared section cascade today - each class documents its future
+        // divergence.
         services.AddSingleton<SectionCascadeStrategy>();
+        services.AddSingleton<HeadingBasedStrategy>();
+        services.AddSingleton<TableAwareStrategy>();
+        services.AddSingleton<SingleSectionStrategy>();
+        services.AddSingleton<FallbackStrategy>();
         services.AddSingleton<ChunkingStrategySelector>();
 
         services.AddSingleton<IChunkingService, ChunkingService>();

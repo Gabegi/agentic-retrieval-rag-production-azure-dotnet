@@ -61,6 +61,10 @@ public class ServiceCollectionExtensionsTests
 
         AssertSingleton<ITextSplitter, SectionSplitter>(services);
         AssertSingleton<SectionCascadeStrategy, SectionCascadeStrategy>(services);
+        AssertSingleton<HeadingBasedStrategy, HeadingBasedStrategy>(services);
+        AssertSingleton<TableAwareStrategy, TableAwareStrategy>(services);
+        AssertSingleton<SingleSectionStrategy, SingleSectionStrategy>(services);
+        AssertSingleton<FallbackStrategy, FallbackStrategy>(services);
         AssertSingleton<ChunkingStrategySelector, ChunkingStrategySelector>(services);
         AssertSingleton<IChunkingService, ChunkingService>(services);
         AssertSingleton<DocumentIdentityResolver, DocumentIdentityResolver>(services);
