@@ -23,7 +23,17 @@ public sealed record HeadingLocationResult(
     IReadOnlyList<LocatedSection> Sections,
     int                           HeadingsTotal,
     int                           HeadingsLocated,
-    int                           PairedHeadingsMerged)
+    int                           PairedHeadingsMerged,
+
+    // Headings that arrived with no DI offset at all, and so had to be ordered by arrival
+    // position rather than by a measured one - see OrderByOffset. Zero on every document
+    // measured so far (0 of 1,273 across the big four), which is exactly why it is counted
+    // rather than assumed: a nonzero value here means extraction handed us a heading whose
+    // paragraph carried no spans, and the section boundary it opens rests on a fallback.
+    //
+    // Reported for the same reason as the three counters above: the caller needs it even
+    // when the document goes on to produce no chunks at all.
+    int                           HeadingsWithoutOffset)
 {
     // Share of headings that could not be placed in the cleaned text. This is the permanent
     // form of the measurement that chose this approach over rewriting PdfCleaner: Phase A
@@ -57,12 +67,9 @@ public static class HeadingLocator
         IReadOnlyList<SectionInfo>? diSections = null)
     {
         if (string.IsNullOrEmpty(content))
-            return new HeadingLocationResult([], headings.Count, 0, 0);
+            return new HeadingLocationResult([], headings.Count, 0, 0, 0);
 
-        var ordered = headings
-            .OrderBy(h => h.Offset ?? int.MaxValue)
-            .ThenBy(h => h.PageNumber)
-            .ToList();
+        var (ordered, offsetless) = OrderByOffset(headings);
 
         var located = new List<(Heading Heading, int At, bool Found)>();
         var cursor  = 0;
@@ -89,7 +96,59 @@ public static class HeadingLocator
 
         var (sections, merged) = BuildSections(content, found, pageSpans, chains);
 
-        return new HeadingLocationResult(sections, headings.Count, found.Count, merged);
+        return new HeadingLocationResult(
+            sections, headings.Count, found.Count, merged, offsetless.Count);
+    }
+
+    // Reading order, plus the headings that could not state their own position.
+    //
+    // Offset is DI's raw-content offset, and it is used ONLY to order - never to slice. That
+    // split is the whole premise of this class (see the note above): cleaning changes length,
+    // so a raw offset cuts in the wrong place, but cleaning is monotonic, so a heading earlier
+    // in the raw content is still earlier in the cleaned content. Order survives what position
+    // does not. PageNumber cannot substitute, since two headings on one page are
+    // indistinguishable by page.
+    //
+    // The sort is a re-assertion rather than a repair. GetHeadingsHelper builds the list by
+    // walking DI's paragraphs forward once, and paragraph spans ascend through the document,
+    // so this list already arrives ordered - measured at 1,273 headings across the big four
+    // with zero out of order, zero ties and zero missing offsets. Sorting anyway costs one
+    // pass over a few hundred items and removes the dependence on an upstream guarantee that
+    // nothing states.
+    //
+    // A null offset means the paragraph carried no spans at all - explicitly not 0, since 0 is
+    // a real offset and cannot double as "unknown" (DiGeometryHelpers.FirstOffset). Because
+    // the input IS in reading order, the one thing known about such a heading is which
+    // headings it came after, so it inherits the last offset seen and stays with its
+    // neighbours. Sorting it last instead would move it to the one position in the document it
+    // is guaranteed not to occupy, and its section boundary would go with it. It is counted
+    // and returned either way: 0 of 1,273 means this is an extraction anomaly worth reporting,
+    // not a routine input worth absorbing quietly.
+    private static (List<Heading> Ordered, List<Heading> Offsetless) OrderByOffset(
+        IReadOnlyList<Heading> headings)
+    {
+        var keyed      = new List<(Heading Heading, int Key, int Index)>(headings.Count);
+        var offsetless = new List<Heading>();
+        var carried    = 0;
+
+        for (var i = 0; i < headings.Count; i++)
+        {
+            if (headings[i].Offset is { } offset) carried = offset;
+            else offsetless.Add(headings[i]);
+
+            keyed.Add((headings[i], carried, i));
+        }
+
+        // Index is the final tie-break, so a run of carried-offset headings keeps its arrival
+        // order among themselves and stays behind the heading whose offset they borrowed.
+        var ordered = keyed
+            .OrderBy(k => k.Key)
+            .ThenBy(k => k.Heading.PageNumber)
+            .ThenBy(k => k.Index)
+            .Select(k => k.Heading)
+            .ToList();
+
+        return (ordered, offsetless);
     }
 
     // Searches only within the heading's own page, and only at or after the previous

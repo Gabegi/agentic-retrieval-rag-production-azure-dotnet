@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using AgenticRagApp.Indexing.Pdf.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Utils;
 
@@ -122,9 +123,22 @@ public static class FamilyIdAssigner
             decisions.Add(new FamilyAssignmentDecision(familyId, members, kind, detail));
         }
 
+        // Which documents ended up in a different family than the one they already carried.
+        // Derived here because this is the only place both values exist at once - once Assign
+        // returns, the stored id is gone.
+        //
+        // Documents with no stored id are excluded: they are new, not moved.
+        var inRunMoves = familyIdOf
+            .Select(kv => (SourceId: kv.Key, From: storedFamilyIdOf.GetValueOrDefault(kv.Key), To: kv.Value))
+            .Where(m => !string.IsNullOrEmpty(m.From) && !string.Equals(m.From, m.To, StringComparison.Ordinal))
+            .Select(m => new FamilyMove(m.SourceId, m.From, m.To))
+            .OrderBy(m => m.SourceId, StringComparer.Ordinal)
+            .ToList();
+
         return new FamilyAssignment(
             familyIdOf,
-            decisions.OrderBy(d => d.FamilyId, StringComparer.Ordinal).ToList());
+            decisions.OrderBy(d => d.FamilyId, StringComparer.Ordinal).ToList(),
+            inRunMoves);
     }
 
     // A new family's name. The longest common leading token run across its members' titles -
@@ -214,4 +228,10 @@ public sealed record FamilyAssignmentDecision(
 
 public sealed record FamilyAssignment(
     IReadOnlyDictionary<string, string>       FamilyIdOf,
-    IReadOnlyList<FamilyAssignmentDecision>   Decisions);
+    IReadOnlyList<FamilyAssignmentDecision>   Decisions,
+
+    // Documents IN this run's comparison set that came out carrying a different family id than
+    // they went in with. The complement of PersistOutcome.Moves, which covers documents NOT in
+    // this run that this run's clustering re-homed - together they are every document whose
+    // family_id changed. See DocumentIdentityResolver's FamilyMoves for what consumes them.
+    IReadOnlyList<FamilyMove>                 InRunMoves);

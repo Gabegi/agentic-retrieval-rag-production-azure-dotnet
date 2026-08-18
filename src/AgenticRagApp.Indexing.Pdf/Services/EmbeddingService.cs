@@ -36,7 +36,7 @@ public class EmbeddingService : IEmbeddingService
     }
 
     public async Task<EmbeddingRunResult> EmbedDocumentsAsync(
-        IEnumerable<DocumentChunk> documents,
+        IEnumerable<ChunkObject> documents,
         CancellationToken ct = default)
     {
         var docList = documents.ToList();
@@ -70,11 +70,11 @@ public class EmbeddingService : IEmbeddingService
     // Splits by vector-cache hit/miss. A cached vector whose length no longer matches the
     // configured embedding dimensions (model/config changed since it was cached) is treated
     // as a miss rather than trusted blindly.
-    private async Task<(List<DocumentChunk> Cached, List<DocumentChunk> ToEmbed)> SplitByCacheAsync(
-        List<DocumentChunk> docs, CancellationToken ct)
+    private async Task<(List<ChunkObject> Cached, List<ChunkObject> ToEmbed)> SplitByCacheAsync(
+        List<ChunkObject> docs, CancellationToken ct)
     {
-        var cached  = new ConcurrentBag<DocumentChunk>();
-        var toEmbed = new ConcurrentBag<DocumentChunk>();
+        var cached  = new ConcurrentBag<ChunkObject>();
+        var toEmbed = new ConcurrentBag<ChunkObject>();
 
         await Parallel.ForEachAsync(
             docs,
@@ -108,7 +108,7 @@ public class EmbeddingService : IEmbeddingService
             (r, token) => new ValueTask(_vectorCache.SetAsync(r.Document.ContentHash, r.Document.ContentVector!, token)));
 
     private async Task<BatchResult> EmbedBatchAsync(
-        IReadOnlyList<DocumentChunk> batch, SemaphoreSlim semaphore, CancellationToken ct)
+        IReadOnlyList<ChunkObject> batch, SemaphoreSlim semaphore, CancellationToken ct)
     {
         await semaphore.WaitAsync(ct);
         try
@@ -157,6 +157,6 @@ public class EmbeddingService : IEmbeddingService
         }
     }
 
-    private record EmbedChunkResult(DocumentChunk Document, bool Truncated, bool DimError);
+    private record EmbedChunkResult(ChunkObject Document, bool Truncated, bool DimError);
     private record BatchResult(List<EmbedChunkResult> Results, int Retries);
 }

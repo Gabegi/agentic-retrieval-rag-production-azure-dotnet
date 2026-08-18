@@ -1,7 +1,7 @@
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // Everything extraction produced about the pages a chunk covers that Azure AI Search has no
-// schema for - nested objects like TableInfo's cells. DocumentChunk derives table_count,
+// schema for - nested objects like TableInfo's cells. ChunkObject derives table_count,
 // has_table and figure_captions from Tables/Figures; the rest is carried rather than
 // dropped, following this pipeline's rule that extracted data stays available even where
 // nothing consumes it yet.
@@ -17,12 +17,12 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 // exists for a future highlight-on-source feature, which would read it from
 // PdfExtractionDocument (where it still lives, once) rather than from a chunk.
 //
-// Sections and Bookmarks are absent for a different and stronger reason - see DocumentChunk.
+// Sections and Bookmarks are absent for a different and stronger reason - see ChunkObject.
 // They are per-DOCUMENT data, so attaching them here costs sections x chunk-count, and both
 // factors peak on the same four documents. That is what took the chunks blob to 772 MB for
 // 3,046 chunks and OOM'd EmbedAndUploadActivity on 260812.
 //
-// Deliberately NOT [JsonIgnore]'d on DocumentChunk: that attribute is type-level, not
+// Deliberately NOT [JsonIgnore]'d on ChunkObject: that attribute is type-level, not
 // call-site-level, so it would strip this from every serialization - including the
 // ChunkActivity -> EmbedAndUploadActivity blob hand-off (chunks.json) and the Stage 2
 // archive - silently losing the data before it could reach either. SearchUploadChunk is

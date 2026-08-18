@@ -14,7 +14,7 @@ namespace AgenticRagApp.Indexing.Pdf.Models;
 //
 // Producer/Creator/Subject/Keywords are diagnostics-only today (see
 // PdfNativeMetadataExtractor's Producer-missing warning) - not carried into
-// ExtractionDocument/DocumentChunk, same as FileSizeBytes/PdfSpecVersion aren't (see
+// ExtractionDocument/ChunkObject, same as FileSizeBytes/PdfSpecVersion aren't (see
 // ExtractionDocument's own comment on that).
 public record DocMetadata(
     string? Title, string? Author, DateTimeOffset? CreatedAt, DateTimeOffset? ModDate,

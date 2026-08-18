@@ -4,32 +4,63 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 
 // Route 2: nothing trustworthy was declared, so compute a hypothesis.
 //
-// Reached when HeadingSectionGate found no boundary worth honouring. Flat by design: one
-// section, N children, no heading machinery at all. It replaces three of the four old routes -
-// "table-shaped", "small single section" and "earned nothing" were reporting reasons, never
-// separate algorithms.
+// Reached when HeadingSectionGate said no. Flat by design: one section, N children, no heading
+// machinery at all. An empty heading list is NORMAL input here, not a defect - it is this
+// route's whole premise.
 //
-// NOT IMPLEMENTED YET - see step 3 of docs/2608/260818/chunking-service-refactor.md:
+// An ORCHESTRATOR, same contract as DeclaredBoundaryStrategy: every step is one call into
+// StrategyHelpers. This class owns the ORDER of the steps and nothing else - no parsing, no
+// token arithmetic, no cutting.
 //
-//   1. blank/whitespace Content -> Empty. Guard Content ONLY: an empty heading list is NORMAL
-//      input here, not a defect. That is the class's whole premise.
-//   2. prefix = TitleLine(doc.Title, domainTag) - the only context carrier on this route, which
-//      is why an empty title is a report signal rather than a curiosity.
-//   3. one split call over the whole document, against Max(512 - prefixTokens, 128).
-//   4. degenerate constants: SectionIndex 0, running ChildIndex, heading fields null,
-//      HeadingSource None, HeadingLocated FALSE, ParentText null. HeadingLocated: true with
-//      Source: None was the old FallbackStrategy's contradiction - never reproduce it.
-//   5. ChunkingOutcome(units, 0, 0, 0) - zeros mean "not attempted", never "all failed".
-//      Reporting doc.Headings.Count against 0 located would fill the >2% heading-location
-//      escalation metric with false failures: those headings were not failed, they were
-//      deliberately not used. What was discarded belongs on the report row as HeadingCount.
-//
-// ParentText is never set here, on purpose: this route's "section" is the whole document, so
-// materializing it would copy a 90k-char body onto every one of its ~60 children.
+// The cutting itself is BlockCascade's, shared with route 1's oversized sections: a block is
+// classified once, by the strongest structure it shows, and that decides how it may be cut -
+// tables on rows, key-value runs on pairs, lists on items, prose last. What is left here is the
+// part that is genuinely this route's own: the whole document is the window, and the title line
+// is the only context a chunk gets.
 public sealed class RecursiveStrategy : IDocumentChunkingStrategy
 {
+    // The ceiling governs the EMBEDDED text, prefix included - same budget as route 1.
+    private const int TokenCeiling = 512;
+
+    // The floor the body keeps no matter how expensive the prefix got.
+    private const int MinBodyTokenBudget = 128;
+
     public string Name => "Recursive";
 
-    public ChunkingOutcome Chunk(PdfExtractionDocument doc, string? domainTag = null) =>
-        ChunkingOutcome.Empty;
+    public ValueTask<IReadOnlyList<ChunkObject>> ChunkDocumentAsync(
+        PdfExtractionDocument doc, CancellationToken ct = default)
+    {
+        // 1a. Nothing to cut. Content is the only guard on this route - see the class note.
+        if (string.IsNullOrWhiteSpace(doc.Content))
+            return ValueTask.FromResult<IReadOnlyList<ChunkObject>>([]);
+
+        // 1b. Price the prefix. The title line plus the sector tag is the ONLY context a chunk
+        //     on this route carries - there is no heading path to add - which is why an empty
+        //     or oversized title is worth reporting rather than absorbing.
+        var prefix       = PrefixBuilder.Build(doc.Title, doc.Family?.DomainTag, headingPath: null);
+        var prefixTokens = TokenEstimator.Estimate(prefix);
+
+        // 1c. A prefix that costs more than the body's own floor is not context any more, it is
+        //     the chunk. Bail rather than emit chunks that are mostly title.
+        if (prefixTokens > MinBodyTokenBudget)
+            return ValueTask.FromResult<IReadOnlyList<ChunkObject>>([]);
+
+        // What is left of the budget for the body, once the prefix is paid for.
+        var bodyCeiling = Math.Max(TokenCeiling - prefixTokens, MinBodyTokenBudget);
+
+        // 2-7. Cut. The whole document is the window, because this route's "section" IS the
+        //      document - that is the guaranteed form of the sparse-giant hazard, and the
+        //      reason nothing here narrows the range first.
+        //
+        //      The cascade itself (block parse, the three atomic kinds, prose packing, then
+        //      the line -> sentence -> word -> hard ladder) lives in BlockCascade, shared with
+        //      route 1's oversized sections. It moved there unchanged: same order, same
+        //      ceiling, same pieces.
+        var pieces = BlockCascade.Cut(doc.Content, 0, doc.Content.Length, bodyCeiling);
+
+        // 8. One ChunkObject per piece: SectionIndex 0, running ChildIndex, heading fields null,
+        //    HeadingSource "none", HeadingLocated FALSE. True with source "none" is a
+        //    contradiction - it reads as a successful location in any aggregate.
+        return ValueTask.FromResult(FlatChunkBuilder.Build(doc, prefix, pieces));
+    }
 }

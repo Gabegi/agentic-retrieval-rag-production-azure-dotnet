@@ -59,7 +59,7 @@ resource "azurerm_windows_function_app" "indexer" {
     # up to 15 once dots become dashes ("255-255-255-255"), so the prefix has at most 17 to
     # play with. "dev-direct-access-" was 18: it fit every IP allowlisted until 2026-08-12
     # and then failed the apply outright on the first one with three 3-digit octets after
-    # the first ("192-168-100-151" = 15, total 33). "dev-access-" is 11, leaving room for
+    # the first ("178-230-108-151" = 15, total 33). "dev-access-" is 11, leaving room for
     # any valid address.
     dynamic "ip_restriction" {
       for_each = var.environment == "development" ? var.dev_allowed_ips : []

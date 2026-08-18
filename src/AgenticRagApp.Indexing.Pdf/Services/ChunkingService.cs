@@ -6,9 +6,13 @@ using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
-// Turns extracted documents into indexed chunks: selects a strategy per document, then maps
-// what it produced onto DocumentChunk (ids, document metadata, page attribution, the embedded
-// prefix) and emits the stage telemetry.
+// Turns extracted documents into indexed chunks, in five steps:
+//
+//   1. resolve document identity  (DocumentIdentityResolver - family, domain tag, confusables)
+//   2. read headings and sections, and gate on them  (HeadingSectionGate -> one of two routes)
+//   3. chunk  (DeclaredBoundaryStrategy | RecursiveStrategy)
+//   4. metadata  (ToChunk here today; moving to ChunkMetadataBuilder)
+//   5. report  (ChunkingRunReport, written from a finally)
 //
 // The split of responsibility is deliberate. A strategy decides WHERE to cut and knows nothing
 // about ids, Zenya metadata or embedding prefixes; this class decides how a cut becomes an
@@ -20,9 +24,15 @@ public class ChunkingService : IChunkingService
     // in ChunkDocumentsAsync.
     private const double HeadingEscalationThreshold = 0.02;
 
-    private readonly IDocumentChunkingStrategy   _declaredBoundary;
-    private readonly IDocumentChunkingStrategy   _recursive;
+    // The per-document half of the same rule, fixed in advance alongside it. Looser than the
+    // corpus figure on purpose: one document is a small sample, so a single unlocated heading in
+    // twenty is noise where the same rate across 1,273 is a broken approach.
+    private const double PerDocumentHeadingEscalationThreshold = 0.05;
+
+    private readonly IDocumentChunkingStrategy   _declaredBoundaryStrategy;
+    private readonly IDocumentChunkingStrategy   _recursiveStrategy;
     private readonly DocumentIdentityResolver    _identityResolver;
+    private readonly ChunkMetadataBuilder        _metadataBuilder;
     private readonly IPipelineArtifactWriter     _artifactWriter;
     private readonly ILogger<ChunkingService>    _logger;
 
@@ -32,12 +42,14 @@ public class ChunkingService : IChunkingService
         DeclaredBoundaryStrategy declaredBoundary,
         RecursiveStrategy        recursive,
         DocumentIdentityResolver identityResolver,
+        ChunkMetadataBuilder     metadataBuilder,
         IPipelineArtifactWriter  artifactWriter,
         ILogger<ChunkingService> logger)
     {
-        _declaredBoundary = declaredBoundary;
-        _recursive        = recursive;
+        _declaredBoundaryStrategy = declaredBoundary;
+        _recursiveStrategy        = recursive;
         _identityResolver = identityResolver;
+        _metadataBuilder  = metadataBuilder;
         _artifactWriter   = artifactWriter;
         _logger           = logger;
     }
@@ -54,14 +66,14 @@ public class ChunkingService : IChunkingService
     // modes worth diagnosing (a wrong-dimension vector, duplicate SourceIds) throw out of
     // identity resolution, and before this the activity's artifact was written only on the
     // success path - so the runs most in need of a report were exactly the ones without one.
-    public async Task<(IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
+    public async Task<(IReadOnlyList<ChunkObject> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
         IReadOnlyList<PdfExtractionDocument> docs,
         string?                              instanceId = null,
         DateTimeOffset?                      startedAt  = null,
         CancellationToken                    ct         = default)
     {
         var runStartedAt = startedAt ?? DateTimeOffset.UtcNow;
-        var result       = new List<DocumentChunk>();
+        var allChunks    = new List<ChunkObject>();
 
         // Populated as the stage progresses rather than assembled at the end, so whatever is
         // known when an exception fires is already in hand.
@@ -72,6 +84,18 @@ public class ChunkingService : IChunkingService
         var    failedAtStage = "identity-resolution";
         string? error        = null;
 
+        // Heading-location totals, accumulated per document as the loop runs rather than
+        // collected from the chunks afterwards. Out here with the rest of the report state so a
+        // run that throws part way through still reports what it managed to count.
+        var headingsTotal   = 0;
+        var headingsFound   = 0;
+        var pairsMerged     = 0;
+        var headingsNoOffset = 0;
+
+        // Cuts the minimum-content rule discarded, for the same reason and in the same place as
+        // the heading counters: a run that dies half way through still says what it dropped.
+        var residueDropped  = 0;
+
         try
         {
             // 1. Identity: family, domain tag, confusables - needs an embedding call, so it
@@ -80,65 +104,244 @@ public class ChunkingService : IChunkingService
             identity     = resolved.Diagnostics;
             failedAtStage = "heading-section-gate";
 
-            // 2. Read the declared structure and gate on it: every document's route decided
-            //    BEFORE any chunking starts - see ReadHeadingsAndSections. Not overlapped with
-            //    chunking: the gate reads counts and profile fields, microseconds against
-            //    chunking's seconds.
-            var routed = ReadHeadingsAndSections(docs, resolved);
+            // How many documents landed in each family, counted once rather than re-derived per
+            // row. A single-member family is the resolver saying "nothing else looks like this",
+            // which is a different statement from a family of five - and it is the multi-member
+            // case where a wrong family_id actually costs a retrieval.
+            var familySize = resolved.Families.Values
+                .GroupBy(f => f.FamilyId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
 
-            // One routing line per run instead of a warning per picture document - the
-            // per-document detail is on the report rows (SizeClass, Strategy,
-            // FailedExtractionGate).
-            _logger.LogInformation(
-                "Route: {DeclaredBoundary} declared-boundary, {Recursive} recursive " +
-                "(of which {Picture} picture/CU candidates)",
-                routed.Count(r => r.Gate.Route == ChunkingRoute.DeclaredBoundary),
-                routed.Count(r => r.Gate.Route == ChunkingRoute.Recursive),
-                routed.Count(r => r.Gate.SizeClass == DocumentSizeClass.Picture));
+            // Steps 2-4 are per document: the gate reads one document's signals, a strategy
+            // cuts that document, and its chunks get their metadata before the next document
+            // starts. Nothing carries between iterations except `allChunks`.
+            foreach (var extracted in docs)
+            {
+                // Attach what step 1 resolved. One dictionary lookup - Families is keyed by
+                // SourceId - and from here on the family rides on the document itself, so
+                // neither the strategy nor the metadata builder needs it handed over
+                // separately. Null when the resolver produced no family for this document.
+                var doc = extracted with
+                {
+                    Family = resolved.Families.GetValueOrDefault(extracted.SourceId),
+                };
 
-            failedAtStage = "chunking";
+                // 2. Read the declared structure and gate on it. The formula is not repeated
+                //    here on purpose - DocContainsHeadingOrLessThan4kTokens below IS the routing
+                //    decision, and this is its only caller.
+                //
+                //    The branch picks a STRATEGY rather than calling one, so step 3 and step 4
+                //    are each written once. It also means the route name step 4 stamps is the
+                //    strategy's own Name, so a chunk's route_name cannot disagree with the class
+                //    that actually cut it.
+                IDocumentChunkingStrategy strategy;
 
-            // 3. Chunking: the routed strategy cuts each document - see ChunkAll.
-            var chunked = ChunkAll(routed, ct);
+                // This document's own anchoring result, so the row written at the end of the
+                // iteration can report ITS heading counts rather than only contributing to the
+                // run totals. Null on the recursive route - which never anchors - and the row
+                // reports 0/0 there, matching the counters: not attempted, not failed.
+                HeadingLocationResult? located = null;
 
-            // 4. Every document becomes a report row; its kept units become indexed rows.
-            var (headingsTotal, headingsFound, pairsMerged) =
-                CollectOutcomes(chunked, identity, docs, result, outcomes);
+                if (DocContainsHeadingOrLessThan4kTokens(doc))
+                {
+                    // 2b. Anchor the declared headings, and count how many could be placed.
+                    //
+                    //     This runs HERE rather than inside the strategy for one reason: the
+                    //     counters have to survive a document that goes on to produce no chunks.
+                    //     A document whose every heading failed to locate is exactly the case the
+                    //     >2% escalation exists to catch, and it is also the likeliest document to
+                    //     emit nothing - so counters recovered from the chunks would drop it.
+                    //
+                    //     Locate is the whole read: it orders headings by raw DI offset, finds each
+                    //     one's real position in the cleaned text, and pairs consecutive hits into
+                    //     contiguous sections, preamble and zero-body merges included. Raw offsets
+                    //     ORDER headings and never slice - cleaning drifts length by a measured
+                    //     1.066-1.202x, so a raw offset cuts wrong, and further wrong the deeper
+                    //     into the document it is.
+                    failedAtStage = "heading-location";
 
-            // Failed documents got their rows above; the stage itself still fails, so a
-            // partial result is never silently indexed - but only after every other document
-            // was chunked and reported.
-            ThrowIfAnyDocumentFailed(chunked);
+                    located = HeadingLocator.Locate(
+                        doc.Content, doc.Headings, doc.PageSpans, doc.Sections);
+
+                    headingsTotal    += located.HeadingsTotal;
+                    headingsFound    += located.HeadingsLocated;
+                    pairsMerged      += located.PairedHeadingsMerged;
+                    headingsNoOffset += located.HeadingsWithoutOffset;
+
+                    // A heading whose paragraph carried no DI spans at all, so nothing said
+                    // where in the raw content it sits. Locate kept it with its neighbours by
+                    // carrying the previous offset forward, which is the best available answer
+                    // but still a fallback - the section boundary it opens now rests on arrival
+                    // order. Named per document rather than only totalled, because chasing it
+                    // upstream needs to know WHICH file did it.
+                    if (located.HeadingsWithoutOffset > 0)
+                        _logger.LogWarning(
+                            "{Count} of {Total} headings in {SourceId} carried no DI offset and were " +
+                            "ordered by arrival position instead. Zero of 1,273 headings across the big " +
+                            "four did this, so it is an extraction anomaly worth chasing upstream, not a " +
+                            "routine input.",
+                            located.HeadingsWithoutOffset, located.HeadingsTotal, doc.SourceId);
+
+                    // The OTHER half of the escalation rule, and the half that had no code: the
+                    // threshold was fixed in advance at >2% corpus-wide OR >5% on any single
+                    // document, and only the corpus-wide branch existed. A corpus that locates
+                    // 1,270 of 1,273 headings passes the >2% test comfortably while one small
+                    // document sits at 100% unlocated - which is exactly the document whose
+                    // chunks are all preamble, and exactly what a run total cannot show.
+                    if (located.HeadingsTotal > 0 &&
+                        located.FailureRate > PerDocumentHeadingEscalationThreshold)
+                        _logger.LogWarning(
+                            "Heading location in {SourceId}: {Found}/{Total} ({Rate:P2} unlocated), " +
+                            "over the >{Threshold:P0} per-document escalation threshold",
+                            doc.SourceId, located.HeadingsLocated, located.HeadingsTotal,
+                            located.FailureRate, PerDocumentHeadingEscalationThreshold);
+
+                    doc = doc with { LocatedSections = located.Sections };
+
+                    strategy = _declaredBoundaryStrategy;
+                }
+
+                else
+                {
+                    // No anchoring on this route, and therefore nothing added to the counters.
+                    // The recursive route deliberately does not use whatever headings the
+                    // document has, so reporting them as unlocated would fill the failure metric
+                    // with headings that never failed - they were not attempted.
+                    strategy = _recursiveStrategy;
+                }
+
+                // 3. Chunking: the routed strategy cuts this document. It returns the cuts and
+                //    nothing else - WHERE to cut is all it decides.
+                failedAtStage = "chunking";
+
+                var chunks = await strategy.ChunkDocumentAsync(doc, ct);
+
+                // 3b. The minimum-content rule. A cut whose body carries almost no letters or
+                //     digits is vector residue, not content - this corpus produced a literal
+                //     "£ £" cut and a bare "#" one. Indexed, they occupy a row and can come back
+                //     as a match for a query they mean nothing about.
+                //
+                //     Dropped here rather than inside the strategy: deciding WHERE to cut and
+                //     deciding whether a cut is worth indexing are different judgements, and the
+                //     strategy only makes the first.
+                //
+                //     Measured on Content, which at this point is the BARE BODY - the prefix is a
+                //     separate field and is not joined on until EmbeddingText composes it. That
+                //     ordering is the whole point: a prefix is dozens of alphanumeric characters,
+                //     so residue measured after it looks substantial.
+                var kept    = chunks.Where(c => !IsResidue(c.Content)).ToList();
+                var dropped = chunks.Count - kept.Count;
+
+                if (dropped > 0)
+                {
+                    residueDropped += dropped;
+                    _logger.LogInformation(
+                        "Minimum-content rule dropped {Dropped} of {Total} cut(s) as vector residue in {SourceId}",
+                        dropped, chunks.Count, doc.SourceId);
+                }
+
+                // 4. Metadata: ONE call for the whole document, not one per chunk. What is a
+                //    property of the DOCUMENT is read once inside and copied onto every chunk of
+                //    it - two chunks of one file disagreeing about its family_id is not
+                //    something anything downstream could detect.
+                //
+                //    Only the survivors: nothing is stamped onto rows already discarded.
+                failedAtStage = "chunk-metadata";
+
+                _metadataBuilder.AddMetadata(kept, doc, strategy.Name);
+
+                allChunks.AddRange(kept);
+
+                // 5. The row. Written per document, at the end of its own iteration, so the
+                //    report says what happened to THIS document rather than only what the run
+                //    totalled - `outcomes` was declared for this and nothing ever added to it,
+                //    which left every row in the report a `not_reached` fallback with 0/0
+                //    headings, on runs that succeeded.
+                //
+                //    "zero_chunks" covers both a route that emitted nothing and a document whose
+                //    every cut was residue; Reason separates them, because they are different
+                //    faults - the first is a routing or anchoring failure, the second is an
+                //    extraction one.
+                outcomes.Add(new DocumentOutcome(
+                    SourceId:              doc.SourceId,
+                    Title:                 doc.Title,
+                    Outcome:               kept.Count > 0 ? "chunked" : "zero_chunks",
+                    Reason:                ZeroChunkReason(kept.Count, chunks.Count, dropped),
+                    FailedExtractionGate:  doc.Profile is { HasExtractableContent: false },
+                    ResidueChunksDropped:  dropped,
+                    FamilyId:              doc.Family?.FamilyId,
+                    IsInMultiMemberFamily: doc.Family is not null &&
+                                           familySize.GetValueOrDefault(doc.Family.FamilyId) > 1,
+                    DomainTag:             doc.Family?.DomainTag,
+                    ConfusableWith:        doc.Family?.ConfusableWith ?? [],
+                    IdentityVectorSource:  resolved.IdentityVectorSourceOf.GetValueOrDefault(doc.SourceId),
+                    ChunkCount:            kept.Count,
+                    // The real counts, from this document's own anchoring result. 0/0 on the
+                    // recursive route means not attempted - the same distinction LocatedSections
+                    // being null carries, and why this is not "0 of N located".
+                    HeadingsTotal:         located?.HeadingsTotal   ?? 0,
+                    HeadingsLocated:       located?.HeadingsLocated ?? 0,
+                    SizeClass:             DocumentSizeClassifier.Classify(doc.Profile).ToString(),
+                    Strategy:              strategy.Name));
+            }
 
             // The standing evidence for locating headings by string match rather than rewriting
             // PdfCleaner to emit an offset map. That call was made against 1,273/1,273 exact
-            // matches with an escalation threshold fixed in advance at >2%, so the rate has to be
-            // reported every run, not measured once and assumed to hold.
+            // matches with an escalation threshold fixed IN ADVANCE at >2%, so the rate has to be
+            // reported every run - measured once and assumed to hold is exactly what it is not.
+            //
+            // Zero total means no document took the declared-boundary route this run, so there is
+            // nothing to report. Not a 0% failure rate - no attempt.
             if (headingsTotal > 0)
             {
                 var failureRate = 1 - (headingsFound / (double)headingsTotal);
                 var exceeds     = failureRate > HeadingEscalationThreshold;
 
                 headingSummary = new HeadingLocationSummary(
-                    headingsTotal, headingsFound, failureRate, exceeds, pairsMerged);
+                    headingsTotal, headingsFound, failureRate, exceeds, pairsMerged,
+                    headingsNoOffset);
 
                 _logger.Log(exceeds ? LogLevel.Warning : LogLevel.Information,
                     "Heading location: {Found}/{Total} ({Rate:P2} unlocated), {Merged} paired zero-body heading(s) merged",
                     headingsFound, headingsTotal, failureRate, pairsMerged);
             }
 
+            // The run total, so a corpus that sheds residue across many documents says so once
+            // rather than only a line at a time. Non-zero is normal on image-heavy documents;
+            // a sharp rise is an extraction change, not a chunking one.
+            if (residueDropped > 0)
+                _logger.LogInformation(
+                    "Minimum-content rule dropped {Dropped} cut(s) as vector residue across the run",
+                    residueDropped);
+
+
+            // TO DO (step 5): move all reporting logic to a folder called ChunkingReporting.
+            // ONE call, from here, and no reporting slope anywhere else in this method.
+            //
+            // Commented out rather than deleted: the reporter class does not exist yet, and this
+            // line is the only thing left in the file that names where it goes. It was the sole
+            // remaining compile error in this project, so leaving it live meant step 4 could not
+            // be built or tested at all.
+            //
+            //     _reportBuild.BuildREPORT();
+
+            // TO DO we will review if it's any useful
+
+            // Failed documents got their rows above; the stage itself still fails, so a
+            // partial result is never silently indexed - but only after every other document
+            // was chunked and reported.
+
             failedAtStage = "metrics";
 
             var sourceDocumentIds = docs.Select(d => d.SourceId).Distinct(StringComparer.Ordinal).ToList();
 
-            stats = ChunkingStageMetrics.Compute(result, Name, sourceDocumentIds);
-            EmitChunkMetrics(stats, result);
+            stats = ChunkingStageMetrics.Compute(allChunks, Name, sourceDocumentIds);
 
             _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks ({Strategy})",
-                docs.Count, result.Count, stats.Strategy);
+                docs.Count, allChunks.Count, stats.Strategy);
 
             failedAtStage = null;
-            return (result, stats);
+            return (allChunks, stats);
         }
         catch (Exception ex)
         {
@@ -174,7 +377,7 @@ public class ChunkingService : IChunkingService
                         Identity:        identity,
                         HeadingLocation: headingSummary,
                         Stats:           stats,
-                        Chunks:          result),
+                        Chunks:          allChunks),
                     ct);
             }
             catch (Exception reportEx)
@@ -184,157 +387,52 @@ public class ChunkingService : IChunkingService
         }
     }
 
-    // Step 2. One routed document per input, in deterministic order, each pairing the document
-    // with the identity resolved in step 1 and the gate's verdict on its declared structure.
+    // Step 2, the gate: is the document's declared boundary worth honouring?
     //
-    // A separate pass from chunking on purpose: the verdicts feed the run report as well as the
-    // chunker, so a run that dies mid-chunking can still say what every document's route was.
-    private static IReadOnlyList<RoutedDocument> ReadHeadingsAndSections(
-        IReadOnlyList<PdfExtractionDocument> docs, IdentityResolutionResult resolved) =>
-        docs.OrderBy(d => d.SourceId, StringComparer.Ordinal)
-            .Select(doc => new RoutedDocument(
-                doc,
-                resolved.Families.GetValueOrDefault(doc.SourceId),
-                resolved.IdentityVectorSourceOf.GetValueOrDefault(doc.SourceId),
-                HeadingSectionGate.Read(doc)))
-            .ToList();
-
-    private sealed record ChunkedDocument(RoutedDocument Routed, ChunkingOutcome Outcome, Exception? Error);
-
-    // Step 3. Documents are independent and both strategies are CPU-bound and stateless, so they
-    // chunk in parallel; AsOrdered keeps the output - and therefore every id and report
-    // row - deterministic. A per-document failure is captured rather than thrown, so one bad
-    // document cannot hide the fate of the rest; the caller records it and fails the stage
-    // once every document has been processed.
-    private List<ChunkedDocument> ChunkAll(IReadOnlyList<RoutedDocument> routed, CancellationToken ct) =>
-        routed.AsParallel().AsOrdered().WithCancellation(ct)
-             .Select(doc =>
-             {
-                 try
-                 {
-                     // The gate named the route; this switch maps it onto its implementation in
-                     // Services/Chunking/ChunkingStrategies. Two arms, both real algorithms -
-                     // the four-arm version dispatched onto four classes that all delegated to
-                     // one shared cascade. Exhaustive on purpose: an unhandled value throws
-                     // rather than silently cutting the document the wrong way.
-                     var strategy = doc.Gate.Route switch
-                     {
-                         ChunkingRoute.DeclaredBoundary => _declaredBoundary,
-                         ChunkingRoute.Recursive        => _recursive,
-                         _ => throw new ArgumentOutOfRangeException(
-                                  nameof(routed), doc.Gate.Route, "unhandled chunking route"),
-                     };
-
-                     var outcome = strategy.Chunk(doc.Doc, doc.Family?.DomainTag);
-
-                     return new ChunkedDocument(doc, outcome, null);
-                 }
-                 catch (OperationCanceledException)
-                 {
-                     throw;
-                 }
-                 catch (Exception ex)
-                 {
-                     return new ChunkedDocument(doc, ChunkingOutcome.Empty, ex);
-                 }
-             })
-             .ToList();
-
-    // Step 4: each chunked document becomes indexed rows (result) and exactly one report row
-    // (outcomes), applying the minimum-content rule. Returns the heading-location totals the
-    // escalation check needs.
-    private (int HeadingsTotal, int HeadingsLocated, int PairsMerged) CollectOutcomes(
-        IReadOnlyList<ChunkedDocument>       chunked,
-        IdentityResolutionDiagnostics        identity,
-        IReadOnlyList<PdfExtractionDocument> docs,
-        List<DocumentChunk>                  result,
-        List<DocumentOutcome>                outcomes)
+    //   at least 2 headings AND at least 0.1 headings per 1,000 chars
+    //   OR: under 4,000 estimated tokens and at least 1 heading
+    //
+    // True -> DeclaredBoundaryStrategy. False -> RecursiveStrategy.
+    //
+    // Not "does the document have headings": one heading in 30k chars is a label, not a
+    // structure, and 2 headings on a 400-page document pass a count check while structuring
+    // nothing. Density is measured per 1,000 CHARS, not per page - page count is this corpus's
+    // weakest size signal. The second clause is the N=1 admission: the document fits one
+    // retrieval unit, so its single heading genuinely describes the whole thing.
+    //
+    // The token count is read off the profile directly rather than through a size class: the
+    // class was a four-way vocabulary of which this gate only ever used one value, and the raw
+    // threshold says what is actually being tested.
+    //
+    // Runs once per document. Strategies never re-check it, and being over the token ceiling
+    // never changes a route - it only triggers a cut inside one.
+    private static bool DocContainsHeadingOrLessThan4kTokens(PdfExtractionDocument doc)
     {
-        var headingsTotal = 0;
-        var headingsFound = 0;
-        var pairsMerged   = 0;
+        int headingCount = doc.Headings.Count;
 
-        foreach (var (routed, outcome, error) in chunked)
-        {
-            var (doc, family, vectorSource, gate) = routed;
+        // Null means extraction never measured this document, so the count decides alone - a
+        // missing measurement never punishes a document. It is likewise not "small": null < int
+        // is false, so an unmeasured document never takes the single-heading clause.
+        double? density = doc.Profile?.HeadingsPerThousandChars;
+        bool    isSmall = doc.Profile?.EstimatedTokens < SmallDocumentTokenCeiling;
 
-            if (error is not null)
-            {
-                outcomes.Add(NotChunked(doc, family, vectorSource, "failed",
-                    $"the {gate.Route} strategy threw: {error.Message}", gate));
-                continue;
-            }
-
-            headingsTotal += outcome.HeadingsTotal;
-            headingsFound += outcome.HeadingsLocated;
-            pairsMerged   += outcome.PairedHeadingsMerged;
-
-            // The minimum-content rule that replaced the extraction gate's document-level
-            // drop: a unit whose body carries almost no letters or digits is vector residue
-            // (the corpus's literal "£ £" and bare "#" chunks), not content. Measured on
-            // letters/digits rather than raw length because residue can be padded with
-            // symbols and whitespace, while a genuinely short answer ("body") is all letters.
-            var kept    = outcome.Units.Where(u => !IsResidue(u.Content)).ToList();
-            var dropped = outcome.Units.Count - kept.Count;
-
-            // 4. Metadata: each kept unit becomes an indexed row. ToChunk below is this step
-            //    today; ChunkMetadataBuilder is where it moves, organised as the four metadata
-            //    scopes - see docs/2608/260818/chunking-service-refactor.md step 4.
-            foreach (var unit in kept)
-                result.Add(ToChunk(doc, unit, family));
-
-            outcomes.Add(new DocumentOutcome(
-                SourceId:              doc.SourceId,
-                Title:                 doc.Title,
-                Outcome:               kept.Count > 0 ? "chunked" : "zero_chunks",
-                Reason:                kept.Count > 0
-                                           ? null
-                                           : dropped > 0
-                                               ? $"every unit the strategy emitted ({dropped}) was vector residue below the minimum-content rule"
-                                               : "the strategy ran but emitted no units - empty or whitespace after cleaning",
-                FailedExtractionGate:  gate.SizeClass == DocumentSizeClass.Picture,
-                ResidueChunksDropped:  dropped,
-                FamilyId:              family?.FamilyId,
-                IsInMultiMemberFamily: IsMultiMember(identity, family?.FamilyId),
-                DomainTag:             family?.DomainTag,
-                ConfusableWith:        family?.ConfusableWith ?? [],
-                IdentityVectorSource:  vectorSource,
-                ChunkCount:            kept.Count,
-                HeadingsTotal:         outcome.HeadingsTotal,
-                HeadingsLocated:       outcome.HeadingsLocated,
-                SizeClass:             gate.SizeClass.ToString(),
-                Strategy:              gate.Route.ToString()));
-        }
-
-        // Documents the resolver dropped for having nothing to embed never reach the loop
-        // above with an identity, but they are still inputs and still need a row.
-        foreach (var sourceId in identity.SkippedEmptyIdentity)
-            if (!outcomes.Any(o => o.SourceId == sourceId))
-                outcomes.Add(NotChunked(
-                    docs.First(d => d.SourceId == sourceId), null, null, "identity_skipped",
-                    "no title and no headings, so there was nothing to embed or cluster on"));
-
-        return (headingsTotal, headingsFound, pairsMerged);
+        return (headingCount >= MinHeadings && (density is null || density >= MinHeadingsPerThousandChars))
+            || (isSmall && headingCount >= MinHeadingsWhenSmall);
     }
 
-    private static void ThrowIfAnyDocumentFailed(IReadOnlyList<ChunkedDocument> chunked)
-    {
-        var failed = chunked.Where(c => c.Error is not null).ToList();
-        if (failed.Count == 0) return;
+    private const int    MinHeadings                 = 2;
+    private const double MinHeadingsPerThousandChars = 0.1;
+    private const int    MinHeadingsWhenSmall        = 1;
 
-        throw new AggregateException(
-            $"{failed.Count} document(s) failed chunking - see their rows in the run report: " +
-            string.Join(", ", failed.Select(f => f.Routed.Doc.SourceId)),
-            failed.Select(f => f.Error!));
-    }
+    // The "can the whole document BE the retrieval unit" line, and the only size threshold this
+    // gate needs. Reasoned, never measured (chunking-signals-map.md) - it was
+    // DocumentSizeClassifier.MediumTokenThreshold, the boundary below which a document was
+    // classified Small.
+    private const int    SmallDocumentTokenCeiling   = 4_000;
 
     // Report name kept as the pre-existing artifact's, so the blob a reader already knows how
     // to find is the one that now carries the whole stage rather than just the chunk list.
     private const string ChunkingReportName = "chunking-artifact";
-
-    private static bool IsMultiMember(IdentityResolutionDiagnostics? identity, string? familyId) =>
-        familyId is not null && identity is not null &&
-        identity.Families.Any(f => f.FamilyId == familyId);
 
     // The floor for the minimum-content rule. Set from the corpus's known residue chunks
     // ("£ £" scores 0, a bare "#" scores 0, a checkbox row "1 2 3" scores 3) while the
@@ -342,21 +440,30 @@ public class ChunkingService : IChunkingService
     // title/heading prefix is prepended - the prefix would make any residue look substantial.
     private const int MinChunkAlphanumericChars = 4;
 
+    // Why a document produced nothing, said in the report rather than left to be inferred from a
+    // zero. Null on the ordinary path: a document that produced chunks needs no explanation, and
+    // a reason present on a "chunked" row would read as a complaint about it.
+    private static string? ZeroChunkReason(int kept, int cut, int dropped) =>
+        kept  > 0 ? null
+      : cut == 0  ? "the strategy produced no cuts for this document"
+      :             $"all {dropped} cut(s) were dropped by the minimum-content rule as vector residue";
+
     private static bool IsResidue(string content) =>
         content.Count(char.IsLetterOrDigit) < MinChunkAlphanumericChars;
 
+    // A row for a document that produced no chunks. The gate parameter this used to take is
+    // gone with SectionGateVerdict: every caller passed null anyway, because these are exactly
+    // the rows written BEFORE a route was chosen (identity_skipped, not_reached).
     private static DocumentOutcome NotChunked(
         PdfExtractionDocument doc, DocumentFamily? family, string? vectorSource,
-        string outcome, string? reason, SectionGateVerdict? gate = null) =>
+        string outcome, string? reason) =>
         new(SourceId:              doc.SourceId,
             Title:                 doc.Title,
             Outcome:               outcome,
             Reason:                reason,
-            // From the gate when it ran; otherwise derived from the profile so rows written
-            // before the gate (identity_skipped, not_reached) stay truthful.
-            FailedExtractionGate:  gate is null
-                                       ? doc.Profile is { HasExtractableContent: false }
-                                       : gate.SizeClass == DocumentSizeClass.Picture,
+            // Read off the profile. The gate never ran for these documents, so a route-derived
+            // answer would be an invention rather than a measurement.
+            FailedExtractionGate:  doc.Profile is { HasExtractableContent: false },
             ResidueChunksDropped:  0,
             FamilyId:              family?.FamilyId,
             IsInMultiMemberFamily: false,
@@ -366,135 +473,10 @@ public class ChunkingService : IChunkingService
             ChunkCount:            0,
             HeadingsTotal:         0,
             HeadingsLocated:       0,
-            SizeClass:             gate?.SizeClass.ToString(),
-            Strategy:              gate?.Route.ToString());
+            // Sized from the same classifier step 4 stamps with, so a not_reached row still says
+            // how big the document was. Strategy stays null - no route was picked for it, and
+            // naming one would read as a route that ran and produced nothing.
+            SizeClass:             DocumentSizeClassifier.Classify(doc.Profile).ToString(),
+            Strategy:              null);
 
-    private static DocumentChunk ToChunk(PdfExtractionDocument doc, ChunkUnit unit, DocumentFamily? family)
-    {
-        var (pageStart, pageEnd, pictureOnly) = ResolvePages(doc.PageSpans, unit.Start, unit.Length);
-
-        // The embedded prefix: document title, sector tag, then the heading chain.
-        //
-        // The sector tag is here rather than added later on purpose. The dangerous failure in
-        // this corpus is a well-formed, on-topic, WRONG-SECTOR answer - the three CAOs give
-        // different vakantietoeslag figures for the same question - and no similarity score can
-        // flag that. The domain_tag filter is the deterministic fix, but putting the tag in the
-        // embedded text pushes the signal into the vector too. It has to be in from the first
-        // build, because this text IS what gets embedded: adding it afterwards changes every
-        // vector and forces a full re-embed.
-        // Same rule SectionCascadeStrategy budgeted against - see ChunkingHelper.TitleLine.
-        var titleLine = ChunkingHelper.TitleLine(doc.Title, family?.DomainTag);
-
-        var prefixParts = new[] { titleLine, unit.HeadingPath }
-            .Where(p => !string.IsNullOrWhiteSpace(p));
-
-        var prefix  = string.Join("\n\n", prefixParts);
-        var content = prefix.Length > 0 ? $"{prefix}\n\n{unit.Content}" : unit.Content;
-
-        return new DocumentChunk
-        {
-            // Carries no page number: the id is scoped to the document and the unit's position
-            // within it, so inserting a page no longer shifts every subsequent id - and an id
-            // change is a delete-plus-insert in the index, not an update.
-            Id                 = ChunkingHelper.SafeKey($"{doc.SourceId}::s{unit.SectionIndex}", unit.ChildIndex),
-            DocumentId         = doc.SourceId,
-
-            // Synthesized rather than pointing at a parent row: parent text is materialized
-            // onto each child instead of indexed separately, so there is no row to point at.
-            // It is a grouping key - de-duplicating children of one section, or fetching the
-            // rest of it - and nothing needs to exist for it to identify.
-            SectionId          = ChunkingHelper.SafeKey($"{doc.SourceId}::s{unit.SectionIndex}", -1),
-            SectionIndex       = unit.SectionIndex,
-            ChildIndex         = unit.ChildIndex,
-            Grain              = unit.Grain,
-            ParentText         = unit.ParentText,
-
-            Title              = doc.Title,
-            Content            = content,
-            TokenCount         = TokenCounter.Count(content),
-
-            HeadingText        = unit.HeadingText,
-            HeadingPath        = unit.HeadingPath,
-            HeadingDepth       = unit.HeadingDepth,
-            HeadingSource      = unit.HeadingSource,
-            HeadingLocated     = unit.HeadingLocated,
-            IsOverlap          = unit.IsOverlap,
-
-            PageStart          = pageStart,
-            PageEnd            = pageEnd,
-            PageExtractionFlag = pictureOnly,
-            Language           = doc.Language,
-
-            LastModifiedDate   = doc.LastModifiedDate,
-            CreatedAt          = doc.CreatedAt,
-            ModDate            = doc.ModDate,
-            PageCount          = doc.PageCount,
-            ZenyaDocumentId    = doc.ZenyaDocumentId,
-            ZenyaVersion       = doc.ZenyaVersion,
-            ZenyaStatus        = doc.ZenyaStatus,
-            ZenyaUrl           = doc.ZenyaUrl,
-            Author             = doc.Author,
-            Breadcrumb         = doc.PageBreadcrumbs.GetValueOrDefault(pageStart),
-
-            FamilyId           = family?.FamilyId,
-            DomainTag          = family?.DomainTag,
-            ConfusableWith     = family?.ConfusableWith ?? [],
-
-            // Filtered to the pages this chunk covers, so the cost scales with the chunk
-            // rather than the document. Lines is excluded on measured cost (57% of the whole
-            // extraction payload) and Sections/Bookmarks on principle - see ChunkStructure.
-            Structure          = new ChunkStructure(
-                Headings:       OnPages(doc.Headings,       h => h.PageNumber, pageStart, pageEnd),
-                Boilerplate:    OnPages(doc.Boilerplate,    h => h.PageNumber, pageStart, pageEnd),
-                Tables:         OnPages(doc.Tables,         t => t.PageNumber, pageStart, pageEnd),
-                Dimensions:     doc.PageSpans.FirstOrDefault(s => s.PageNumber == pageStart)?.Dimensions,
-                SelectionMarks: OnPages(doc.SelectionMarks, s => s.PageNumber, pageStart, pageEnd),
-                Figures:        OnPages(doc.Figures,        f => f.PageNumber, pageStart, pageEnd)),
-        };
-    }
-
-    private static IReadOnlyList<T> OnPages<T>(
-        IReadOnlyList<T> items, Func<T, int> pageOf, int start, int end) =>
-        items.Where(i => pageOf(i) >= start && pageOf(i) <= end).ToList();
-
-    // Which pages a chunk covers. A chunk that starts inside page 4 and runs into page 5
-    // reports (4, 5) - the reason page_start/page_end replaced a single page_number.
-    private static (int Start, int End, bool PictureOnly) ResolvePages(
-        IReadOnlyList<PageSpan> spans, int chunkStart, int chunkLength)
-    {
-        if (spans.Count == 0) return (0, 0, false);
-
-        var chunkEnd = chunkStart + chunkLength;
-        var covered  = spans
-            .Where(s => s.Offset < chunkEnd && s.Offset + s.Length >= chunkStart)
-            .ToList();
-
-        if (covered.Count == 0) return (spans[0].PageNumber, spans[0].PageNumber, spans[0].IsPictureOnly);
-
-        return (covered[0].PageNumber, covered[^1].PageNumber, covered.Any(s => s.IsPictureOnly));
-    }
-
-    private static void EmitChunkMetrics(ChunkingStageMetrics stats, IReadOnlyList<DocumentChunk> chunks)
-    {
-        var strategyTag = new KeyValuePair<string, object?>("strategy", stats.Strategy);
-
-        Instrumentation.ChunksExtracted.Record(stats.ChunksProduced, strategyTag);
-
-        // Per-chunk histogram — preserves the real distribution in App Insights, not just the
-        // aggregates already in ChunkingStageMetrics.
-        foreach (var chunk in chunks)
-            Instrumentation.ChunkSizeChars.Record(chunk.Content.Length, strategyTag);
-
-        Instrumentation.ChunkSizeBand.Add(stats.BandUnder100,  strategyTag, new("band", "under_100"));
-        Instrumentation.ChunkSizeBand.Add(stats.Band100To500,  strategyTag, new("band", "100_to_500"));
-        Instrumentation.ChunkSizeBand.Add(stats.Band500To1500, strategyTag, new("band", "500_to_1500"));
-        Instrumentation.ChunkSizeBand.Add(stats.Band1500Plus,  strategyTag, new("band", "1500_plus"));
-
-        Instrumentation.DuplicateChunks.Add(stats.DuplicateChunks,   strategyTag);
-        Instrumentation.CoherentChunks.Add(stats.CoherentChunks,     strategyTag);
-        Instrumentation.HeadingsDetected.Add(stats.HeadingsDetected, strategyTag);
-
-        if (stats.DocsWithZeroChunks > 0)
-            Instrumentation.DocsWithZeroChunks.Add(stats.DocsWithZeroChunks, strategyTag);
-    }
 }

@@ -13,7 +13,7 @@ public interface IChunkingService
     // routing measurements), so there is nothing meaningful a bare string can be chunked
     // against. It had no callers outside its own tests.
 
-    // Converts ExtractionDocuments into indexed DocumentChunks,
+    // Converts ExtractionDocuments into indexed ChunkObjects,
     // computes ChunkingStageMetrics, and emits all chunk telemetry. Async - resolves
     // family/domain identity (DocumentIdentityResolver) via an embedding call before splitting.
     //
@@ -21,7 +21,7 @@ public interface IChunkingService
     // routing, heading location and the chunks), including when the stage throws - which is
     // why it needs instanceId/startedAt to name the blob. Both are optional: a caller outside
     // an orchestration gets the id-less path, same as StageReportPath's other callers.
-    Task<(IReadOnlyList<DocumentChunk> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
+    Task<(IReadOnlyList<ChunkObject> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
         IReadOnlyList<PdfExtractionDocument> docs,
         string?                              instanceId = null,
         DateTimeOffset?                      startedAt  = null,

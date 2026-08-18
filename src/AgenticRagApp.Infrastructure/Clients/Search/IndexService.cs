@@ -178,11 +178,37 @@ public class IndexService : IIndexService
                 new SimpleField("char_count",         SearchFieldDataType.Int32)          { IsFilterable = true },
                 new SimpleField("token_count",        SearchFieldDataType.Int32)          { IsFilterable = true },
 
+                // Where this chunk sits in the document's CLEANED text. Retrievable, never
+                // filtered: their job is the offset round-trip invariant (content must equal
+                // the source sliced at these coordinates) and the query-time structural window,
+                // which reassembles a section by slicing the source rather than by re-reading
+                // neighbouring chunks. Nothing narrows a search by them.
+                new SimpleField("chunk_start",        SearchFieldDataType.Int32)          { },
+                new SimpleField("chunk_length",       SearchFieldDataType.Int32)          { },
+
+                // ── How this chunk was produced ────────────────────────────────────────
+                // Which of the two routes cut it, and how the document was sized. Facetable
+                // because the question they answer is distributional - "are Large documents
+                // ending up on the recursive route", which is the density test rejecting real
+                // structure - and that is a facet query, not an investigation.
+                new SimpleField("route_name",         SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
+                new SimpleField("size_class",         SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
+
+                // ── Document validity ──────────────────────────────────────────────────
+                // Parsed from the title, which is where this corpus states it ("CAO GGZ 2024
+                // 2026"). Filterable and sortable because the question is "is this still in
+                // force" - a superseded CAO answering a current question is the same class of
+                // failure as a wrong-sector answer, and equally invisible to a similarity
+                // score. Null when the title carries no period: absent, never guessed.
+                new SimpleField("valid_from",         SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
+                new SimpleField("valid_to",           SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
+                new SimpleField("version",            SearchFieldDataType.String)         { IsFilterable = true },
+
                 // ── Identity / ambiguity ───────────────────────────────────────────────
                 // The sector-ambiguity failure mode returns a well-formed, on-topic,
                 // WRONG-POPULATION chunk that no similarity score can flag. A metadata
                 // filter is the only deterministic fix, so these must be filterable - they
-                // were computed by DocumentIdentityResolver and carried on DocumentChunk already,
+                // were computed by DocumentIdentityResolver and carried on ChunkObject already,
                 // but never reached the index.
                 new SimpleField("family_id",          SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
                 // Sector code from the title (DomainTagger): GGZ/GHZ/VGZ/VVT. This IS the

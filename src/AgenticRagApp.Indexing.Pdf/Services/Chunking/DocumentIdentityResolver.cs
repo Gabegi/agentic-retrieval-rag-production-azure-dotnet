@@ -304,7 +304,15 @@ public class DocumentIdentityResolver
                 d => d.SourceId,
                 d => freshVectors.ContainsKey(d.SourceId) ? "embedded" : "reused");
 
-        return new IdentityResolutionResult(resolvedFamilies, diagnostics, vectorSource);
+        // The two halves of "whose family_id changed": documents in this run's comparison set,
+        // and previously-indexed documents this run's clustering re-homed. A document cannot be
+        // in both - PersistAsync skips this run's ids - so concatenating is the union.
+        var familyMoves = assignment.InRunMoves
+            .Concat(persistOutcome.Moves)
+            .OrderBy(m => m.SourceId, StringComparer.Ordinal)
+            .ToList();
+
+        return new IdentityResolutionResult(resolvedFamilies, diagnostics, vectorSource, familyMoves);
     }
 
     // No identities, or none that survived to the comparison set: still returns diagnostics so
@@ -339,7 +347,8 @@ public class DocumentIdentityResolver
                 ConfusableWordThreshold:          ConfusableTitleDetector.ConfusableWordThreshold,
                 MaxConfusableEdits:               ConfusableTitleDetector.MaxConfusableEdits,
                 MinConfusableWordLength:          ConfusableTitleDetector.MinConfusableWordLength),
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(),
+            []);
 
     // Everything the calibration pass needs, on values the pure components returned. Both
     // directions of the threshold question are covered: the weakest intra-family link shows
@@ -539,4 +548,20 @@ public class DocumentIdentityResolver
 public sealed record IdentityResolutionResult(
     IReadOnlyDictionary<string, DocumentFamily> Families,
     IdentityResolutionDiagnostics               Diagnostics,
-    IReadOnlyDictionary<string, string>         IdentityVectorSourceOf);
+    IReadOnlyDictionary<string, string>         IdentityVectorSourceOf,
+
+    // Every document whose family_id changed this run - those in the comparison set
+    // (FamilyAssignment.InRunMoves) and those merely re-homed by it (PersistOutcome.Moves).
+    //
+    // This exists because nothing downstream can detect a family move on its own. family_id is
+    // not part of the embedded text, so a chunk's hash - hash(embedString + model id) - is
+    // byte-identical before and after; the indexer's diff sees "in both, skip" and the index
+    // keeps the old family_id indefinitely. The document's own IdentityHash does not catch it
+    // either: a move is caused by OTHER documents changing the clustering, so this document is
+    // unchanged and the skip gate skips it before chunking runs.
+    //
+    // So this set is the signal: the indexer force-writes these documents' rows regardless of
+    // what the hash diff says. Deliberately NOT solved by putting family_id in the hash, which
+    // would re-embed every chunk to produce byte-identical vectors and change chunk_id - in
+    // Search a delete plus insert rather than a field update.
+    IReadOnlyList<FamilyMove>                   FamilyMoves);

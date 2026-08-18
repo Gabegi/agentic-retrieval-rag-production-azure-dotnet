@@ -54,10 +54,8 @@ public class ChunkingServiceTests
             .Callback<string, ChunkingRunReport, CancellationToken>((_, r, _) => reports.Add(r))
             .Returns(Task.CompletedTask);
 
-        var selector = new ChunkingStrategySelector();
-
         var service = BuildChunkingService(
-            selector, tokenCeiling, resolver ?? BuildDocumentIdentityResolver(), writer.Object);
+            tokenCeiling, resolver ?? BuildDocumentIdentityResolver(), writer.Object);
 
         return (service, reports);
     }
@@ -65,28 +63,22 @@ public class ChunkingServiceTests
     private static ChunkingService BuildService(int tokenCeiling = SectionSplitter.DefaultTokenCeiling)
     {
         return BuildChunkingService(
-            new ChunkingStrategySelector(), tokenCeiling, BuildDocumentIdentityResolver(),
+            tokenCeiling, BuildDocumentIdentityResolver(),
             new Mock<IPipelineArtifactWriter>().Object);
     }
 
-    // All four route strategies wrap the one cascade, exactly as DI wires them.
+    // The two routes HeadingSectionGate dispatches onto, exactly as DI wires them. Both are
+    // empty skeletons until step 3 of docs/2608/260818/chunking-service-refactor.md, so
+    // tokenCeiling has nothing to configure yet - it is kept because every test that sets it is
+    // asserting cutting behaviour that comes back with the strategies.
     private static ChunkingService BuildChunkingService(
-        ChunkingStrategySelector selector,
         int                      tokenCeiling,
         DocumentIdentityResolver resolver,
-        IPipelineArtifactWriter  writer)
-    {
-        var cascade = new SectionCascadeStrategy(new SectionSplitter(), tokenCeiling);
-
-        return new ChunkingService(
-            selector,
-            new HeadingBasedStrategy(cascade),
-            new TableAwareStrategy(cascade),
-            new SingleSectionStrategy(cascade),
-            new FallbackStrategy(cascade),
+        IPipelineArtifactWriter  writer) =>
+        new(new DeclaredBoundaryStrategy(),
+            new RecursiveStrategy(),
             resolver, writer,
             NullLogger<ChunkingService>.Instance);
-    }
 
     private static PdfExtractionDocument Doc(
         string sourceId, string content,
@@ -542,8 +534,7 @@ public class ChunkingServiceTests
             .ThrowsAsync(new InvalidOperationException("blob storage is down"));
 
         var service = BuildChunkingService(
-            new ChunkingStrategySelector(), SectionSplitter.DefaultTokenCeiling,
-            BuildDocumentIdentityResolver(), writer.Object);
+            SectionSplitter.DefaultTokenCeiling, BuildDocumentIdentityResolver(), writer.Object);
 
         var (chunks, _) = await service.ChunkDocumentsAsync([Doc("doc1", "body")], "instance-1");
 

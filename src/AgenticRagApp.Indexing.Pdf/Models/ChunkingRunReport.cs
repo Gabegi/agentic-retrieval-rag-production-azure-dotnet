@@ -34,7 +34,7 @@ public sealed record ChunkingRunReport(
 
     HeadingLocationSummary?             HeadingLocation,
     ChunkingStageMetrics?               Stats,
-    IReadOnlyList<DocumentChunk>?       Chunks);
+    IReadOnlyList<ChunkObject>?         Chunks);
 
 // One row per document that entered the stage. Outcome is the single question this report
 // exists to answer: what happened to this document, and if it produced nothing, why.
@@ -51,7 +51,10 @@ public sealed record DocumentOutcome(
     // "zero_chunks"             - a strategy ran but emitted nothing (or only residue)
     // "failed"                  - the strategy threw on this document; the stage still fails,
     //                             but only after every document was processed and reported
-    // "identity_skipped"        - no title and no headings, so nothing to embed or cluster on
+    // "identity_skipped"        - no title and no headings, so nothing to embed or cluster on,
+    //                             AND no cuts either. A document with content still chunks -
+    //                             the recursive route needs neither - and reports "chunked";
+    //                             its null FamilyId is what says identity was skipped for it.
     // "not_reached"             - the stage threw before this document was processed
     // ("no_strategy" appears only in reports written before 260814, when the extraction gate
     //  still dropped whole documents instead of flagging them - see FailedExtractionGate.)
@@ -83,11 +86,46 @@ public sealed record DocumentOutcome(
     int      HeadingsTotal,
     int      HeadingsLocated,
 
-    // The routing decision (ChunkingStrategySelector), recorded so "why did this document
-    // take this route" is answerable from the report alone. Null on rows written before
-    // selection ran (identity_skipped, not_reached).
+    // The routing decision, recorded so "why did this document take this route" is answerable
+    // from the report alone. Null on rows written before a route was picked (not_reached).
     string?  SizeClass = null,
-    string?  Strategy  = null);
+    string?  Strategy  = null,
+
+    // ── What the cut looks like, per document ───────────────────────────────
+    // All read off this document's own chunks after step 4 stamped them, so they cost one pass
+    // over a list already in memory. Zero on a document that produced nothing, which reads
+    // correctly next to ChunkCount 0 - none of these is a "not measured" value.
+
+    int      SectionCount       = 0,
+    // Percentiles of the REAL tokenizer count over the embedded text, prefix included - the
+    // same number the 512 ceiling is enforced against, not the prose-derived estimate.
+    int      TokenP50           = 0,
+    int      TokenP99           = 0,
+    // Above SectionSplitter.DefaultTokenCeiling. Non-zero is not automatically a defect:
+    // DegradedChunks says how many of them were breached deliberately, because the alternative
+    // was splitting a table row or separating a value from its label.
+    int      ChunksAboveCeiling = 0,
+    int      ShortChunks        = 0,
+    int      DegradedChunks     = 0,
+
+    // ── The routing signals, reported rather than routed on ─────────────────
+
+    // Headings the document declared, whatever the route did with them. On a Recursive row this
+    // is how many headings the route DISCARDED - which is what E6's Content Understanding work
+    // is expected to recover.
+    int      HeadingCount       = 0,
+    // Table-dominant. Kept as a reported signal after TableChecker stopped influencing routing:
+    // atomicity is the splitter's job, not a route.
+    bool     IsTableShaped      = false,
+    // On the recursive route the title is the ONLY prefix, so an empty title means chunks whose
+    // embedded text is bare body with zero identity in the vector. Identity resolution only
+    // drops documents with NEITHER title nor headings, so this case survives selection silently.
+    bool     EmptyTitle         = false);
+
+// Still without a producer, and deliberately absent rather than added as nullable fields that
+// would read as "measured zero": BoundaryLevel counts, CeilingClampEngaged, RealisedOverlap, the
+// offset-tie count, and short-chunk-by-cause. All five are produced inside the splitter and
+// arrive with that pass.
 
 // What DocumentIdentityResolver did, beyond the per-document rows: the shape of the
 // comparison set it worked against, what it excluded and why, and the calibration evidence
@@ -147,4 +185,11 @@ public sealed record HeadingLocationSummary(
     int    HeadingsLocated,
     double UnlocatedRate,
     bool   ExceedsEscalationThreshold,
-    int    PairedZeroBodyHeadingsMerged);
+    int    PairedZeroBodyHeadingsMerged,
+
+    // Headings that arrived with no DI offset and were ordered by arrival position instead
+    // (HeadingLocator.OrderByOffset). Distinct from the unlocated rate above: that one counts
+    // headings whose text could not be found in the cleaned content, this one counts headings
+    // extraction could not place in the RAW content either. Measured at 0 of 1,273 across the
+    // big four, so anything other than zero is a regression upstream, not a chunking result.
+    int    HeadingsWithoutOffset = 0);

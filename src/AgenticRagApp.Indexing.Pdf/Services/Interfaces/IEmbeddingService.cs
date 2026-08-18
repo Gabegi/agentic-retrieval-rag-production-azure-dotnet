@@ -4,11 +4,11 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 
 public interface IEmbeddingService
 {
-    Task<EmbeddingRunResult> EmbedDocumentsAsync(IEnumerable<DocumentChunk> documents, CancellationToken ct = default);
+    Task<EmbeddingRunResult> EmbedDocumentsAsync(IEnumerable<ChunkObject> documents, CancellationToken ct = default);
 }
 
 public record EmbeddingRunResult(
-    IEnumerable<DocumentChunk> Documents,
+    IEnumerable<ChunkObject> Documents,
     int ChunksTruncated,
     int EmbeddingRetries,
     int VectorDimErrors,

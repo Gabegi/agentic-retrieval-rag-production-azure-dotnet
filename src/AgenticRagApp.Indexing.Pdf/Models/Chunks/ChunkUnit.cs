@@ -1,7 +1,7 @@
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
 // One unit produced by a document chunking strategy, before ChunkingService turns it into a
-// DocumentChunk (adds ids, document metadata, page attribution, the embedded prefix).
+// ChunkObject (adds ids, document metadata, page attribution, the embedded prefix).
 //
 // Replaces the flat TextChunk the old IChunkingStrategy returned. A flat list could not
 // express two grains at all: it had an Index and a Content and nothing to say which section a

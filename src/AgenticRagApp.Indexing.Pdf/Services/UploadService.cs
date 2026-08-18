@@ -30,7 +30,7 @@ public class UploadService : IUploadService
     }
 
     public async Task<UploadResult> UploadDocumentsAsync(
-        IEnumerable<DocumentChunk> documents, IReadOnlyList<string> staleDocumentIds, CancellationToken ct = default)
+        IEnumerable<ChunkObject> documents, IReadOnlyList<string> staleDocumentIds, CancellationToken ct = default)
     {
         var docList = documents.ToList();
 

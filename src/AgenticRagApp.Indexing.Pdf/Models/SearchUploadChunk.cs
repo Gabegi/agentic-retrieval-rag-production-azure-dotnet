@@ -2,17 +2,20 @@ using System.Text.Json.Serialization;
 
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
-// Deliberately takes DocumentChunk directly, unlike SnapshotChunk.From<T>, which is
+// Deliberately takes ChunkObject directly, unlike SnapshotChunk.From<T>, which is
 // generic over ISnapshotSource. The snapshot is doc-type-agnostic by design (Observability
 // must not reference a pipeline's chunk type), whereas this projection mirrors
 // IndexService.BuildIndexDefinition field for field and is only meaningful for PDF chunks.
 //
-// The exact subset of DocumentChunk that Azure AI Search's schema actually knows about -
+// The exact subset of ChunkObject that Azure AI Search's schema actually knows about -
 // built right before the upload call (IndexDocumentService.UpsertDocumentsAsync), never
-// persisted or passed between Durable activities itself. DocumentChunk carries everything
+// persisted or passed between Durable activities itself. ChunkObject carries everything
 // extraction produced (needed for the ChunkActivity -> EmbedAndUploadActivity blob
 // hand-off and the Stage 2 archive) - uploading it directly would send fields Search has
 // no schema for and rejects. Field set mirrors IndexService.BuildIndexDefinition exactly.
+//
+// Note the shape difference: ChunkObject splits the cut from the metadata, so half of these
+// come off the chunk and half off chunk.Metadata. That is the projection's job.
 //
 // The CSV-era fields (summary, department, quick_code, relative_path, check_date, version)
 // are gone: the CSV pipeline is not wired into the FunctionApp at all - no trigger, no DI
@@ -50,6 +53,18 @@ public record SearchUploadChunk(
     [property: JsonPropertyName("char_count")] int CharCount,
     [property: JsonPropertyName("token_count")] int TokenCount,
 
+    // Cleaned-text coordinates of this cut. Off the chunk itself, not the metadata - the
+    // strategy set them when it decided where to cut.
+    [property: JsonPropertyName("chunk_start")] int ChunkStart,
+    [property: JsonPropertyName("chunk_length")] int ChunkLength,
+
+    [property: JsonPropertyName("route_name")] string? RouteName,
+    [property: JsonPropertyName("size_class")] string? SizeClass,
+
+    [property: JsonPropertyName("valid_from")] DateTimeOffset? ValidFrom,
+    [property: JsonPropertyName("valid_to")] DateTimeOffset? ValidTo,
+    [property: JsonPropertyName("version")] string? Version,
+
     [property: JsonPropertyName("family_id")] string? FamilyId,
     [property: JsonPropertyName("domain_tag")] string? DomainTag,
     [property: JsonPropertyName("confusable_with")] IReadOnlyList<string> ConfusableWith,
@@ -65,42 +80,49 @@ public record SearchUploadChunk(
     [property: JsonPropertyName("heading_located")] bool HeadingLocated,
     [property: JsonPropertyName("page_extraction_flag")] bool PageExtractionFlag)
 {
-    public static SearchUploadChunk From(DocumentChunk doc) => new(
-        Id:                 doc.Id,
-        DocumentId:         doc.DocumentId,
-        SectionId:          doc.SectionId,
-        SectionIndex:       doc.SectionIndex,
-        ChildIndex:         doc.ChildIndex,
-        Grain:              doc.Grain,
-        Title:              doc.Title,
-        Content:            doc.Content,
-        ParentText:         doc.ParentText,
-        HeadingText:        doc.HeadingText,
-        HeadingPath:        doc.HeadingPath,
-        HeadingDepth:       doc.HeadingDepth,
-        HeadingSource:      doc.HeadingSource,
-        LastModifiedDate:   doc.LastModifiedDate,
-        CreatedAt:          doc.CreatedAt,
-        ModDate:            doc.ModDate,
-        PageCount:          doc.PageCount,
-        ZenyaDocumentId:    doc.ZenyaDocumentId,
-        ZenyaVersion:       doc.ZenyaVersion,
-        ZenyaStatus:        doc.ZenyaStatus,
-        ZenyaUrl:           doc.ZenyaUrl,
-        PageStart:          doc.PageStart,
-        PageEnd:            doc.PageEnd,
-        CharCount:          doc.CharCount,
-        TokenCount:         doc.TokenCount,
-        FamilyId:           doc.FamilyId,
-        DomainTag:          doc.DomainTag,
-        ConfusableWith:     doc.ConfusableWith,
-        Population:         doc.Population,
-        Language:           doc.Language,
-        ContentVector:      doc.ContentVector,
-        TableCount:         doc.TableCount,
-        HasTable:           doc.HasTable,
-        FigureCaptions:     doc.FigureCaptions,
-        IsOverlap:          doc.IsOverlap,
-        HeadingLocated:     doc.HeadingLocated,
-        PageExtractionFlag: doc.PageExtractionFlag);
+    public static SearchUploadChunk From(ChunkObject chunk) => new(
+        Id:                 chunk.Metadata.Id,
+        DocumentId:         chunk.Metadata.DocumentId,
+        SectionId:          chunk.Metadata.SectionId,
+        SectionIndex:       chunk.SectionIndex,
+        ChildIndex:         chunk.ChildIndex,
+        Grain:              chunk.Metadata.Grain,
+        Title:              chunk.Metadata.Title,
+        Content:            chunk.Content,
+        ParentText:         chunk.ParentText,
+        HeadingText:        chunk.HeadingText,
+        HeadingPath:        chunk.HeadingPath,
+        HeadingDepth:       chunk.HeadingDepth,
+        HeadingSource:      chunk.HeadingSource,
+        LastModifiedDate:   chunk.Metadata.LastModifiedDate,
+        CreatedAt:          chunk.Metadata.CreatedAt,
+        ModDate:            chunk.Metadata.ModDate,
+        PageCount:          chunk.Metadata.PageCount,
+        ZenyaDocumentId:    chunk.Metadata.ZenyaDocumentId,
+        ZenyaVersion:       chunk.Metadata.ZenyaVersion,
+        ZenyaStatus:        chunk.Metadata.ZenyaStatus,
+        ZenyaUrl:           chunk.Metadata.ZenyaUrl,
+        PageStart:          chunk.Metadata.PageStart,
+        PageEnd:            chunk.Metadata.PageEnd,
+        CharCount:          chunk.CharCount,
+        TokenCount:         chunk.Metadata.TokenCount,
+        ChunkStart:         chunk.Start,
+        ChunkLength:        chunk.Length,
+        RouteName:          chunk.Metadata.Route,
+        SizeClass:          chunk.Metadata.SizeClass,
+        ValidFrom:          chunk.Metadata.ValidFrom,
+        ValidTo:            chunk.Metadata.ValidTo,
+        Version:            chunk.Metadata.Version,
+        FamilyId:           chunk.Metadata.FamilyId,
+        DomainTag:          chunk.Metadata.DomainTag,
+        ConfusableWith:     chunk.Metadata.ConfusableWith,
+        Population:         chunk.Metadata.Population,
+        Language:           chunk.Metadata.Language,
+        ContentVector:      chunk.ContentVector,
+        TableCount:         chunk.TableCount,
+        HasTable:           chunk.HasTable,
+        FigureCaptions:     chunk.FigureCaptions,
+        IsOverlap:          chunk.IsOverlap,
+        HeadingLocated:     chunk.HeadingLocated,
+        PageExtractionFlag: chunk.Metadata.PageExtractionFlag);
 }

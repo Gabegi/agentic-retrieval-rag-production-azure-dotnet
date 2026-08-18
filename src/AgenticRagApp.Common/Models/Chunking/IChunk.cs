@@ -5,7 +5,7 @@ namespace AgenticRagApp.Common.Models;
 // DocumentId/Content/Heading separately, so the fact that they describe the same chunk
 // was visible only in their (near-identical) comments and not in the type system.
 //
-// Observability depends on these interfaces rather than on DocumentChunk, so it never
+// Observability depends on these interfaces rather than on ChunkObject, so it never
 // references a pipeline's own chunk type.
 //
 // Naming follows action-plan.md §4.6: *_id names a thing, *_index names a position within

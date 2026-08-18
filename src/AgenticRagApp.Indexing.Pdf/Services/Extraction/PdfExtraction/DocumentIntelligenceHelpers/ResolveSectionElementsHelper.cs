@@ -64,7 +64,7 @@ internal static partial class ResolveSectionElementsHelper
 
     // Text is a scannable label for what a pointer points at, not a second copy of the
     // document. SectionInfo is carried onto every chunk (ChunkingService) and serialized
-    // into the chunks.json hand-off and the Stage 2 archive (see DocumentChunk's note on
+    // into the chunks.json hand-off and the Stage 2 archive (see ChunkObject's note on
     // why these fields are deliberately not [JsonIgnore]'d), so an untruncated paragraph
     // here would repeat the document's entire prose once per chunk in every one of those
     // payloads. A consumer that needs the real paragraph follows Kind + Index.

@@ -30,17 +30,16 @@ public static class ServiceCollectionExtensions
         // Axis 2 - the leaf splitter, chosen per block inside a section.
         services.AddSingleton<ITextSplitter, SectionSplitter>();
 
-        // Axis 1 - routing. ChunkingStrategySelector decides each document's route (the five
-        // selection steps in Services/Chunking/Selection); ChunkingService dispatches the
-        // decision onto one strategy per route (Services/Chunking/Strategies). All four
-        // delegate to the shared section cascade today - each class documents its future
-        // divergence.
-        services.AddSingleton<SectionCascadeStrategy>();
-        services.AddSingleton<HeadingBasedStrategy>();
-        services.AddSingleton<TableAwareStrategy>();
-        services.AddSingleton<SingleSectionStrategy>();
-        services.AddSingleton<FallbackStrategy>();
-        services.AddSingleton<ChunkingStrategySelector>();
+        // Axis 1 - routing. HeadingSectionGate decides each document's route from its declared
+        // structure (a static read, nothing to register); ChunkingService dispatches that route
+        // onto one of two real strategies in Services/Chunking/ChunkingStrategies.
+        services.AddSingleton<DeclaredBoundaryStrategy>();
+        services.AddSingleton<RecursiveStrategy>();
+
+        // Step 4 - what a cut becomes once it is cut. Stateless, like everything else here: it
+        // reads a document and writes onto the chunks it is handed, and keeps nothing between
+        // calls.
+        services.AddSingleton<ChunkMetadataBuilder>();
 
         services.AddSingleton<IChunkingService, ChunkingService>();
 

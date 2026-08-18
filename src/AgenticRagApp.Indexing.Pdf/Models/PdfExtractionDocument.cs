@@ -1,4 +1,5 @@
 using AgenticRagApp.Common.Models;
+using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace AgenticRagApp.Indexing.Pdf.Models;
 
@@ -97,4 +98,29 @@ public sealed record PdfExtractionDocument(
     // "nl"/"en" from DI's own AnalyzeResult.Languages. The corpus is Dutch plus one
     // 36-page English document whose chars/token ratio is ~4 rather than ~3.2, which makes
     // every character-derived ceiling wrong for it - including its own routing input.
-    string? Language);
+    string? Language,
+
+    // ── Resolved at chunking time, not at extraction ────────────────────────
+
+    // FamilyId, DomainTag and ConfusableWith, from DocumentIdentityResolver (chunking step 1).
+    // Extraction never sets this - it is null on the extraction artifact and attached with
+    // `doc with { Family = ... }` once identity resolution has run.
+    //
+    // It rides on the document rather than being threaded as a parameter because two different
+    // steps need it and neither should have to be handed it separately: the strategy prices
+    // DomainTag INTO the embedded prefix ("title [tag]") before the cut, and step 4 stamps all
+    // three onto every chunk of the document.
+    DocumentFamily? Family = null,
+
+    // The document's heading sections, anchored in CLEANED coordinates by HeadingLocator and
+    // attached the same way Family is - `doc with { LocatedSections = ... }` - before the
+    // strategy runs.
+    //
+    // Located in ChunkingService rather than inside the strategy so the run report can see the
+    // three heading counters even for a document that goes on to produce no chunks at all. That
+    // is the case the >2% escalation threshold exists to catch, and a strategy that returns only
+    // chunks cannot report it.
+    //
+    // Null on the recursive route, which never anchors. Null means NOT ATTEMPTED, never "every
+    // heading failed to locate" - the same distinction the zero counters carry.
+    IReadOnlyList<LocatedSection>? LocatedSections = null);

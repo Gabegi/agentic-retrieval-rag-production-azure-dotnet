@@ -42,7 +42,7 @@ public class RestoreService : IRestoreService
                 _config.SearchIndexName, _config.OpenAiEmbeddingModelName, _config.OpenAiEmbeddingDeployment);
         }
 
-        var chunks        = new List<DocumentChunk>(snapshotChunks.Count);
+        var chunks        = new List<ChunkObject>(snapshotChunks.Count);
         var missingVector = 0;
 
         foreach (var s in snapshotChunks)
@@ -50,22 +50,74 @@ public class RestoreService : IRestoreService
             var vector = await _vectorCache.TryGetAsync(s.ContentHash, ct);
             if (vector is null) missingVector++;
 
-            // Zenya fields are deliberately not carried here - the snapshot doesn't record
-            // them (ISnapshotSource predates them), so a restored chunk goes back in without
-            // Zenya traceability until the next incremental run re-touches its document and
-            // re-populates them from blob metadata.
-            chunks.Add(new DocumentChunk
+            // Every field the index holds is restored, because the snapshot now records every
+            // field the index holds. The vector is the sole exception, and it is resolved from
+            // the cache by ContentHash above rather than re-embedded.
+            //
+            // HeadingSource and HeadingLocated are restored as a PAIR. Letting either fall back
+            // to a type default would make a restored row's heading provenance an artefact of
+            // which type wrote it rather than a fact about the chunk.
+            chunks.Add(new ChunkObject
             {
-                Id               = s.Id,
-                DocumentId       = s.DocumentId,
-                Title            = s.Title,
-                LastModifiedDate = s.LastModifiedDate,
-                Content          = s.Content,
-                HeadingText      = s.HeadingText,
-                PageStart        = s.PageStart,
-                PageEnd          = s.PageStart,
-                ChildIndex       = s.ChildIndex,
-                ContentVector    = vector,
+                Content        = s.Content,
+                HeadingText    = s.HeadingText,
+                HeadingPath    = s.HeadingPath,
+                HeadingDepth   = s.HeadingDepth,
+                HeadingSource  = s.HeadingSource ?? ChunkHeadingSource.None,
+                HeadingLocated = s.HeadingLocated,
+                SectionIndex   = s.SectionIndex,
+                ChildIndex     = s.ChildIndex,
+                ParentText     = s.ParentText,
+                IsOverlap      = s.IsOverlap,
+                ContentVector  = vector,
+
+                // Ids, document facts and page attribution are stamped metadata, so they go on
+                // the metadata even on this path - the chunk's own accessors read through to it.
+                Metadata = new ChunkMetadata
+                {
+                    Id                 = s.Id,
+                    DocumentId         = s.DocumentId,
+                    SectionId          = s.SectionId,
+                    Grain              = s.Grain,
+
+                    Title              = s.Title,
+                    Language           = s.Language,
+                    Population         = s.Population,
+
+                    // Restored, never recomputed. Prefix is what ContentHash is derived from,
+                    // so rebuilding it here from title and heading path would risk a hash that
+                    // disagrees with the one the vector was just resolved by; validity is parsed
+                    // from a title this side no longer re-parses.
+                    Prefix             = s.Prefix,
+                    ValidFrom          = s.ValidFrom,
+                    ValidTo            = s.ValidTo,
+                    Version            = s.Version,
+
+                    FamilyId           = s.FamilyId,
+                    DomainTag          = s.DomainTag,
+                    ConfusableWith     = s.ConfusableWith,
+
+                    LastModifiedDate   = s.LastModifiedDate,
+                    CreatedAt          = s.CreatedAt,
+                    ModDate            = s.ModDate,
+                    PageCount          = s.PageCount,
+
+                    ZenyaDocumentId    = s.ZenyaDocumentId,
+                    ZenyaVersion       = s.ZenyaVersion,
+                    ZenyaStatus        = s.ZenyaStatus,
+                    ZenyaUrl           = s.ZenyaUrl,
+
+                    PageStart          = s.PageStart,
+                    PageEnd            = s.PageEnd,
+                    PageExtractionFlag = s.PageExtractionFlag,
+                    TokenCount         = s.TokenCount,
+
+                    // Structure itself is not snapshotted, so these two are restored as the
+                    // stamped values they are. has_table needs no restoring - it recomputes off
+                    // Content, which came back above.
+                    TableCount         = s.TableCount,
+                    FigureCaptions     = s.FigureCaptions,
+                },
             });
         }
 

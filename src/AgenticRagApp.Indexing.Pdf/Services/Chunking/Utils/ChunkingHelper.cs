@@ -203,6 +203,43 @@ public static class ChunkingHelper
             yield return sb.ToString().Trim();
     }
 
+    // Does this text contain a markdown table? The predicate behind the index's has_table.
+    //
+    // Answers a question about the TEXT, deliberately - "does this passage contain a table" -
+    // rather than the page-scoped question extraction's structural Tables list answers ("does a
+    // table exist somewhere on the pages this chunk covers"). Those are different claims, and
+    // the page-scoped one is true of a prose chunk that merely shares a page with a table.
+    //
+    // Same 2-consecutive-rows rule as SplitIntoBlocks, and for the same reason: one line
+    // containing a pipe is prose with a pipe in it. Kept beside TableRowLine so there is one
+    // definition of "markdown table row" rather than two that drift apart.
+    //
+    // A direct scan rather than SplitIntoBlocks(...).Any(b => b.IsTable): this runs per chunk on
+    // every projection, and the block splitter allocates two lists plus every line to answer a
+    // question that needs no allocation at all.
+    public static bool ContainsTable(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return false;
+
+        var consecutive = 0;
+
+        foreach (var line in content.Split('\n'))
+        {
+            if (!TableRowLine.IsMatch(line))
+            {
+                consecutive = 0;
+                continue;
+            }
+
+            if (++consecutive >= MinTableRows) return true;
+        }
+
+        return false;
+    }
+
+    // Header plus one more row - a separator or a data row. Below this it is not a table.
+    private const int MinTableRows = 2;
+
     // Splits content into alternating table/prose runs. A block only counts as a table if
     // it's at least 2 consecutive lines matching the markdown table-row shape - a lone line
     // that happens to contain "|" is left as ordinary prose, not treated as a table.

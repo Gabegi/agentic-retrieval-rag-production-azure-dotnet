@@ -232,7 +232,7 @@ public class PdfIndexingFunction
         }
     }
 
-    // Step 2 — read ExtractionDocuments, chunk, serialise DocumentChunks to blob; return stats
+    // Step 2 — read ExtractionDocuments, chunk, serialise ChunkObjects to blob; return stats
     [Function("ChunkActivity")]
     public async Task<ChunkingStageMetrics> ChunkActivity([ActivityTrigger] PdfChunkRequest req, FunctionContext context)
     {
@@ -262,13 +262,13 @@ public class PdfIndexingFunction
         }
     }
 
-    // Step 3 — read DocumentChunks, embed then upload to Azure AI Search; return combined stats
+    // Step 3 — read ChunkObjects, embed then upload to Azure AI Search; return combined stats
     [Function("EmbedAndUploadActivity")]
     public async Task<EmbedUploadStageMetrics> EmbedAndUploadActivity([ActivityTrigger] PdfEmbedUploadRequest req, FunctionContext context)
     {
         try
         {
-            var chunks         = await ReadBlobAsync<List<DocumentChunk>>(req.ChunksBlob, context.CancellationToken);
+            var chunks         = await ReadBlobAsync<List<ChunkObject>>(req.ChunksBlob, context.CancellationToken);
             var staleDocumentIds = await ReadBlobAsync<List<string>>(req.StaleIdsBlob, context.CancellationToken);
             LogProcessMemory("chunks loaded", chunks.Count);
 
