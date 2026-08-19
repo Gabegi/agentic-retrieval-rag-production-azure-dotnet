@@ -26,6 +26,14 @@ public sealed class ChunkingReporter
     // and assumed to hold.
     private const double HeadingEscalationThreshold = 0.02;
 
+    // The per-document half of the same rule, fixed in advance alongside it. Looser than the
+    // corpus figure on purpose: one document is a small sample, so a single unlocated heading in
+    // twenty is noise where the same rate across 1,273 is a broken approach. A corpus that
+    // locates 1,270 of 1,273 passes the >2% test comfortably while one small document sits at
+    // 100% unlocated - which is exactly the document whose chunks are all preamble, and exactly
+    // what a run total cannot show.
+    private const double PerDocumentHeadingEscalationThreshold = 0.05;
+
     // The pre-existing artifact's name, kept so the blob a reader already knows how to find is
     // the one that now carries the whole stage rather than just the chunk list.
     private const string ChunkingReportName = "chunking-artifact";
@@ -71,6 +79,17 @@ public sealed class ChunkingReporter
                     Identity:        state.Identity,
                     HeadingLocation: headingSummary,
                     Stats:           state.Stats,
+                    // Uncapped by design - the writer streams, so this never buffers whole. What
+                    // is NOT yet known is what it now weighs: every ChunkObject carries
+                    // Metadata.Structure since step 4, where the flat type it replaced carried
+                    // far less, and 3,046 chunks is the count that makes that matter.
+                    //
+                    // MEASURE THIS ON THE FIRST REAL RUN: the size of the chunking-artifact blob.
+                    // If it is uncomfortable, the cheapest cut is to project Structure out of the
+                    // chunks written HERE only - it is stamped per chunk, excluded from the
+                    // snapshot already, and recomputable - rather than capping the list, which
+                    // would remove the corpus-wide view the artifact exists to give.
+                    // chunking-done.md §12 found-3, §17 item 9.
                     Chunks:          state.Chunks),
                 ct);
         }
@@ -142,10 +161,24 @@ public sealed class ChunkingReporter
                     "by arrival position instead",
                     facts.HeadingsWithoutOffset, facts.HeadingsTotal, facts.SourceId);
 
+            // The other half of the escalation rule: >2% corpus-wide OR >5% on any single
+            // document. Only the corpus-wide branch ever had code.
+            if (facts.HeadingsTotal > 0)
+            {
+                var rate = 1 - (facts.HeadingsLocated / (double)facts.HeadingsTotal);
+
+                if (rate > PerDocumentHeadingEscalationThreshold)
+                    _logger.LogWarning(
+                        "Heading location in {SourceId}: {Found}/{Total} ({Rate:P2} unlocated), over the " +
+                        ">{Threshold:P0} per-document escalation threshold",
+                        facts.SourceId, facts.HeadingsLocated, facts.HeadingsTotal, rate,
+                        PerDocumentHeadingEscalationThreshold);
+            }
+
             if (facts.ResidueDropped > 0)
                 _logger.LogInformation(
-                    "Minimum-content rule dropped {Dropped} cut(s) as vector residue in {SourceId}",
-                    facts.ResidueDropped, facts.SourceId);
+                    "Minimum-content rule dropped {Dropped} of {Total} cut(s) as vector residue in {SourceId}",
+                    facts.ResidueDropped, facts.CutCount, facts.SourceId);
 
             // The stage fails on this too, once, at the end - but the exception it throws names
             // the documents and not the failures, so the failures are logged whole here.
@@ -160,8 +193,8 @@ public sealed class ChunkingReporter
     // whichever way each document went, so logging it said nothing once there were two routes.
     private void LogRun(ChunkingRunState state)
     {
-        var declared  = state.DocumentFacts.Count(f => f.Route == "DeclaredBoundary");
-        var recursive = state.DocumentFacts.Count(f => f.Route == "Recursive");
+        var declared  = state.DocumentFacts.Count(f => f.Route == RouteNames.DeclaredBoundary);
+        var recursive = state.DocumentFacts.Count(f => f.Route == RouteNames.Recursive);
 
         _logger.LogInformation(
             "Chunked {Docs} docs into {Chunks} chunks ({Declared} declared-boundary, {Recursive} recursive)",

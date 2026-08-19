@@ -15,5 +15,5 @@ namespace AgenticRagApp.Functions;
 // only the blob name travels through Durable Table Storage, avoiding the 64KB row-size limit.
 public record PdfIndexRequest(bool ForceReindex);
 public record PdfExtractRequest(bool ForceReindex, string OutputBlob, string StaleIdsBlob, string InstanceId, DateTimeOffset StartedAt);
-public record PdfChunkRequest(string InputBlob, string OutputBlob, string InstanceId, DateTimeOffset StartedAt);
-public record PdfEmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string InstanceId, DateTimeOffset StartedAt);
+public record PdfChunkRequest(string InputBlob, string OutputBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
+public record PdfEmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);

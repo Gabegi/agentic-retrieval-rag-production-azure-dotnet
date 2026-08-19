@@ -60,6 +60,7 @@ public class PdfIndexRunReportTests
         DocsUploaded:                  20,
         DocsFailed:                    1,
         ChunksRemoved:                 5,
+        ChunkFamiliesPatched:          0,
         ChunksTruncated:               2,
         EmbeddingRetries:              3,
         VectorDimErrors:               0,

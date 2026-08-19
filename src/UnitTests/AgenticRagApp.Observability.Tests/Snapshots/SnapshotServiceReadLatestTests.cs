@@ -42,7 +42,7 @@ public class SnapshotServiceReadLatestTests
 
         var expectedChunks = new List<SnapshotChunk>
         {
-            new("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash1"),
+            TestChunk.Snapshot("id1", "doc1.pdf", "Title", "content", "hash1"),
         };
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
                 It.IsAny<BlobContainerClient>(), "2024/06/01/ts-snapshot-pdf-instance-new.json", It.IsAny<CancellationToken>()))

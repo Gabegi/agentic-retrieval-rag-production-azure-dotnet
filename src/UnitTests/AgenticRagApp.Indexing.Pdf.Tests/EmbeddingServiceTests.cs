@@ -4,6 +4,7 @@ using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf.Models;
 using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Indexing.Pdf.Utils;
 
 namespace RagApp.UnitTests.Indexing;
 
@@ -25,10 +26,11 @@ public class EmbeddingServiceTests
         OpenAiEmbeddingDimensions = dims,
     };
 
-    private static DocumentChunk Document(string id, string content) => new()
+    // Id lives on the metadata now - ChunkObject.Id is a read-only pass-through onto it.
+    private static ChunkObject Document(string id, string content) => new()
     {
-        Id      = id,
-        Content = content,
+        Content  = content,
+        Metadata = new ChunkMetadata { Id = id },
     };
 
     private static float[][] Vectors(int count, int dims = 4) =>
@@ -107,6 +109,55 @@ public class EmbeddingServiceTests
         Assert.AreEqual(1, result.ChunksTruncated);
         Assert.IsNotNull(capturedTexts);
         Assert.AreEqual(24_000, capturedTexts![0].Length);
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_UnderTheCharacterLimitButOverTheTokenLimit_IsStillTruncated()
+    {
+        // The case the character guard alone lets through. The model's limit is in TOKENS, and
+        // chars-per-token is not constant: prose runs ~3.1-3.3, table markdown ~1.9-2.8. Dense
+        // text can therefore sit under 24,000 characters and still exceed 8,191 tokens, where it
+        // would have been truncated by the API rather than by us - silently, and reported as
+        // untruncated.
+        var dense = string.Concat(Enumerable.Repeat("| ", 10_000));   // 20,000 chars, ~2 chars/token
+        Assert.IsTrue(dense.Length < 24_000, "the fixture has to pass the character guard to be meaningful");
+
+        IReadOnlyList<string>? capturedTexts = null;
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
+            {
+                capturedTexts = texts;
+                return (Vectors(texts.Count), 0);
+            });
+        var service = BuildService(embeddingClient);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", dense)]);
+
+        Assert.AreEqual(1, result.ChunksTruncated);
+        Assert.IsNotNull(capturedTexts);
+        Assert.IsTrue(capturedTexts![0].Length < dense.Length, "it should have been cut");
+        Assert.IsTrue(TokenCounter.Count(capturedTexts[0]) <= 8_191,
+            "and cut far enough that what leaves for the API is within the model's input limit");
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_OneChunkTruncated_IsCountedOnce_NotOncePerGuard()
+    {
+        // A chunk long enough to trip the character cut and still dense enough to trip the token
+        // cut afterwards must count as one truncation, not two.
+        var dense = string.Concat(Enumerable.Repeat("| ", 20_000));   // 40,000 chars
+
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0));
+        var service = BuildService(embeddingClient);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", dense)]);
+
+        Assert.AreEqual(1, result.ChunksTruncated);
     }
 
     [TestMethod]

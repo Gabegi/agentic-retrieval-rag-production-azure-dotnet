@@ -39,7 +39,11 @@ internal static class DocumentProfileHelper
         long fileSizeBytes,
         IReadOnlyList<Heading>? headings = null,
         IReadOnlyList<Heading>? boilerplate = null,
-        IReadOnlyList<SelectionMarkInfo>? selectionMarks = null)
+        IReadOnlyList<SelectionMarkInfo>? selectionMarks = null,
+        // Length of DI's own raw Content. Every Heading.Offset addresses THAT string, so it is the
+        // only end bracket B5 can be measured against - see MaxGap. Optional so a caller with no
+        // raw content in hand gets an under-report rather than a mixed-coordinate number.
+        int? rawContentLength = null)
     {
         headings       ??= [];
         boilerplate    ??= [];
@@ -95,7 +99,7 @@ internal static class DocumentProfileHelper
             ? 0
             : headings.Count(h => GetHeadingsHelper.NumberedHeadingPrefix().IsMatch(h.Content.Trim())) / (double)headings.Count;
 
-        var maxSectionSizeChars = MaxGap(headings, totalChars);
+        var maxSectionSizeChars = MaxGap(headings, totalChars, rawContentLength);
 
         // A2 - boilerplate paragraphs carry their own text (pageHeader/footer content
         // etc.), so their share of TotalChars is a direct furniture-vs-content ratio, not
@@ -121,17 +125,43 @@ internal static class DocumentProfileHelper
     }
 
     // Widest span any single section boundary would have to cover: document start (0) and
-    // end (totalChars) act as implicit heading positions bracketing the real ones, so a
-    // document with zero headings correctly reports totalChars (one section, the whole
-    // document), not 0 - and the tail after the last real heading is covered the same way
-    // as every gap between two real headings, not treated as a special case.
-    private static int MaxGap(IReadOnlyList<Heading> headings, int totalChars)
+    // document end act as implicit heading positions bracketing the real ones, so a
+    // document with zero headings correctly reports the whole document as one section, not 0 -
+    // and the tail after the last real heading is covered the same way as every gap between two
+    // real headings, not treated as a special case.
+    //
+    // Measured in RAW coordinates throughout, which is the fix for what this used to do. Every
+    // Heading.Offset addresses Document Intelligence's raw content, but the end bracket passed
+    // in was totalChars - the sum of the CLEANED page lengths. Cleaning shortens the text by a
+    // measured 1.066-1.202x (the same ratio HeadingLocator cites as the reason a raw offset can
+    // never slice cleaned text), so on any document of size the cleaned length sorts into the
+    // MIDDLE of the raw heading offsets rather than after them. The sequence stopped being
+    // monotonic, the "gap" straddling that point was measured against a boundary that is not the
+    // document end, and every heading past it was silently bracketed on the wrong side.
+    //
+    // rawLength null means the caller had no raw content to measure - the largest heading offset
+    // is then the last bracket, so the tail after the final heading goes UNMEASURED rather than
+    // measured wrongly. B5 is a reported diagnostic with no consumer that routes on it, so an
+    // under-report is the safe direction; a mixed-coordinate number is not.
+    private static int MaxGap(IReadOnlyList<Heading> headings, int totalChars, int? rawLength)
     {
-        var offsets = headings
+        var real = headings
             .Where(h => h.Offset.HasValue)
             .Select(h => h.Offset!.Value)
+            .ToList();
+
+        // No heading offsets at all - so there are no raw coordinates in play and nothing to
+        // mix. The whole document is one section, and its cleaned length answers that as well as
+        // its raw one would. This is also the only branch that can report a size for a document
+        // whose headings all arrived without an offset.
+        if (real.Count == 0) return rawLength ?? totalChars;
+
+        var end = rawLength ?? real.Max();
+
+        var offsets = real
             .Append(0)
-            .Append(totalChars)
+            .Append(end)
+            .Where(o => o <= end)
             .Distinct()
             .OrderBy(o => o)
             .ToList();

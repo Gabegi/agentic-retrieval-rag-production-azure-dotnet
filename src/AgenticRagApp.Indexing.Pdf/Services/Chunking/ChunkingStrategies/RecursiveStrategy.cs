@@ -19,13 +19,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // is the only context a chunk gets.
 public sealed class RecursiveStrategy : IDocumentChunkingStrategy
 {
-    // The ceiling governs the EMBEDDED text, prefix included - same budget as route 1.
-    private const int TokenCeiling = 512;
-
-    // The floor the body keeps no matter how expensive the prefix got.
-    private const int MinBodyTokenBudget = 128;
-
-    public string Name => "Recursive";
+    public string Name => RouteNames.Recursive;
 
     public ValueTask<IReadOnlyList<ChunkObject>> ChunkDocumentAsync(
         PdfExtractionDocument doc, CancellationToken ct = default)
@@ -42,11 +36,11 @@ public sealed class RecursiveStrategy : IDocumentChunkingStrategy
 
         // 1c. A prefix that costs more than the body's own floor is not context any more, it is
         //     the chunk. Bail rather than emit chunks that are mostly title.
-        if (prefixTokens > MinBodyTokenBudget)
+        if (prefixTokens > ChunkingBudget.MinBodyTokenBudget)
             return ValueTask.FromResult<IReadOnlyList<ChunkObject>>([]);
 
         // What is left of the budget for the body, once the prefix is paid for.
-        var bodyCeiling = Math.Max(TokenCeiling - prefixTokens, MinBodyTokenBudget);
+        var bodyCeiling = Math.Max(ChunkingBudget.TokenCeiling - prefixTokens, ChunkingBudget.MinBodyTokenBudget);
 
         // 2-7. Cut. The whole document is the window, because this route's "section" IS the
         //      document - that is the guaranteed form of the sparse-giant hazard, and the
@@ -61,6 +55,6 @@ public sealed class RecursiveStrategy : IDocumentChunkingStrategy
         // 8. One ChunkObject per piece: SectionIndex 0, running ChildIndex, heading fields null,
         //    HeadingSource "none", HeadingLocated FALSE. True with source "none" is a
         //    contradiction - it reads as a successful location in any aggregate.
-        return ValueTask.FromResult(FlatChunkBuilder.Build(doc, prefix, pieces));
+        return ValueTask.FromResult(FlatChunkBuilder.Build(pieces));
     }
 }

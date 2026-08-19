@@ -174,6 +174,7 @@ public class PdfPipelineValidator : IPdfPipelineValidator
             InvisibleCharsStripped           = cleanResult.InvisibleCharsStripped,
             LigaturesExpanded                = cleanResult.LigaturesExpanded,
             HyphenationJoinsRepaired         = cleanResult.HyphenationJoinsRepaired,
+            LineWrapsReflowed                = cleanResult.LineWrapsReflowed,
             CleaningSpotCheckSample          = cleaningSample,
             TableConversionFallbacks         = cleanResult.TableConversionFallbacks,
             Passed                           = passed,

@@ -38,7 +38,25 @@ public sealed record ChunkingStageMetrics(
     // question of whether the chunker is splitting mid-sentence far faster than BandUnder100 does.
     ChunkSample?                       SmallestChunk,
     ChunkSample?                       LargestChunk,
-    IReadOnlyList<DuplicateChunkSample> DuplicateSamples)
+    IReadOnlyList<DuplicateChunkSample> DuplicateSamples,
+
+    // Chunks the minimum-content residue rule dropped before they could be embedded or indexed.
+    //
+    // Computed by the caller, not by Compute: residue is dropped between the strategy and the
+    // metadata stage, so by the time the chunk list reaches here the dropped ones are already
+    // gone and their count cannot be recovered from it. Optional for exactly that reason - a
+    // caller with no residue rule (CSV) leaves it at 0 and says nothing false.
+    //
+    // It exists on this type rather than only on the run report because this is the value the
+    // Durable activity returns: without it, the orchestrator cannot see that the corpus shed
+    // anything at all.
+    int ResidueChunksDropped = 0,
+
+    // Chunks the table-of-contents rule dropped. Separate from residue for the reason stated on
+    // ChunkingRunState.Chunked: the two rules answer different questions, and one number cannot
+    // distinguish "this document is shedding junk cuts" from "we caught its front matter".
+    // Same caller-computed, optional-by-default contract as the field above.
+    int TocChunksDropped = 0)
 {
     // Kept small deliberately - see ChunkSample's comment on the Durable row limit.
     private const int MaxSamples        = 5;
@@ -80,9 +98,13 @@ public sealed record ChunkingStageMetrics(
 
         var sizes        = new List<long>(chunks.Count);
         var docsProduced = new HashSet<string>(StringComparer.Ordinal);
-        // Content -> (occurrences, first chunk seen with it). Keyed on content rather than a
+        // StatsText -> (occurrences, first chunk seen with it). Keyed on the text rather than a
         // hash so the excerpt is available without a second pass; the hash is computed once,
         // only for the capped set actually reported.
+        //
+        // StatsText, not Content: for CSV they are the same string, and for PDF the difference is
+        // the prefix, without which two sections with identical bodies under different headings
+        // count as duplicates of each other. See IChunkStatsSource.StatsText.
         var byContent    = new Dictionary<string, (int Count, T First)>(StringComparer.Ordinal);
         int duplicates = 0, coherent = 0, headings = 0;
         int band0 = 0, band1 = 0, band2 = 0, band3 = 0;
@@ -92,7 +114,8 @@ public sealed record ChunkingStageMetrics(
 
         foreach (var chunk in chunks)
         {
-            var len = (long)chunk.Content.Length;
+            var statsText = chunk.StatsText;
+            var len       = (long)statsText.Length;
             sizes.Add(len);
             docsProduced.Add(chunk.DocumentId);
 
@@ -101,14 +124,14 @@ public sealed record ChunkingStageMetrics(
             else if (len < 1500) band2++;
             else                 band3++;
 
-            if (byContent.TryGetValue(chunk.Content, out var existing))
+            if (byContent.TryGetValue(statsText, out var existing))
             {
-                byContent[chunk.Content] = (existing.Count + 1, existing.First);
+                byContent[statsText] = (existing.Count + 1, existing.First);
                 duplicates++;
             }
             else
             {
-                byContent[chunk.Content] = (1, chunk);
+                byContent[statsText] = (1, chunk);
             }
 
             if (chunk.IsCoherent)      coherent++;
@@ -170,8 +193,11 @@ public sealed record ChunkingStageMetrics(
     {
         static int Band(int len) => len < 100 ? 0 : len < 500 ? 1 : len < 1500 ? 2 : 3;
 
+        // StatsText is a COMPUTED property on both pipelines' chunk types - it composes a new
+        // string on every read - so it is read once per chunk here and once per sample below,
+        // never once per field.
         var picked = chunks
-            .GroupBy(c => Band(c.Content.Length))
+            .GroupBy(c => Band(c.StatsText.Length))
             .OrderBy(g => g.Key)
             .Select(g => g.First())
             .Take(MaxSamples)
@@ -186,15 +212,24 @@ public sealed record ChunkingStageMetrics(
         return picked.Select(c => ToSample(c)!).ToList();
     }
 
-    private static ChunkSample? ToSample<T>(T? chunk) where T : IChunkStatsSource =>
-        chunk is null ? null : new ChunkSample(
+    // Excerpts show StatsText for the same reason the bands measure it: a sample whose SizeChars
+    // came from one string and whose text came from another cannot be read against its own band.
+    private static ChunkSample? ToSample<T>(T? chunk) where T : IChunkStatsSource
+    {
+        if (chunk is null) return null;
+
+        // Read once: StatsText composes a string per access.
+        var text = chunk.StatsText;
+
+        return new ChunkSample(
             DocumentId:     chunk.DocumentId,
             PageNumber:     chunk.PageStart,
             ChunkIndex:     chunk.ChildIndex,
             Heading:        chunk.HeadingText,
-            SizeChars:      chunk.Content.Length,
-            ContentExcerpt: Excerpt(chunk.Content),
-            Truncated:      chunk.Content.Length > MaxExcerptChars);
+            SizeChars:      text.Length,
+            ContentExcerpt: Excerpt(text),
+            Truncated:      text.Length > MaxExcerptChars);
+    }
 
     private static string Excerpt(string content) =>
         content.Length <= MaxExcerptChars ? content : content[..MaxExcerptChars] + "…";

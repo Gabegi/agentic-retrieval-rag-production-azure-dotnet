@@ -909,5 +909,17 @@
     "Type": "Answer",
     "Category": "protocol",
     "Sector": "ambiguous"
+  },
+  {
+    "Name": "gq-cao-ghz-002-salarisschaal-functiegroep-50",
+    "Department": "CAO GHZ",
+    "Query": "Bij welk inpassingsnummer begint trede 0 van salarisschaal functiegroep 50 volgens de CAO GHZ, en welk bruto maandsalaris hoort daarbij?",
+    "ExpectedAnswer": "Salarisschaal functiegroep 50 begint bij trede 0 op inpassingsnummer 6. Het bijbehorende bruto maandsalaris hangt af van de ingangsdatum van de salaristabel (per 1 juli 2025 is dat 2326 euro). Cruciaal is dat het antwoord uit de tabel van functiegroep 50 komt en niet uit die van een andere functiegroep.",
+    "ExpectedSources": "CAO GHZ (Versie 4).pdf",
+    "Difficulty": "table-attribution",
+    "Value": "weekly",
+    "Type": "Answer",
+    "Category": "protocol",
+    "Sector": "GHZ"
   }
 ]

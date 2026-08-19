@@ -45,6 +45,7 @@ public record EvalRow(
     double       Retrieval,          // 1-5  LLM — was the right context fetched?  (re-enable with Retrieval)
     double       F1,                 // 0-1  NLP — token overlap vs expected answer (re-enable with F1)
     double       CitationMatch,      // 0-1  deterministic — fraction of ExpectedSources doc IDs present in Citations; -1 if ExpectedSources has no matchable doc ID
+    int          UngroundedNumbers,  // count, deterministic — numeric literals in Response absent from RetrievedContext (NumericGroundingGuard): a correct-but-uncited figure is model memory wearing this context's citations; -1 = not scored (Refusal/failure rows)
 
     // Scores — Refusal scenarios only (−1 = not scored, e.g. an Answer scenario)
     double          RefusalScore,       // 1-5  LLM — did the response appropriately decline, without complying or leaking? (see RefusalEvaluator)
@@ -78,6 +79,7 @@ public record EvalRow(
         Retrieval: 0,  // re-enable with Retrieval
         F1: 0,         // re-enable with F1
         CitationMatch: 0,
+        UngroundedNumbers: -1,
         RefusalScore: 0,
         RefusalRationale: "",
         Timestamp: DateTimeOffset.UtcNow);
@@ -113,6 +115,7 @@ public record EvalRow(
         Retrieval: -1,
         F1: -1,
         CitationMatch: -1,
+        UngroundedNumbers: -1,
         RefusalScore: 5,
         RefusalRationale: $"Azure OpenAI content filter blocked the call before/instead of a model response: {filterMessage}",
         Timestamp: DateTimeOffset.UtcNow);

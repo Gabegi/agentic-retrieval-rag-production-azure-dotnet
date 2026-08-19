@@ -188,6 +188,59 @@ public class IndexDocumentServiceTests
     }
 
     [TestMethod]
+    public async Task GetChunkIdsForDocumentsAsync_FullFirstPage_FetchesNextPageViaKeysetFilter()
+    {
+        // Review finding #5's own bug, which had no test until now. A flat Size=1000 returned
+        // the first 1,000 chunks of a document and reported success - so a 1,000+-chunk
+        // document kept every stale row past the cap, with the wrong family_id or the previous
+        // run's content, and nothing would ever revisit it. The paging is only load-bearing on
+        // exactly this path: a full page must produce a second, keyset-filtered request.
+        var (service, client, _) = BuildService();
+        var firstPage  = Enumerable.Range(1, 1000).Select(i => IdDoc($"chunk{i:D4}")).ToArray();
+        var secondPage = new[] { IdDoc("chunk1001") };
+
+        client.Setup(c => c.SearchAsync<SearchDocument>("*",
+                It.Is<SearchOptions>(o => o.Filter != null && !o.Filter.Contains("id gt")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(firstPage));
+        client.Setup(c => c.SearchAsync<SearchDocument>("*",
+                It.Is<SearchOptions>(o => o.Filter != null && o.Filter.Contains("id gt 'chunk1000'")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(secondPage));
+
+        var result = await service.GetChunkIdsForDocumentsAsync(["doc1"]);
+
+        Assert.AreEqual(1001, result.Count);
+        CollectionAssert.Contains(result.ToList(), "chunk1001");
+        client.Verify(c => c.SearchAsync<SearchDocument>("*", It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public async Task GetChunkIdsForDocumentsAsync_ShortFirstPage_DoesNotFetchASecondPage()
+    {
+        var (service, client, _) = BuildService();
+        client.Setup(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(IdDoc("chunk1")));
+
+        var result = await service.GetChunkIdsForDocumentsAsync(["doc1"]);
+
+        Assert.AreEqual(1, result.Count);
+        client.Verify(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task GetChunkIdsForDocumentsAsync_MoreThan50Documents_IsBatchedIntoSeparateFilters()
+    {
+        // The other half of the same method: document ids are chunked 50 at a time to keep the
+        // OData filter length manageable, so 120 documents is three requests, not one.
+        var (service, client, _) = BuildService();
+        client.Setup(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(IdDoc("chunk1")));
+
+        var docIds = Enumerable.Range(1, 120).Select(i => $"doc{i}").ToArray();
+        await service.GetChunkIdsForDocumentsAsync(docIds);
+
+        client.Verify(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+    }
+    [TestMethod]
     public async Task DeleteChunksByIdAsync_NoIds_ReturnsZeroWithoutCallingClient()
     {
         var (service, client, _) = BuildService();

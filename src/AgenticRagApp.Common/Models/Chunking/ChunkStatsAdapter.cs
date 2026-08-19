@@ -60,9 +60,11 @@ public class ChunkStatsAdapter : IChunkStatsSource
     [JsonIgnore] public bool IsOversized   => TokenEstimate > 1024;
     [JsonIgnore] public bool IsUndersized  => TokenEstimate < 20;
 
-    // Sentence boundary proxies — a coherent chunk starts and ends at natural boundaries
+    // Sentence boundary proxies — a coherent chunk starts and ends at natural boundaries.
+    // '|' counts as a clean end (a complete table row is a natural boundary) — kept in step
+    // with ChunkObject.EndsClean, which documents the measurement behind it.
     [JsonIgnore] public bool StartsClean => Content.Length > 0 && (char.IsUpper(Content[0]) || char.IsDigit(Content[0]));
-    [JsonIgnore] public bool EndsClean   => Content.Length > 0 && ".!?:)\"'".Contains(Content[^1]);
+    [JsonIgnore] public bool EndsClean   => Content.Length > 0 && ".!?:)\"'|".Contains(Content[^1]);
     [JsonIgnore] public bool IsCoherent  => StartsClean && EndsClean;
 
     // Content already includes the section heading (prepended by extraction services),
@@ -72,4 +74,17 @@ public class ChunkStatsAdapter : IChunkStatsSource
     // same benefit the summary field gives BM25/semantic ranking.
     [JsonIgnore] public string EmbeddingText =>
         string.IsNullOrWhiteSpace(Summary) ? Content : $"{Summary}\n\n{Content}";
+
+    // IChunkStatsSource.StatsText. CSV has the same split the PDF pipeline does - Content is the
+    // stored body, EmbeddingText folds in a field that is not in it - so it measures the same
+    // side of that split, for the same two reasons: a size band that excludes the summary is not
+    // the size that reaches the embedder, and two rows with identical bodies under different
+    // summaries are not duplicates of each other, because they do not produce the same vector.
+    //
+    // This does move CSV's own historical size bands, which the PDF change was careful not to do.
+    // It is acceptable here and not there: the CSV pipeline has no trigger and no DI registration
+    // in the FunctionApp (see IndexService's header), so there is no live series to break - and
+    // leaving it on Content would have meant indexer.chunk_size_band meaning one thing for PDF
+    // rows and another for CSV rows on a single shared dashboard, which is worse than either.
+    [JsonIgnore] public string StatsText => EmbeddingText;
 }

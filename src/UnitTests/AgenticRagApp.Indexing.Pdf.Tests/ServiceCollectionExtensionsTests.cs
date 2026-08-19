@@ -59,13 +59,14 @@ public class ServiceCollectionExtensionsTests
 
         services.AddPdfIndexing(Config());
 
-        AssertSingleton<ITextSplitter, SectionSplitter>(services);
-        AssertSingleton<SectionCascadeStrategy, SectionCascadeStrategy>(services);
-        AssertSingleton<HeadingBasedStrategy, HeadingBasedStrategy>(services);
-        AssertSingleton<TableAwareStrategy, TableAwareStrategy>(services);
-        AssertSingleton<SingleSectionStrategy, SingleSectionStrategy>(services);
-        AssertSingleton<FallbackStrategy, FallbackStrategy>(services);
-        AssertSingleton<ChunkingStrategySelector, ChunkingStrategySelector>(services);
+        // The two routes, and the three collaborators ChunkingService takes. The five-strategy
+        // cascade and ChunkingStrategySelector this used to assert are gone with the two-strategy
+        // rewrite - the assertions outlived the classes and kept passing only because the test
+        // project was already failing to compile for other reasons.
+        AssertSingleton<DeclaredBoundaryStrategy, DeclaredBoundaryStrategy>(services);
+        AssertSingleton<RecursiveStrategy, RecursiveStrategy>(services);
+        AssertSingleton<ChunkMetadataBuilder, ChunkMetadataBuilder>(services);
+        AssertSingleton<ChunkingReporter, ChunkingReporter>(services);
         AssertSingleton<IChunkingService, ChunkingService>(services);
         AssertSingleton<DocumentIdentityResolver, DocumentIdentityResolver>(services);
 

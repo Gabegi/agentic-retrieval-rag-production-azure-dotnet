@@ -208,4 +208,109 @@ public class ChunkingStageMetricsTests
         Assert.IsNull(stats.SmallestChunk);
         Assert.IsNull(stats.LargestChunk);
     }
+
+    // ── StatsText ────────────────────────────────────────────────────────────
+    // The PDF pipeline's Content stopped being prefix + body and became the bare body, so the
+    // size bands and the duplicate check moved onto StatsText. These pin both halves of that:
+    // a chunk type that does not override it is measured exactly as before, and one that does
+    // is measured on what it overrode it with.
+
+    // A chunk whose indexed body and embedded text differ, as ChunkObject's do.
+    private sealed record PrefixedChunk(
+        string Id, string DocumentId, string Content, string Prefix) : IChunkStatsSource
+    {
+        public string? HeadingText => null;
+        public int     PageStart   => 1;
+        public int     ChildIndex  => 0;
+        public bool    IsCoherent  => false;
+
+        public string StatsText => $"{Prefix}\n\n{Content}";
+    }
+
+    [TestMethod]
+    public void Compute_ChunkWithoutAnOverride_MeasuresContentExactlyAsBefore()
+    {
+        var chunks = new[] { Chunk("a.pdf", new string('a', 300)) };
+
+        var stats = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"]);
+
+        Assert.AreEqual(300, stats.MaxChunkSizeChars);
+        Assert.AreEqual(1,   stats.Band100To500);
+    }
+
+    [TestMethod]
+    public void Compute_ChunkWithAnOverride_MeasuresTheOverriddenText()
+    {
+        // 90-char body, 12-char prefix plus the joiner: the body alone is in the under-100 band
+        // and the embedded string is not. Which band it lands in is the whole point.
+        var chunks = new[]
+        {
+            new PrefixedChunk("a::0", "a.pdf", new string('a', 90), "CAO GGZ [ggz]"),
+        };
+
+        var stats = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"]);
+
+        Assert.AreEqual(0, stats.BandUnder100, "the bare body would have landed here");
+        Assert.AreEqual(1, stats.Band100To500);
+        Assert.AreEqual(105, stats.MaxChunkSizeChars, "90 body + 13 prefix + 2 joiner");
+        Assert.AreEqual(105, stats.SmallestChunk!.SizeChars,
+            "the sample's size and its excerpt have to describe the same string");
+    }
+
+    [TestMethod]
+    public void Compute_IdenticalBodiesUnderDifferentPrefixes_AreNotDuplicates()
+    {
+        // The sharp case: two sections with the same body text under different headings. On
+        // Content alone these collapse into a duplicate pair, which is a measurement artefact
+        // of the prefix split rather than anything the chunker did.
+        var body   = new string('a', 200);
+        var chunks = new[]
+        {
+            new PrefixedChunk("a::0", "a.pdf", body, "CAO GGZ [ggz] > Artikel 1"),
+            new PrefixedChunk("a::1", "a.pdf", body, "CAO GGZ [ggz] > Artikel 2"),
+        };
+
+        var stats = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"]);
+
+        Assert.AreEqual(0, stats.DuplicateChunks);
+        Assert.AreEqual(0, stats.DuplicateSamples.Count);
+    }
+
+    [TestMethod]
+    public void Compute_IdenticalBodiesUnderTheSamePrefix_AreStillDuplicates()
+    {
+        var body   = new string('a', 200);
+        var chunks = new[]
+        {
+            new PrefixedChunk("a::0", "a.pdf", body, "CAO GGZ [ggz] > Artikel 1"),
+            new PrefixedChunk("a::1", "a.pdf", body, "CAO GGZ [ggz] > Artikel 1"),
+        };
+
+        var stats = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"]);
+
+        Assert.AreEqual(1, stats.DuplicateChunks);
+        Assert.AreEqual(2, stats.DuplicateSamples.Single().Occurrences);
+    }
+
+    // ── ResidueChunksDropped ─────────────────────────────────────────────────
+
+    [TestMethod]
+    public void Compute_DoesNotInventAResidueCount()
+    {
+        // Compute cannot see dropped chunks - they are gone from the list before it runs - so it
+        // reports 0 and leaves the count to the caller that did the dropping.
+        var stats = ChunkingStageMetrics.Compute([Chunk("a.pdf", "Alpha.")], "v1", ["a.pdf"]);
+
+        Assert.AreEqual(0, stats.ResidueChunksDropped);
+    }
+
+    [TestMethod]
+    public void ResidueChunksDropped_SurvivesTheCallersWithExpression()
+    {
+        var stats = ChunkingStageMetrics.Compute([Chunk("a.pdf", "Alpha.")], "v1", ["a.pdf"])
+                    with { ResidueChunksDropped = 7 };
+
+        Assert.AreEqual(7, stats.ResidueChunksDropped);
+        Assert.AreEqual(1, stats.ChunksProduced, "the rest of the record is untouched");
+    }
 }

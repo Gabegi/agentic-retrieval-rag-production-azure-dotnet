@@ -30,7 +30,10 @@ public class UploadService : IUploadService
     }
 
     public async Task<UploadResult> UploadDocumentsAsync(
-        IEnumerable<ChunkObject> documents, IReadOnlyList<string> staleDocumentIds, CancellationToken ct = default)
+        IEnumerable<ChunkObject> documents,
+        IReadOnlyList<string>    staleDocumentIds,
+        IReadOnlyList<FamilyMove> familyMoves,
+        CancellationToken ct = default)
     {
         var docList = documents.ToList();
 
@@ -62,6 +65,8 @@ public class UploadService : IUploadService
                 staleDocumentIds.Count, chunksRemoved);
         }
 
+        var familiesPatched = await PatchMovedFamiliesAsync(familyMoves, docList, ct);
+
         // Stats snapshot taken after upload. Azure Search stats lag live writes by minutes —
         // use for corpus drift checks only, not for "did this run add N chunks" (use succeeded/failed).
         long? indexDocCount = null, indexStorageBytes = null;
@@ -82,10 +87,77 @@ public class UploadService : IUploadService
             DocsUploaded:                  succeeded,
             DocsFailed:                    failed,
             ChunksRemoved:                 chunksRemoved,
+            ChunkFamiliesPatched:          familiesPatched,
             IndexDocumentCountSnapshot:    indexDocCount,
             IndexStorageSizeBytesSnapshot: indexStorageBytes,
             RedFlags:                      drift.RedFlags,
             PreviousIndexDocumentCount:    drift.PreviousDocumentCount,
             PreviousIndexStorageSizeBytes: drift.PreviousStorageSizeBytes);
+    }
+
+    // Patches family_id onto the indexed rows of documents this run re-homed, without touching
+    // their content.
+    //
+    // Why a patch and not a re-index: a family move is caused by OTHER documents changing the
+    // clustering, so the moved document's own bytes are unchanged. ExtractionService's diff
+    // therefore skips it, it never reaches chunking, and this run holds no ChunkObject for it -
+    // while its indexed rows keep a family_id that is now wrong, in the field the knowledge agent
+    // filters on. Nothing else in the pipeline can see this: the chunk text is identical, so a
+    // content hash matches, and the document-level gate skipped it before chunking ran.
+    //
+    // The chunk ids come from the INDEX, for the same reason: we have no chunk list of our own
+    // for these documents. Same call the stale-chunk cleanup above uses.
+    //
+    // Runs after the upsert, and after the cleanup, so it patches settled rows. Documents that
+    // were uploaded this run are excluded - their rows already carry the new family_id from the
+    // projection, and patching them again would be a second write saying the same thing.
+    private async Task<int> PatchMovedFamiliesAsync(
+        IReadOnlyList<FamilyMove> familyMoves, IReadOnlyList<ChunkObject> uploaded, CancellationToken ct)
+    {
+        if (familyMoves.Count == 0) return 0;
+
+        var uploadedDocIds = uploaded.Select(d => d.DocumentId).ToHashSet(StringComparer.Ordinal);
+        var toPatch        = familyMoves.Where(m => !uploadedDocIds.Contains(m.SourceId)).ToList();
+
+        if (toPatch.Count == 0)
+        {
+            _logger.LogInformation(
+                "Family moves: all {Count} re-homed document(s) were uploaded this run, so their rows already carry the new family_id",
+                familyMoves.Count);
+            return 0;
+        }
+
+        // Queried one document at a time, deliberately. The batched form returns a flat id list
+        // with no document_id attached, so pairing an id back to the family it should get would
+        // mean parsing it - and ChunkIdBuilder runs sourceId through SafeKey, so the id is not
+        // reliably a prefix match on the source id. One query per moved document is exact, and
+        // moved documents are a handful per run at most (a whole corpus re-homing is a clustering
+        // failure, not a workload).
+        var patches = new List<ChunkFamilyPatch>();
+        foreach (var move in toPatch)
+        {
+            var chunkIds = await _indexDocumentService.GetChunkIdsForDocumentsAsync([move.SourceId], ct);
+            patches.AddRange(chunkIds.Select(id => new ChunkFamilyPatch(id, move.ToFamilyId)));
+        }
+
+        if (patches.Count == 0)
+        {
+            // The identity store says these documents moved; the index has no rows for them. Not
+            // an error - a document resolved but never successfully indexed does this - but it
+            // means the two are describing different corpora, which is worth saying out loud.
+            _logger.LogWarning(
+                "Family moves: {Count} document(s) were re-homed but have no rows in the index to patch",
+                toPatch.Count);
+            return 0;
+        }
+
+        var (patched, patchFailed) = await _indexDocumentService.MergeDocumentFieldsAsync(patches, ct);
+
+        Instrumentation.ChunkFamiliesPatched.Add(patched);
+        _logger.Log(patchFailed > 0 ? LogLevel.Warning : LogLevel.Information,
+            "Family re-homing — {Patched} chunk row(s) across {Docs} document(s) moved to a new family_id, {Failed} failed",
+            patched, toPatch.Count, patchFailed);
+
+        return patched;
     }
 }

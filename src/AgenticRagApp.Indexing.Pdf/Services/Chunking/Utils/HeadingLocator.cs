@@ -1,4 +1,5 @@
-using AgenticRagApp.Indexing.Pdf.Models;
+﻿using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Indexing.Pdf.Services;
 
 namespace AgenticRagApp.Indexing.Pdf.Utils;
 
@@ -79,6 +80,13 @@ public static class HeadingLocator
             var at = FindInPage(content, heading, pageSpans, cursor);
             if (at >= 0)
             {
+                // The match lands on the heading TEXT, but DI renders headings as markdown -
+                // "### Kop" - so the boundary cut there leaves the "### " tail ending the
+                // PREVIOUS section's body: 1,754 of 2,997 chunks in the 260818 index ended in
+                // a bare marker line. Pull the boundary back over the marker so it stays with
+                // the heading it belongs to, and both sections remain pure slices.
+                at = IncludeMarkdownMarker(content, at);
+
                 located.Add((heading, at, true));
                 cursor = at + 1;
             }
@@ -94,7 +102,12 @@ public static class HeadingLocator
         // containment is measured, depth is assumed. See HeadingChainBuilder.
         var chains = HeadingChainBuilder.Build(diSections ?? [], headings);
 
-        var (sections, merged) = BuildSections(content, found, pageSpans, chains);
+        var (built, merged) = BuildSections(content, found, pageSpans, chains);
+
+        // Table captions DI did not call headings become boundaries of their own - otherwise a
+        // section spanning nine salary tables stamps all nine with one heading, and a chunk
+        // ends up labelled with a functiegroep it does not contain. See TableCaptionSplitter.
+        var sections = TableCaptionSplitter.Split(content, built);
 
         return new HeadingLocationResult(
             sections, headings.Count, found.Count, merged, offsetless.Count);
@@ -183,13 +196,28 @@ public static class HeadingLocator
         content.Split('\n')[0].Trim();
 
     // Heading.Content is raw DI text; the page text has been through PdfCleaner. Applying
-    // the same length-changing character transforms to the needle is what lets an exact
-    // match work at all on a page that had ligatures, escaped punctuation or NBSPs.
+    // the same character transforms to the needle is what lets an exact match work at all
+    // on a page that had ligatures, NBSPs, decomposed diacritics or folded symbols - the
+    // shared repair (ExtractedTextRepair) IS PdfCleaner's character set, so needle and
+    // haystack cannot drift apart again.
     private static string Normalize(string s) =>
-        s.Replace("ﬁ", "fi").Replace("ﬂ", "fl").Replace("ﬀ", "ff")
-         .Replace("ﬃ", "ffi").Replace("ﬄ", "ffl")
-         .Replace(' ', ' ')
-         .Trim();
+        Services.ExtractedTextRepair.Repair(s).Trim();
+
+    // Walks a located heading's position back over the markdown marker that precedes it -
+    // "#{1,6}" plus spacing - but only when that marker starts its own line, so a '#' inside
+    // running text is never absorbed. Returns the original position when there is no marker.
+    private static int IncludeMarkdownMarker(string content, int at)
+    {
+        var i = at;
+        while (i > 0 && content[i - 1] is ' ' or '\t') i--;
+
+        var hashes = 0;
+        while (i > 0 && content[i - 1] == '#' && hashes < 6) { i--; hashes++; }
+
+        if (hashes == 0) return at;
+
+        return i == 0 || content[i - 1] == '\n' ? i : at;
+    }
 
     // Turns located headings into contiguous sections, applying the two rules the cascade
     // was missing.
@@ -228,15 +256,50 @@ public static class HeadingLocator
             // a near-empty parent whose only content is its own heading line. The pair is
             // merged into one section: the second heading's text is folded into the first's,
             // and the section runs to wherever the second would have ended.
-            var body = content[at..end].Trim();
+            //
+            // This is the SECOND merge of the same phenomenon, and the two have to agree.
+            // GetHeadingsHelper already merges adjacent heading-role paragraphs at extraction,
+            // and it deliberately refuses to when the first is a bare numbered label: two
+            // consecutive "Artikel 8" / "Artikel 9" markers are separate short articles, not a
+            // pair (BareLabelFollowedByAnotherHeading_NeitherMerges). This rule had no such
+            // gate, so it re-merged exactly the pairs extraction had just decided to keep apart
+            // - overriding a deliberate decision from the one place that can see paragraph
+            // adjacency, and inflating a counter that shares its name with extraction's.
+            //
+            // Gated on the same regex rather than a copy of it, for the same reason
+            // GetQualityWarningsHelper shares it: two patterns that must agree, kept as one.
+            // The boundary now includes the heading's markdown marker (IncludeMarkdownMarker),
+            // so strip it before the zero-body length comparison below - otherwise a marker'd
+            // pair reads as having "### " of body and the merge stops firing.
+            var body = content[at..end].Trim().TrimStart('#').TrimStart();
             var headingLine = Normalize(FirstLine(heading.Content));
 
-            if (body.Length <= headingLine.Length + 2 && i + 1 < found.Count)
+            var isBareLabel = GetHeadingsHelper.BareNumberedLabelWithWord()
+                                               .IsMatch(FirstLine(heading.Content));
+
+            // The same refusal, made on shape instead of on bareness. A pair is a heading and
+            // its continuation; two headings at the same structural level are separate
+            // sections, and folding them yields one segment naming both articles. See
+            // HeadingChainBuilder.AreSameStructuralLevel. The vacant articles this stops
+            // merging become heading-only sections, which is what they are - the residue
+            // filter, not this merge, is the right place to drop them.
+            var nextIsSibling = i + 1 < found.Count
+                && HeadingChainBuilder.AreSameStructuralLevel(
+                       HeadingTextNormalizer.Flatten(heading.Content) ?? "",
+                       HeadingTextNormalizer.Flatten(found[i + 1].Heading.Content) ?? "");
+
+            if (!isBareLabel && !nextIsSibling && body.Length <= headingLine.Length + 2 && i + 1 < found.Count)
             {
                 var (next, _, _) = found[i + 1];
                 var nextEnd = i + 2 < found.Count ? found[i + 2].At : content.Length;
 
-                var mergedHeading = $"{FirstLine(heading.Content)} {FirstLine(next.Content)}".Trim();
+                // Every line of both headings, space-joined - see HeadingTextNormalizer. Taking
+                // the first line of each dropped the title half of an already-merged heading
+                // ("Artikel 9\nBegrippen" became "Artikel 9"), which is the half a query matches.
+                var mergedHeading = string.Join(' ',
+                    new[] { HeadingTextNormalizer.Flatten(heading.Content),
+                            HeadingTextNormalizer.Flatten(next.Content) }
+                        .Where(part => !string.IsNullOrWhiteSpace(part)));
 
                 sections.Add(new LocatedSection(
                     Index: index++,
@@ -255,10 +318,15 @@ public static class HeadingLocator
                 continue;
             }
 
+            // Same one shape as the merged branch above: every line, space-joined. This stored
+            // heading.Content.Trim() whole, so an extraction-merged heading reached heading_text,
+            // heading_path and the embedded prefix with its newline intact.
+            var headingText = HeadingTextNormalizer.Flatten(heading.Content);
+
             sections.Add(new LocatedSection(
                 Index: index++,
-                HeadingText: heading.Content.Trim(),
-                HeadingPath: HeadingChainBuilder.Path(chains, heading.Offset, heading.Content),
+                HeadingText: headingText,
+                HeadingPath: HeadingChainBuilder.Path(chains, heading.Offset, headingText),
                 HeadingSource: ChunkHeadingSource.DiHeading,
                 Depth: heading.Depth,
                 Start: at, End: end,

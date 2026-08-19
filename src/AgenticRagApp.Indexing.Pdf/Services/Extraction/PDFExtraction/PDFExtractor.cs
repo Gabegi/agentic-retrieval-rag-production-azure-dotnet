@@ -119,7 +119,8 @@ public class PdfExtractor : IPdfExtractor
                 fileSizeBytes,
                 documentAnalyzed.Structure?.Headings ?? [],
                 documentAnalyzed.Structure?.Boilerplate ?? [],
-                documentAnalyzed.Structure?.SelectionMarks ?? []),
+                documentAnalyzed.Structure?.SelectionMarks ?? [],
+                documentAnalyzed.RawContent?.Length),
 
             Language = documentAnalyzed.Language,
         };

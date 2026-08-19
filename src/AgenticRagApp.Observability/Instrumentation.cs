@@ -120,6 +120,24 @@ public static class Instrumentation
     public static readonly Counter<long> HeadingsDetected =
         Meter.CreateCounter<long>("indexer.chunks_with_headings", description: "Chunks with a heading field set");
 
+    // Index rows whose family_id was patched in place because their document was re-homed into a
+    // different family by other documents' clustering. Non-zero means the sector filter would have
+    // been answering from a stale family for those rows until the next full reindex.
+    public static readonly Counter<long> ChunkFamiliesPatched =
+        Meter.CreateCounter<long>("indexer.chunk_families_patched", description: "Indexed chunk rows whose family_id was corrected in place after a family move");
+
+    // Chunks the minimum-content residue rule dropped before embedding. A cut so short it
+    // carries no meaning costs a vector and a row and can still be retrieved, which is why the
+    // rule exists; this is the only place outside the run report that says how often it fires.
+    public static readonly Counter<long> ResidueChunksDropped =
+        Meter.CreateCounter<long>("indexer.residue_chunks_dropped", description: "Chunks dropped by the minimum-content residue rule before embedding");
+
+    // Chunks the table-of-contents rule dropped. A separate counter rather than a tag on the
+    // one above, because the question each answers is different and an alert on one should not
+    // fire on the other: residue tracks extraction quality, this tracks front-matter capture.
+    public static readonly Counter<long> TocChunksDropped =
+        Meter.CreateCounter<long>("indexer.toc_chunks_dropped", description: "Chunks dropped as table-of-contents navigation before embedding");
+
     // ── Embedding ────────────────────────────────────────────────────────────
 
     // Chunks served from the vector cache instead of a paid embedding call — the whole

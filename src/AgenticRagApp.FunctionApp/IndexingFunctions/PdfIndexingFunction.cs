@@ -130,6 +130,10 @@ public class PdfIndexingFunction
         var docsBlob     = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/extracted.json";
         var chunksBlob   = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/chunks.json";
         var staleIdsBlob = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/stale-document-ids.json";
+        // Written by chunking, read by upload: documents whose family_id changed because OTHER
+        // documents' clustering moved them. Same payload-by-blob-name pattern as the two above,
+        // for the same reason - though this list is small, it travels the way its siblings do.
+        var familyMovesBlob = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/family-moves.json";
 
         ExtractionStageMetrics?  extractResults = null;
         ChunkingStageMetrics?       chunkResults   = null;
@@ -150,11 +154,11 @@ public class PdfIndexingFunction
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.Chunking, startedAt,
                 DocsExtracted: extractResults.DocsToProcess));
 
-            chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new PdfChunkRequest(docsBlob, chunksBlob, context.InstanceId, startedAt));
+            chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new PdfChunkRequest(docsBlob, chunksBlob, familyMovesBlob, context.InstanceId, startedAt));
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.EmbedAndUpload, startedAt,
                 DocsExtracted: extractResults.DocsToProcess, ChunksProduced: chunkResults.ChunksProduced));
 
-            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new PdfEmbedUploadRequest(chunksBlob, staleIdsBlob, context.InstanceId, startedAt));
+            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new PdfEmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt));
             success      = true;
         }
         catch (Exception ex)
@@ -245,11 +249,17 @@ public class PdfIndexingFunction
             // chunks) and has to be written even when the stage throws, which this method
             // cannot do - the exception passes straight through it. Hence instanceId and
             // startedAt travelling in.
-            var (chunks, stats) = await _chunkingService.ChunkDocumentsAsync(
+            var (chunks, stats, familyMoves) = await _chunkingService.ChunkDocumentsAsync(
                 docs, req.InstanceId, req.StartedAt, context.CancellationToken);
 
             await DeleteBlobAsync(req.InputBlob, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, chunks, context.CancellationToken);
+
+            // Always written, empty list included. The upload activity does fall back to "no
+            // moves" when the blob is missing (deployment-transition replays), but it logs a
+            // warning - so keeping this write unconditional is what makes that warning mean
+            // "the write failed" rather than "nothing moved".
+            await WriteBlobAsync(req.FamilyMovesBlob, familyMoves, context.CancellationToken);
 
             _logger.LogInformation("Chunked {Docs} docs into {Chunks} chunks → {Blob}", docs.Count, chunks.Count, req.OutputBlob);
             return stats;
@@ -270,6 +280,9 @@ public class PdfIndexingFunction
         {
             var chunks         = await ReadBlobAsync<List<ChunkObject>>(req.ChunksBlob, context.CancellationToken);
             var staleDocumentIds = await ReadBlobAsync<List<string>>(req.StaleIdsBlob, context.CancellationToken);
+            // Documents the chunking stage re-homed into a different family. Usually empty, and
+            // usually about documents that are NOT in `chunks` - see UploadService.
+            var familyMoves    = await ReadFamilyMovesAsync(req.FamilyMovesBlob, context.CancellationToken);
             LogProcessMemory("chunks loaded", chunks.Count);
 
             var sw              = System.Diagnostics.Stopwatch.StartNew();
@@ -302,7 +315,7 @@ public class PdfIndexingFunction
                 context.CancellationToken);
 
             var uploadResult = await _uploadService.UploadDocumentsAsync(
-                embeddedDocs, staleDocumentIds, context.CancellationToken);
+                embeddedDocs, staleDocumentIds, familyMoves, context.CancellationToken);
             LogProcessMemory("upload complete", chunks.Count);
 
             // Rolling full-corpus snapshot (source-scoped) + the two evictions that ride along
@@ -329,11 +342,13 @@ public class PdfIndexingFunction
 
             await DeleteBlobAsync(req.ChunksBlob, context.CancellationToken);
             await DeleteBlobAsync(req.StaleIdsBlob, context.CancellationToken);
+            await DeleteBlobAsync(req.FamilyMovesBlob, context.CancellationToken);
 
             return new EmbedUploadStageMetrics(
                 DocsUploaded:                  uploadResult.DocsUploaded,
                 DocsFailed:                    uploadResult.DocsFailed,
                 ChunksRemoved:                 uploadResult.ChunksRemoved,
+                ChunkFamiliesPatched:          uploadResult.ChunkFamiliesPatched,
                 ChunksTruncated:               embeddingResult.ChunksTruncated,
                 EmbeddingRetries:              embeddingResult.EmbeddingRetries,
                 VectorDimErrors:               embeddingResult.VectorDimErrors,
@@ -409,6 +424,24 @@ public class PdfIndexingFunction
 
     private Task<T> ReadBlobAsync<T>(string blobPath, CancellationToken ct) =>
         _blobStore.DownloadJsonAsync<T>(_pipelineContainer, blobPath, ct);
+
+    // ChunkActivity always writes family-moves.json, empty list included, so on a current
+    // deployment a missing blob means the write itself failed - hence the warning rather
+    // than silence. But an orchestration whose ChunkActivity ran under a deployment that
+    // predates the blob replays EmbedAndUpload with no blob to read, and failing the whole
+    // run over that transition is worse than proceeding with no moves.
+    private async Task<List<FamilyMove>> ReadFamilyMovesAsync(string blobPath, CancellationToken ct)
+    {
+        try
+        {
+            return await ReadBlobAsync<List<FamilyMove>>(blobPath, ct);
+        }
+        catch (Azure.RequestFailedException ex) when (ex.Status == 404)
+        {
+            _logger.LogWarning("Family-moves blob {Blob} not found — treating as no moves", blobPath);
+            return [];
+        }
+    }
 
     private Task DeleteBlobAsync(string blobPath, CancellationToken ct) =>
         _blobStore.DeleteIfExistsAsync(_pipelineContainer, blobPath, ct);

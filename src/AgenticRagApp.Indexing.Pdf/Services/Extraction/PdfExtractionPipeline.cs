@@ -642,10 +642,11 @@ public class PdfExtractionPipeline : IExtractionOrchestrator
 
         _logger.LogInformation(
             "PDF cleaning this run: {Mojibake} mojibake page(s), {ControlChars} control char(s), " +
-            "{InvisibleChars} invisible char(s), {Ligatures} ligature(s), {HyphenJoins} hyphenation join(s) — " +
+            "{InvisibleChars} invisible char(s), {Ligatures} ligature(s), {HyphenJoins} hyphenation join(s), " +
+            "{LineWraps} line wrap(s) reflowed — " +
             "all zero means the source had nothing to clean, not that cleaning didn't run.",
             report.MojibakeRepairedPages, report.ControlCharsStripped, report.InvisibleCharsStripped,
-            report.LigaturesExpanded, report.HyphenationJoinsRepaired);
+            report.LigaturesExpanded, report.HyphenationJoinsRepaired, report.LineWrapsReflowed);
 
         foreach (var issue in report.Issues.Take(MaxLoggedIssues))
             _logger.Log(

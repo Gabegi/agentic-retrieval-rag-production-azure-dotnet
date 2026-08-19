@@ -63,6 +63,110 @@ public class PdfCleaner : IPdfCleaner
     private static readonly Regex LineBreakHyphenation =
         new(@"(?<=\p{Ll})-\n(?=\p{Ll})", RegexOptions.Compiled);
 
+    // A PDF hard wrap mid-sentence: the line ends on a letter, digit, comma or semicolon and
+    // the next begins lowercase. 4,953 of 14,906 non-blank lines in the 260818 retrieved
+    // corpus started mid-sentence this way, and unreflowed wraps are also what starves the
+    // prose ladder of sentence boundaries. Single \n only - a blank line (paragraph break)
+    // never matches, and the lowercase lookahead excludes table rows ("|"), list bullets,
+    // numbered items and headings, all of which open with something other than \p{Ll}.
+    private static readonly Regex LineWrapReflow =
+        new(@"(?<=[\p{L}\p{Nd},;])\n(?=\p{Ll})", RegexOptions.Compiled);
+
+    // A numbered list marker stranded on a line of its own, away from the clause it numbers:
+    //
+    //     3.
+    //     Klager en beklaagde kunnen zich in het hoorgesprek laten bijstaan.
+    //
+    // 111 lines in the 260818 retrieved corpus were a bare "N." like this. LineWrapReflow
+    // cannot repair it from either side - the marker line ends on "." rather than a letter,
+    // digit, comma or semicolon, and the clause it belongs to almost always opens uppercase.
+    // In legal text the article number carries the meaning, so a marker separated from its
+    // clause weakens the retrieval of both and makes either one unquotable on its own.
+    //
+    // The lookahead refuses two following lines on purpose: "#" is a heading, and a genuine
+    // numbered heading line sitting above one must not swallow it; "|" is a table row, whose
+    // pipe structure TableCutter cuts on. A blank following line cannot match either, because
+    // \n is excluded from the negated class.
+    private static readonly Regex OrphanedListMarker = new(
+        @"^([ \t]*\(?\d{1,3}[.)])[ \t]*\n(?=[ \t]*[^\s#|])",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    // The other half of the same break: 53 lines in that corpus opened with a stray ". ",
+    // the marker's own punctuation left at the head of the clause after the digits went to
+    // their own line. Stripped BEFORE OrphanedListMarker runs, so the rejoin above produces
+    // "3. Klager" rather than "3. . Klager".
+    private static readonly Regex StrayLeadingPeriod =
+        new(@"^[ \t]*\.[ \t]+(?=\p{L})", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    // A proper noun broken in half by a PARAGRAPH break rather than a line wrap:
+    //
+    //     ... zorg dat de Cor
+    //
+    //     daan medewerkers hiervan op de hoogte zijn.
+    //
+    // "Contoso" cut in two. The 260818 eval surfaced the second half opening a chunk - "daan
+    // medewerkers." - and HardCutter's header comment is right that arrivals there mean
+    // extraction lost its separators: the break is inserted INSIDE the word before the chunker
+    // runs, so it is an extraction defect and this is where it has to be repaired. A split word
+    // matches neither the query embedding nor keyword search.
+    //
+    // LineWrapReflow cannot reach it: that rule needs a single \n, and the halves here are
+    // separated by a blank line, which ExcessBlankLines then preserves.
+    //
+    // This is VOCABULARY, not shape, and it has to be. A shape rule was tried first -
+    // "capitalised two-to-four-letter fragment, preceded by a lowercase word, continuation
+    // opening lowercase" - on the theory that it described the proper-noun case and very little
+    // else. It does not. It matches any short capitalised word that happens to end a paragraph,
+    // and since the halves are joined with nothing between them it fuses two real words:
+    //
+    //     "...bij de Raad\n\nvan Bestuur"        -> "de Raadvan Bestuur"
+    //     "Zie de Wet\n\nverbetering ..."        -> "Wetverbetering"
+    //     "de heer Jan\n\nvan der Berg"          -> "Janvan der Berg"
+    //
+    // "Raad van Bestuur", "Raad van Toezicht" and "Wet van" are everywhere in this corpus, and
+    // the corruption is worse than the defect it repairs: it runs before chunking, so the fused
+    // token is what gets embedded, hashed into ContentHash and shown in a citation, where a
+    // split word at least stays visible. No lookbehind fixes this - "Raad"/"van" and
+    // "Cor"/"daan" are the same shape.
+    //
+    // So the rule only repairs words it already knows are single words. Anything not on the
+    // list is left split. Add names here as the corpus surfaces them; the cost of an absent
+    // name is one unrepaired split, the cost of a wrong shape rule is silent corpus damage.
+    private static readonly string[] KnownSingleWordTokens = ["Contoso"];
+
+    // One alternative per interior split point of each known token ("Contoso" -> "C|ordaan",
+    // "Co|rdaan", ... "Cordaa|n"), because the extractor picks the break, not us.
+    //
+    // The break is a blank line plus any whitespace around it: [ \t]*\n\s*\n\s*. Tolerating
+    // that whitespace matters - this pass runs before TrailingLineSpace, so the very common
+    // "Cor \n\ndaan" (trailing space from line-based extraction) and "Cor\n \ndaan" (blank line
+    // holding a space) reach it unnormalized and would otherwise not match at all.
+    //
+    // IgnoreCase because the same break can land on a lowercase occurrence mid-sentence; the
+    // MatchEvaluator at the call site rebuilds from the matched text, so original casing
+    // survives the repair.
+    private static readonly Regex SplitProperNoun = BuildSplitProperNounRegex(KnownSingleWordTokens);
+
+    private static Regex BuildSplitProperNounRegex(IReadOnlyList<string> tokens)
+    {
+        var alternatives = tokens
+            .Where(token => token.Length > 1)
+            .SelectMany(token => Enumerable.Range(1, token.Length - 1)
+                .Select(i => $@"\b{Regex.Escape(token[..i])}[ \t]*\n\s*\n\s*{Regex.Escape(token[i..])}\b"))
+            .ToArray();
+
+        // (?!) never matches. An empty pattern would match everywhere, which with the
+        // whitespace-stripping evaluator below would be catastrophic rather than merely wrong.
+        var pattern = alternatives.Length > 0 ? string.Join("|", alternatives) : "(?!)";
+
+        return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    }
+
+    // Used to rebuild a matched split token: everything the extractor inserted inside the word
+    // is whitespace, so removing all of it restores the word without assuming where the cut was.
+    private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
+
+
     // Control chars except \n and \t. PDF extractors leak these (form feeds, vertical
     // tabs, stray NULs) and they poison both embeddings and JSON payloads downstream.
     private static readonly Regex ControlChars =
@@ -248,16 +352,45 @@ public class PdfCleaner : IPdfCleaner
 
         text = MarkdownEscapedPunctuation.Replace(text, "$1");
 
+        // Single-glyph unit symbols ("℃") folded to their searchable spelling ("°C") - NFC
+        // preserves them, so the fold is explicit and shared with every non-body text path.
+        text = ExtractedTextRepair.FoldSymbols(text);
+
         text = text.Normalize(NormalizationForm.FormC);
 
         var hyphenJoinCount = LineBreakHyphenation.Matches(text).Count;
         text = LineBreakHyphenation.Replace(text, "");
 
+        // Stray marker punctuation first, then the marker rejoin - see StrayLeadingPeriod for
+        // why that order and not the other. Both run before LineWrapReflow so a clause that
+        // was ALSO hard-wrapped reflows normally once its marker is back in front of it.
+        var strayPeriodCount = StrayLeadingPeriod.Matches(text).Count;
+        text = StrayLeadingPeriod.Replace(text, "");
+
+        var listMarkerJoinCount = OrphanedListMarker.Matches(text).Count;
+        text = OrphanedListMarker.Replace(text, "$1 ");
+
+        // Before LineWrapReflow: rejoining the halves can leave the repaired word at the end
+        // of a hard-wrapped line, which reflow then handles normally. Counted into
+        // LineWrapJoins rather than given a counter of its own - it is the same phenomenon
+        // that counter already names, a break the extractor inserted where no break belongs,
+        // and splitting it into two numbers would ask the run log a question nobody has.
+        var splitWordJoinCount = SplitProperNoun.Matches(text).Count;
+        text = SplitProperNoun.Replace(text, m => WhitespaceRun.Replace(m.Value, ""));
+
+        // After hyphenation repair (a rejoined word may end its line) and before the
+        // whitespace collapses, which assume line structure is final.
+        var lineWrapJoinCount = LineWrapReflow.Matches(text).Count;
+        text = LineWrapReflow.Replace(text, " ");
+
         text = TrailingLineSpace.Replace(text, "\n");
         text = ExcessSpaces.Replace(text, " ");
         text = ExcessBlankLines.Replace(text, "\n\n");
 
-        var counts = new PdfCleaningCounts(controlCharCount, invisibleCharCount, ligatureCount, hyphenJoinCount);
+        var counts = new PdfCleaningCounts(
+            controlCharCount, invisibleCharCount, ligatureCount, hyphenJoinCount,
+            lineWrapJoinCount + splitWordJoinCount,
+            listMarkerJoinCount + strayPeriodCount);
         return (text.Trim(), mojibakeFixed, counts);
     }
 

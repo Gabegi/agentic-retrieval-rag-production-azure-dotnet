@@ -149,7 +149,7 @@ public class PdfIndexingFunctionTests
     {
         var deps  = new Deps();
         var docs  = new List<PdfExtractionDocument> { Doc("doc1.pdf") };
-        var chunk = new DocumentChunk { Id = "c1", DocumentId = "doc1.pdf", Content = "hello" };
+        var chunk = Chunk();
         var stats = ChunkingStageMetrics.Empty("v1");
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<PdfExtractionDocument>>(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(docs);
@@ -157,16 +157,16 @@ public class PdfIndexingFunctionTests
         // instance id and start time down rather than writing an artifact itself.
         deps.ChunkingService
             .Setup(c => c.ChunkDocumentsAsync(docs, "instance-1", It.IsAny<DateTimeOffset?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(([chunk], stats));
+            .ReturnsAsync(([chunk], stats, (IReadOnlyList<FamilyMove>)[]));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(stats, result);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()), Times.Once);
-        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.Is<IReadOnlyList<DocumentChunk>>(l => l.Count == 1), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.Is<IReadOnlyList<ChunkObject>>(l => l.Count == 1), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -182,7 +182,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "ChunkActivity failed");
     }
@@ -193,18 +193,18 @@ public class PdfIndexingFunctionTests
     public async Task EmbedAndUploadActivity_Success_EmbedsUploadsSnapshotsEvictsAndDeletesChunksBlob()
     {
         var deps   = new Deps();
-        var chunks = new List<DocumentChunk> { new() { Id = "c1", DocumentId = "doc1.pdf", Content = "hello" } };
-        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<DocumentChunk>>(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()))
+        var chunks = new List<ChunkObject> { Chunk() };
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<ChunkObject>>(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(chunks);
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<string>>(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(["stale1"]);
-        deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<CancellationToken>()))
+        deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EmbeddingRunResult(chunks, ChunksTruncated: 0, EmbeddingRetries: 0, VectorDimErrors: 0, CacheHits: 1));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
+        deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunkFamiliesPatched: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
         deps.SnapshotService.Setup(s => s.UpdateAsync(
-                "pdf", It.IsAny<IReadOnlyList<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                "pdf", It.IsAny<IReadOnlyList<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SnapshotLiveSet(
                 new HashSet<string> { "hash1" },
                 new HashSet<string> { "doc1.pdf" }));
@@ -213,7 +213,7 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(1, result.DocsUploaded);
         Assert.AreEqual(1, result.VectorCacheHits);
@@ -226,27 +226,63 @@ public class PdfIndexingFunctionTests
             It.Is<IReadOnlySet<string>>(ids => ids.Contains("doc1.pdf")), It.IsAny<CancellationToken>()), Times.Once);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()), Times.Once);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<CancellationToken>()), Times.Once);
+        deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "family-moves.json", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task EmbedAndUploadActivity_FamilyMovesBlobMissing_TreatsAsNoMovesAndSucceeds()
+    {
+        // An orchestration whose ChunkActivity ran under a deployment that predates
+        // family-moves.json replays EmbedAndUpload with no blob to read - that must not
+        // fail the run.
+        var deps   = new Deps();
+        var chunks = new List<ChunkObject> { Chunk() };
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<ChunkObject>>(It.IsAny<BlobContainerClient>(), "chunks.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(chunks);
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<string>>(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<FamilyMove>>(It.IsAny<BlobContainerClient>(), "family-moves.json", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Azure.RequestFailedException(404, "BlobNotFound"));
+        deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EmbeddingRunResult(chunks, 0, 0, 0, 0));
+        deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunkFamiliesPatched: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
+        deps.SnapshotService.Setup(s => s.UpdateAsync(
+                "pdf", It.IsAny<IReadOnlyList<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SnapshotLiveSet(new HashSet<string>(), new HashSet<string>()));
+        var function = deps.Build();
+        var context  = new FakeFunctionContext();
+
+        var result = await function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
+
+        Assert.AreEqual(1, result.DocsUploaded);
+        deps.UploadService.Verify(s => s.UploadDocumentsAsync(
+            It.IsAny<IEnumerable<ChunkObject>>(),
+            It.IsAny<IReadOnlyList<string>>(),
+            It.Is<IReadOnlyList<FamilyMove>>(moves => moves.Count == 0),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
     public async Task EmbedAndUploadActivity_UploadServiceThrows_WrapsInInvalidOperationException()
     {
         var deps   = new Deps();
-        var chunks = new List<DocumentChunk> { new() { Id = "c1", DocumentId = "doc1.pdf", Content = "hello" } };
-        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<DocumentChunk>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        var chunks = new List<ChunkObject> { Chunk() };
+        deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<ChunkObject>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(chunks);
         deps.BlobStore.Setup(b => b.DownloadJsonAsync<List<string>>(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<CancellationToken>()))
+        deps.EmbeddingService.Setup(s => s.EmbedDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EmbeddingRunResult(chunks, 0, 0, 0, 0));
         deps.ArtifactWriter.Setup(w => w.WriteArtifactAsync(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("boom"));
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "EmbedAndUploadActivity failed");
     }
@@ -288,6 +324,11 @@ public class PdfIndexingFunctionTests
 
     // ── fixtures ─────────────────────────────────────────────────────────────
 
+    // A chunk carries its identity on Metadata - ChunkObject.Id and .DocumentId are read-only
+    // pass-throughs to it. These tests only ever need those two fields and the content.
+    private static ChunkObject Chunk(string id = "c1", string documentId = "doc1.pdf", string content = "hello") =>
+        new() { Content = content, Metadata = new ChunkMetadata { Id = id, DocumentId = documentId } };
+
     private static PdfExtractionDocument Doc(string sourceId) => new(
         SourceId:              sourceId,
         Content:               "content",
@@ -322,8 +363,8 @@ public class PdfIndexingFunctionTests
         Issues: [], RedFlags: [], SpotCheckSample: []);
 
     private static EmbedUploadStageMetrics EmbedStats() => new(
-        DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunksTruncated: 0, EmbeddingRetries: 0,
-        VectorDimErrors: 0, VectorCacheHits: 0, TotalEmbeddingDurationMs: 10, IndexDocumentCountSnapshot: 10,
-        IndexStorageSizeBytesSnapshot: 100, RedFlags: [], ChunksEvicted: 0,
+        DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunkFamiliesPatched: 0, ChunksTruncated: 0,
+        EmbeddingRetries: 0, VectorDimErrors: 0, VectorCacheHits: 0, TotalEmbeddingDurationMs: 10,
+        IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: [], ChunksEvicted: 0,
         PreviousIndexDocumentCount: null, PreviousIndexStorageSizeBytes: null);
 }

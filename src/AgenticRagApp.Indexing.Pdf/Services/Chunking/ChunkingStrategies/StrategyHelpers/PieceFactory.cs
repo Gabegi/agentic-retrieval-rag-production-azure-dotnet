@@ -25,6 +25,28 @@ public static class PieceFactory
         start = Math.Clamp(start, 0, text.Length);
         end   = Math.Clamp(end,   0, text.Length);
 
+        // A reversed pair is a CUTTER BUG, never input, so it is refused rather than absorbed.
+        //
+        // This already threw before the guard existed - the range operator below raised
+        // ArgumentOutOfRangeException on its own - so nothing about the outcome changes here
+        // except the exception type and a message that names which cutter and which boundary
+        // level. What the guard buys is that the refusal is now DELIBERATE: the obvious tidy-up
+        // is to clamp, as Composed does, and clamping would make a cutter that walked its
+        // boundaries backwards emit a silent empty piece and lose that cut with nothing recording
+        // it. Every cutter here produces ascending segments by construction; the moment one does
+        // not, the ladder above it is choosing boundaries it cannot justify, and that is worth
+        // stopping the document for.
+        //
+        // Composed keeps its clamp deliberately: its Start/Length address the underlying slice
+        // of a COMPOSED string, where a degenerate range means "this fragment carries no source
+        // characters" rather than "the cutter is confused".
+        if (start > end)
+            throw new ArgumentException(
+                $"Piece bounds are reversed: start {start} > end {end} at boundary level {level} " +
+                $"in a block of {text.Length} chars starting at {block.Start}. A cutter emitted a " +
+                "descending segment - see PieceFactory.",
+                nameof(start));
+
         while (start < end && char.IsWhiteSpace(text[start]))   start++;
         while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
 

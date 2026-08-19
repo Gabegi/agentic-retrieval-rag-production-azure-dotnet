@@ -28,7 +28,6 @@ public static class ServiceCollectionExtensions
         // Two-axis chunking (docs/2608/260812/chunking_flow_summary.md).
         //
         // Axis 2 - the leaf splitter, chosen per block inside a section.
-        services.AddSingleton<ITextSplitter, SectionSplitter>();
 
         // Axis 1 - routing. HeadingSectionGate decides each document's route from its declared
         // structure (a static read, nothing to register); ChunkingService dispatches that route
@@ -40,6 +39,11 @@ public static class ServiceCollectionExtensions
         // reads a document and writes onto the chunks it is handed, and keeps nothing between
         // calls.
         services.AddSingleton<ChunkMetadataBuilder>();
+
+        // Step 5 - everything the stage says about itself: the log lines, the OpenTelemetry
+        // counters and the chunking-artifact blob. Registered rather than newed up because it
+        // writes through IPipelineArtifactWriter, which the host owns.
+        services.AddSingleton<ChunkingReporter>();
 
         services.AddSingleton<IChunkingService, ChunkingService>();
 

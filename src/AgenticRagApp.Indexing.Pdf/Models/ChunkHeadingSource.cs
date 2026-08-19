@@ -21,6 +21,21 @@ public static class ChunkHeadingSource
     // from section nesting rather than depth should say so.
     public const string DiSection = "di_section";
 
+    // A caption line standing immediately above a table, promoted to a section boundary
+    // because Document Intelligence did not mark it as a heading.
+    //
+    // The CAO GHZ salary appendix is the measured case: DI detects ONE heading
+    // ("Salarisschaal functiegroep 45") for a page carrying NINE salary tables, so the
+    // section spans all nine and every chunk cut from it inherits that one heading. A chunk
+    // holding functiegroep 50's pay scale was being labelled, embedded and cited as
+    // functiegroep 45 - wrong attribution on pay data, which is worse than retrieving
+    // nothing. Measured at 35 mislabelled chunks in the 260818 run.
+    //
+    // Kept distinct from DiHeading rather than folded into it: this boundary rests on a
+    // layout heuristic, not on DI's own judgement, and "how much of the corpus is resting on
+    // which signal" is the question this whole enum exists to answer.
+    public const string TableCaption = "table_caption";
+
     // No heading covers this unit - preamble before the first heading, or a document with
     // no headings anywhere. Distinct from null, which would mean "not yet computed".
     public const string None = "none";

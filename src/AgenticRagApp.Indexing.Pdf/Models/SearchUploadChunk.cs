@@ -126,3 +126,18 @@ public record SearchUploadChunk(
         HeadingLocated:     chunk.HeadingLocated,
         PageExtractionFlag: chunk.Metadata.PageExtractionFlag);
 }
+
+// The key plus one field, for patching family_id onto rows whose content did not change.
+//
+// A document is re-homed into a different family because OTHER documents changed the clustering.
+// Its own bytes are untouched, so ExtractionService diffs it as skipped, it never reaches chunking
+// and no ChunkObject for it exists this run - yet its indexed rows carry a family_id that is now
+// wrong, in the field the knowledge agent filters on. So the fix patches the index directly from
+// the chunk ids the index itself reports, and re-embeds nothing.
+//
+// DELIBERATELY NOT a partially-populated SearchUploadChunk: a merge writes every field the payload
+// carries, so sending the 37-field projection with nulls in it would blank thirty-five columns on
+// every row it touched. Two properties, both of them meant.
+public record ChunkFamilyPatch(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("family_id")] string FamilyId);

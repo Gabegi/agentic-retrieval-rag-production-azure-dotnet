@@ -16,27 +16,6 @@ public static class BlockParser
     // Start and End are absolute; End excludes the line's own newline.
     private readonly record struct Line(int Start, int End, BlockKind Kind, bool IsBlank);
 
-    // Parses a WINDOW of the content, in the content's own coordinates.
-    //
-    // Route 1 needs this: it cuts one oversized section, not the whole document, but every
-    // coordinate downstream is absolute against PdfExtractionDocument.Content - that is the
-    // slice invariant on ContentPiece, and page attribution in step 4 depends on it. Parsing
-    // the section's text alone would return blocks whose Start is relative to the section, so
-    // the offset is added back here rather than left for each caller to remember.
-    //
-    // Text stays a slice: content[start..end] is character-identical to the window it came
-    // from, so a block's Text still equals content[Start..End] once shifted. Nothing is
-    // rebuilt.
-    //
-    // The window is parsed independently, which is the honest behaviour rather than a
-    // limitation to work around: a block cannot run past the end of the section that contains
-    // it, and a table split across a section boundary was already two tables as far as the
-    // boundary is concerned.
-    public static IReadOnlyList<ContentBlock> Parse(string content, int start, int end) =>
-        Parse(content[start..end])
-            .Select(block => block with { Start = block.Start + start })
-            .ToList();
-
     public static IReadOnlyList<ContentBlock> Parse(string content)
     {
         if (string.IsNullOrEmpty(content)) return [];

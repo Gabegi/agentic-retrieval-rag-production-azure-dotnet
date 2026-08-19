@@ -33,6 +33,85 @@ public class PdfCleanerTests
     }
 
     [TestMethod]
+    public void HardWrappedProse_IsReflowedIntoOneLine()
+    {
+        // A PDF hard wrap mid-sentence: line ends on a letter, next starts lowercase. A third
+        // of the 260818 corpus's non-blank lines started mid-sentence this way, starving the
+        // prose ladder of sentence boundaries.
+        var result = BuildCleaner().CleanPdf(
+            [Page(content: "De werknemer heeft recht op een\nvergoeding van de kosten.")]);
+
+        Assert.AreEqual("De werknemer heeft recht op een vergoeding van de kosten.",
+            result.Records[0].PageContent);
+        Assert.AreEqual(1, result.LineWrapsReflowed);
+    }
+
+    [TestMethod]
+    public void AStrandedNumberedMarker_IsRejoinedToItsClause()
+    {
+        // 111 lines in the 260818 corpus were a bare "N.". LineWrapReflow cannot repair it -
+        // the marker line ends on "." and the clause opens uppercase - and in legal text the
+        // article number carries the meaning, so the two must not be indexed apart.
+        var result = BuildCleaner().CleanPdf(
+            [Page(content: "3.\nKlager en beklaagde kunnen zich laten bijstaan.")]);
+
+        Assert.AreEqual("3. Klager en beklaagde kunnen zich laten bijstaan.",
+            result.Records[0].PageContent);
+        Assert.AreEqual(1, result.ListMarkersRejoined);
+    }
+
+    [TestMethod]
+    public void AStrayLeadingPeriod_IsStrippedBeforeTheMarkerRejoins()
+    {
+        // The other half of the same break: the digits went to their own line and the marker's
+        // own "." stayed at the head of the clause. Stripping must happen first, or the rejoin
+        // produces "3. . Klager".
+        var result = BuildCleaner().CleanPdf(
+            [Page(content: "3.\n. Klager en beklaagde kunnen zich laten bijstaan.")]);
+
+        Assert.AreEqual("3. Klager en beklaagde kunnen zich laten bijstaan.",
+            result.Records[0].PageContent);
+        Assert.AreEqual(2, result.ListMarkersRejoined);
+    }
+
+    [TestMethod]
+    public void ANumberedMarkerAboveAHeadingOrTable_IsNotRejoined()
+    {
+        // The lookahead refuses "#" and "|" on purpose: a genuine numbered heading sitting
+        // above a rendered heading must not swallow it, and a pipe row is structure TableCutter
+        // cuts on.
+        const string heading = "3.\n#### Artikel 4:15 Salarisschalen";
+        const string table   = "3.\n| a | b |";
+
+        Assert.AreEqual(heading, BuildCleaner().CleanPdf([Page(content: heading)]).Records[0].PageContent);
+        Assert.AreEqual(table,   BuildCleaner().CleanPdf([Page(content: table)]).Records[0].PageContent);
+        Assert.AreEqual(0,       BuildCleaner().CleanPdf([Page(content: heading)]).ListMarkersRejoined);
+    }
+
+    [TestMethod]
+    public void ParagraphBreaksListsAndTables_AreNotReflowed()
+    {
+        // A blank line is a real paragraph break; table rows and list items open with
+        // something other than a lowercase letter. None of these may be joined.
+        const string content =
+            "Eerste alinea eindigt hier\n\ntweede alinea staat los.\n\n| a | b |\n| 1 | 2 |";
+        var result = BuildCleaner().CleanPdf([Page(content: content)]);
+
+        Assert.AreEqual(content, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
+    }
+
+    [TestMethod]
+    public void DegreeCelsiusGlyph_IsFoldedInPageBodies()
+    {
+        // U+2103 survives NFC, so the fold is explicit (ExtractedTextRepair.FoldSymbols) -
+        // 788 occurrences in the 260818 index against zero "°C".
+        var result = BuildCleaner().CleanPdf([Page(content: "Koel tot 7 ℃ bij ontvangst.")]);
+
+        Assert.AreEqual("Koel tot 7 °C bij ontvangst.", result.Records[0].PageContent);
+    }
+
+    [TestMethod]
     public void MarkdownEscapedHyphen_IsUnescaped()
     {
         // Document Intelligence's markdown output escapes a literal "-" mid-sentence as
@@ -241,5 +320,138 @@ public class PdfCleanerTests
 
         StringAssert.Contains(result.Records[0].PageContent, "First figure");
         StringAssert.Contains(result.Records[0].PageContent, "Second figure");
+    }
+
+    [TestMethod]
+    public void AWordSplitAcrossABlankLine_IsRejoined()
+    {
+        // "Contoso" cut in half by a paragraph break inserted inside the word. The 260818 eval
+        // saw the second half open a chunk: "daan medewerkers.". LineWrapReflow cannot reach
+        // it - that rule needs a single \n - and ExcessBlankLines preserves the gap.
+        var result = BuildCleaner().CleanPdf(
+            [Page(content: "Zorg dat de Cor\n\ndaan medewerkers hiervan op de hoogte zijn.")]);
+
+        Assert.AreEqual("Zorg dat de Contoso medewerkers hiervan op de hoogte zijn.",
+            result.Records[0].PageContent);
+        Assert.AreEqual(1, result.LineWrapsReflowed);
+    }
+
+    // The repair runs before TrailingLineSpace, so the whitespace debris that line-based
+    // extraction leaves around the break is still there when it looks. Both of these were
+    // missed by the earlier \n{2,} pattern and left broken in the index.
+    [DataTestMethod]
+    [DataRow("Zorg dat de Cor \n\ndaan medewerkers zijn.",  DisplayName = "trailing space before the break")]
+    [DataRow("Zorg dat de Cor\n \ndaan medewerkers zijn.",  DisplayName = "blank line holding a space")]
+    [DataRow("Zorg dat de Cor\n\n  daan medewerkers zijn.", DisplayName = "indented continuation")]
+    [DataRow("Zorg dat de Cor\n\n\ndaan medewerkers zijn.", DisplayName = "more than one blank line")]
+    public void AWordSplitAcrossAWhitespaceLitteredBreak_IsRejoined(string content)
+    {
+        var result = BuildCleaner().CleanPdf([Page(content: content)]);
+
+        StringAssert.Contains(result.Records[0].PageContent, "Contoso medewerkers");
+        Assert.AreEqual(1, result.LineWrapsReflowed);
+    }
+
+    // The split can land anywhere inside the word - the extractor picks the break, not us - so
+    // the rule covers every interior cut point of a known token rather than a fixed prefix.
+    [DataTestMethod]
+    [DataRow("de C\n\nordaan medewerkers")]
+    [DataRow("de Cord\n\naan medewerkers")]
+    [DataRow("de Cordaa\n\nn medewerkers")]
+    public void AKnownWordSplitAtAnyInteriorPoint_IsRejoined(string content)
+    {
+        var result = BuildCleaner().CleanPdf([Page(content: content)]);
+
+        StringAssert.Contains(result.Records[0].PageContent, "Contoso medewerkers");
+    }
+
+    // THE case that forced the rule to be vocabulary rather than shape, and the reason the
+    // halves must never be joined on shape alone. Every one of these satisfies the old
+    // "capitalised 2-4 letter fragment, lowercase continuation" pattern exactly, and the old
+    // rule fused them into "Raadvan", "Wetverbetering" and "Janvan" - silently, before
+    // chunking, so the damaged token is what got embedded and cited. "Raad van Bestuur" and
+    // "Raad van Toezicht" are everywhere in this corpus.
+    [DataTestMethod]
+    [DataRow("Meld dit bij de Raad\n\nvan Bestuur van de organisatie.")]
+    [DataRow("Zie hiervoor de Wet\n\nverbetering poortwachter.")]
+    [DataRow("Dit betreft de heer Jan\n\nvan der Berg.")]
+    [DataRow("De zaak diende bij het Hof\n\nvan Justitie.")]
+    public void TwoRealWordsAcrossAParagraphBreak_AreNeverFused(string text)
+    {
+        var result = BuildCleaner().CleanPdf([Page(content: text)]);
+
+        Assert.AreEqual(text, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
+    }
+
+    // DI emits plenty of short label lines with no markdown marker, and the old lookbehind
+    // accepted \n as the separator before the fragment - so a whole heading line could count as
+    // the fragment and be glued to the paragraph under it ("Doel" + "het doel" -> "Doelhet").
+    [TestMethod]
+    public void AnUnmarkedShortHeadingLine_IsNotGluedToTheParagraphBelowIt()
+    {
+        const string text = "dit is een alinea\nDoel\n\nhet doel is duidelijk.";
+        var result = BuildCleaner().CleanPdf([Page(content: text)]);
+
+        Assert.AreEqual(text, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
+    }
+
+    [TestMethod]
+    public void ARealParagraphBreak_IsNotJoined()
+    {
+        const string twoParagraphs = "De werknemer meldt dit bij de werkgever.\n\nDe werkgever bevestigt de melding.";
+        var result = BuildCleaner().CleanPdf([Page(content: twoParagraphs)]);
+
+        Assert.AreEqual(twoParagraphs, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
+    }
+
+    // A lowercase four-letter word ending a paragraph is an ordinary Dutch paragraph ending -
+    // hier, deze, niet, voor. Not on the known-token list, so not touched.
+    // ParagraphBreaksListsAndTables_AreNotReflowed is the other half of this guard.
+    [TestMethod]
+    public void ALowercaseShortWordEndingAParagraph_IsNotTreatedAsAFragment()
+    {
+        const string text = "De regeling geldt hier\n\nvolgens de geldende afspraken.";
+        var result = BuildCleaner().CleanPdf([Page(content: text)]);
+
+        Assert.AreEqual(text, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
+    }
+
+    // An acronym ending a paragraph is not a fragment either.
+    [TestMethod]
+    public void AnAcronymEndingAParagraph_IsNotTreatedAsAFragment()
+    {
+        const string text = "Dit geldt ook in NL\n\nvolgens de geldende afspraken.";
+        var result = BuildCleaner().CleanPdf([Page(content: text)]);
+
+        Assert.AreEqual(text, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
+    }
+
+    [TestMethod]
+    public void AFragmentFollowedByAHeadingOrTableRow_IsNotJoined()
+    {
+        // "#" opens a heading and "|" a table row, and joining either to the line above would
+        // destroy the structure the cutters use. Neither half is a known token, so neither is
+        // a candidate in the first place.
+        var heading = BuildCleaner().CleanPdf([Page(content: "einde van de\n\n## Artikel 3 Vergoedingen")]);
+        var table   = BuildCleaner().CleanPdf([Page(content: "einde van de\n\n| trede | bedrag |")]);
+
+        Assert.IsTrue(heading.Records[0].PageContent.Contains("\n\n## Artikel 3"));
+        Assert.IsTrue(table.Records[0].PageContent.Contains("\n\n| trede |"));
+    }
+
+    [TestMethod]
+    public void APunctuatedLineEnd_IsNotAFragment()
+    {
+        // A sentence that ended properly did not lose a word half.
+        const string text = "Dit is het einde.\n\nvervolg van de zin.";
+        var result = BuildCleaner().CleanPdf([Page(content: text)]);
+
+        Assert.AreEqual(text, result.Records[0].PageContent);
+        Assert.AreEqual(0, result.LineWrapsReflowed);
     }
 }

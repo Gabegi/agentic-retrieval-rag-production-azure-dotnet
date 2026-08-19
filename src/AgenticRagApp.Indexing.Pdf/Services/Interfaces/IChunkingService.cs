@@ -21,7 +21,7 @@ public interface IChunkingService
     // routing, heading location and the chunks), including when the stage throws - which is
     // why it needs instanceId/startedAt to name the blob. Both are optional: a caller outside
     // an orchestration gets the id-less path, same as StageReportPath's other callers.
-    Task<(IReadOnlyList<ChunkObject> Docs, ChunkingStageMetrics Stats)> ChunkDocumentsAsync(
+    Task<(IReadOnlyList<ChunkObject> Docs, ChunkingStageMetrics Stats, IReadOnlyList<FamilyMove> FamilyMoves)> ChunkDocumentsAsync(
         IReadOnlyList<PdfExtractionDocument> docs,
         string?                              instanceId = null,
         DateTimeOffset?                      startedAt  = null,

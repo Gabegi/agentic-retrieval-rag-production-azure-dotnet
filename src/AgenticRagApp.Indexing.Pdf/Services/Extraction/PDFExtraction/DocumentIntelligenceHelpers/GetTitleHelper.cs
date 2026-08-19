@@ -38,6 +38,15 @@ internal static class GetTitleHelper
     // merely contain a year ("CAO 2024 GHZ") out of it.
     private static readonly Regex LeadingJobNumber = new(@"^\d{6,}", RegexOptions.Compiled);
 
+    // A repeated trailing "(Versie N)": "Handleiding Medimo toedienregistratie (webversie)
+    // (Versie 2) (Versie 2)" - 45 chunks in the 260818 index. The doubling arrives IN the
+    // source (blob name or native Title): this class only ever selects between the two, it
+    // never concatenates, so the repair is a collapse rule here and a report to the Zenya
+    // export. Backreference, not a second wildcard - "(Versie 1) (Versie 2)" is not the
+    // artifact and is kept.
+    private static readonly Regex RepeatedVersionSuffix =
+        new(@"(\(Versie\s+\d+\))(?:\s*\1)+\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex WordPattern = new(@"[\p{L}\p{Nd}]+", RegexOptions.Compiled);
 
     public static string GetTitle(DocMetadata? nativeMetadata, string blobName)
@@ -51,9 +60,16 @@ internal static class GetTitleHelper
         // with no Title" both mean the same thing here, and both already have an answer.
         var title = nativeMetadata?.Title;
 
-        return string.IsNullOrWhiteSpace(title) || LooksLikeExportArtifact(title, fromFileName)
+        var chosen = string.IsNullOrWhiteSpace(title) || LooksLikeExportArtifact(title, fromFileName)
             ? fromFileName
             : title;
+
+        chosen = RepeatedVersionSuffix.Replace(chosen, "$1");
+
+        // Neither source has been through PdfCleaner, and this string becomes the first line
+        // of every chunk's embedded text, the title field, and the identity text - a
+        // decomposed diacritic here splits the document from its own body lexically.
+        return ExtractedTextRepair.Repair(chosen);
     }
 
     // True when the native Title looks like something an authoring tool left behind rather

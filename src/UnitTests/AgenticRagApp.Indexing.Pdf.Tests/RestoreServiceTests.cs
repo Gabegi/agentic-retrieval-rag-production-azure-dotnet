@@ -45,10 +45,56 @@ public class RestoreServiceTests
     private static Mock<IUploadService> MockUploadService(UploadResult? result = null)
     {
         var mock = new Mock<IUploadService>();
-        mock.Setup(m => m.UploadDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(result ?? new UploadResult(0, 0, 0, null, null, []));
+        mock.Setup(m => m.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(result ?? new UploadResult(0, 0, 0, 0, null, null, []));
         return mock;
     }
+
+    // SnapshotChunk has no optional parameters by design - the record's own comment says a
+    // field added to the index schema is added here in the same change, because the nine-field
+    // version of it is how a restore once rebuilt an index with no family_id and no domain_tag.
+    // These tests only care about id, document and hash, so the rest is filled in here rather
+    // than at three call sites that would have to be edited again on the next schema change.
+    private static SnapshotChunk Snapshot(string contentHash, string id = "id1", string documentId = "doc1.pdf") =>
+        new(Id:                 id,
+            DocumentId:         documentId,
+            Title:              "Title",
+            LastModifiedDate:   null,
+            Content:            "content",
+            HeadingText:        null,
+            PageStart:          0,
+            ChildIndex:         0,
+            ContentHash:        contentHash,
+            Prefix:             "",
+            SectionId:          null,
+            SectionIndex:       0,
+            Grain:              ChunkGrain.Child,
+            ParentText:         null,
+            HeadingPath:        null,
+            HeadingDepth:       0,
+            HeadingSource:      ChunkHeadingSource.None,
+            HeadingLocated:     false,
+            IsOverlap:          false,
+            PageEnd:            0,
+            PageExtractionFlag: false,
+            FamilyId:           null,
+            DomainTag:          null,
+            ConfusableWith:     [],
+            Population:         null,
+            Language:           null,
+            TokenCount:         0,
+            TableCount:         0,
+            FigureCaptions:     [],
+            CreatedAt:          null,
+            ModDate:            null,
+            PageCount:          null,
+            ValidFrom:          null,
+            ValidTo:            null,
+            Version:            null,
+            ZenyaDocumentId:    null,
+            ZenyaVersion:       null,
+            ZenyaStatus:        null,
+            ZenyaUrl:           null);
 
     private static RestoreService BuildService(
         Mock<ISnapshotService> snapshotService, Mock<IVectorCache> vectorCache, Mock<IUploadService> uploadService) =>
@@ -67,22 +113,23 @@ public class RestoreServiceTests
         Assert.AreEqual(0, result.ChunksRestored);
         Assert.IsNull(result.SnapshotInstanceId);
         uploadService.Verify(u => u.UploadDocumentsAsync(
-            It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [TestMethod]
     public async Task RestoreFromLatestSnapshotAsync_ChunksWithCachedVectors_AreUploadedWithVectorsAttached()
     {
-        var chunk = new SnapshotChunk("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash1");
+        var chunk = Snapshot("hash1");
         var snapshotService = MockSnapshotService([chunk], "instance-1");
         var vectorCache      = MockVectorCache(new() { ["hash1"] = [0.1f, 0.2f] });
-        var uploadService    = MockUploadService(new UploadResult(1, 0, 0, 42, 1024, []));
+        var uploadService    = MockUploadService(new UploadResult(1, 0, 0, 0, 42, 1024, []));
         var service          = BuildService(snapshotService, vectorCache, uploadService);
 
-        List<DocumentChunk>? uploaded = null;
-        uploadService.Setup(u => u.UploadDocumentsAsync(It.IsAny<IEnumerable<DocumentChunk>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<DocumentChunk>, IReadOnlyList<string>, CancellationToken>((docs, _, _) => uploaded = docs.ToList())
-            .ReturnsAsync(new UploadResult(1, 0, 0, 42, 1024, []));
+        List<ChunkObject>? uploaded = null;
+        uploadService.Setup(u => u.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChunkObject>, IReadOnlyList<string>, IReadOnlyList<FamilyMove>, CancellationToken>(
+                (docs, _, _, _) => uploaded = docs.ToList())
+            .ReturnsAsync(new UploadResult(1, 0, 0, 0, 42, 1024, []));
 
         var result = await service.RestoreFromLatestSnapshotAsync();
 
@@ -103,10 +150,10 @@ public class RestoreServiceTests
     [TestMethod]
     public async Task RestoreFromLatestSnapshotAsync_ChunkWithNoCachedVector_IsCountedAsMissingButStillUploaded()
     {
-        var chunk = new SnapshotChunk("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash-not-cached");
+        var chunk = Snapshot("hash-not-cached");
         var snapshotService = MockSnapshotService([chunk], "instance-1");
         var vectorCache      = MockVectorCache(); // empty - every lookup misses
-        var uploadService    = MockUploadService(new UploadResult(1, 0, 0, null, null, []));
+        var uploadService    = MockUploadService(new UploadResult(1, 0, 0, 0, null, null, []));
         var service          = BuildService(snapshotService, vectorCache, uploadService);
 
         var result = await service.RestoreFromLatestSnapshotAsync();
@@ -117,10 +164,10 @@ public class RestoreServiceTests
     [TestMethod]
     public async Task RestoreFromLatestSnapshotAsync_UploadReportsFailures_PropagatesChunksFailed()
     {
-        var chunk = new SnapshotChunk("id1", "doc1.pdf", "Title", null, "content", null, 0, 0, "hash1");
+        var chunk = Snapshot("hash1");
         var snapshotService = MockSnapshotService([chunk], "instance-1");
         var vectorCache      = MockVectorCache(new() { ["hash1"] = [0.1f, 0.2f] });
-        var uploadService    = MockUploadService(new UploadResult(0, 1, 0, 0, 0, []));
+        var uploadService    = MockUploadService(new UploadResult(0, 1, 0, 0, 0, 0, []));
         var service          = BuildService(snapshotService, vectorCache, uploadService);
 
         var result = await service.RestoreFromLatestSnapshotAsync();

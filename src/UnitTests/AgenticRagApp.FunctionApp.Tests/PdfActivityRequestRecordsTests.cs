@@ -31,10 +31,11 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfChunkRequest_Constructor_PropagatesAllFields()
     {
-        var request = new PdfChunkRequest("docs-blob", "chunks-blob", "instance-1", StartedAt);
+        var request = new PdfChunkRequest("docs-blob", "chunks-blob", "moves-blob", "instance-1", StartedAt);
 
         Assert.AreEqual("docs-blob", request.InputBlob);
         Assert.AreEqual("chunks-blob", request.OutputBlob);
+        Assert.AreEqual("moves-blob", request.FamilyMovesBlob);
         Assert.AreEqual("instance-1", request.InstanceId);
         Assert.AreEqual(StartedAt, request.StartedAt);
     }
@@ -42,8 +43,8 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfChunkRequest_RecordEquality_DifferentValues_AreNotEqual()
     {
-        var a = new PdfChunkRequest("docs-blob", "chunks-blob", "instance-1", StartedAt);
-        var b = new PdfChunkRequest("docs-blob", "chunks-blob", "instance-2", StartedAt);
+        var a = new PdfChunkRequest("docs-blob", "chunks-blob", "moves-blob", "instance-1", StartedAt);
+        var b = new PdfChunkRequest("docs-blob", "chunks-blob", "moves-blob", "instance-2", StartedAt);
 
         Assert.AreNotEqual(a, b);
     }
@@ -51,10 +52,11 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfEmbedUploadRequest_Constructor_PropagatesAllFields()
     {
-        var request = new PdfEmbedUploadRequest("chunks-blob", "stale-ids-blob", "instance-1", StartedAt);
+        var request = new PdfEmbedUploadRequest("chunks-blob", "stale-ids-blob", "moves-blob", "instance-1", StartedAt);
 
         Assert.AreEqual("chunks-blob", request.ChunksBlob);
         Assert.AreEqual("stale-ids-blob", request.StaleIdsBlob);
+        Assert.AreEqual("moves-blob", request.FamilyMovesBlob);
         Assert.AreEqual("instance-1", request.InstanceId);
         Assert.AreEqual(StartedAt, request.StartedAt);
     }

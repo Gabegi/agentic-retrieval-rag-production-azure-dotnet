@@ -169,8 +169,11 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     [JsonIgnore] public bool IsUndersized  => TokenEstimate < 20;
 
     // Sentence-boundary proxies - a coherent chunk starts and ends at natural boundaries.
+    // '|' counts as a clean end: a chunk closing on a complete table row ended at exactly the
+    // boundary TableCutter cut on, and without it every table chunk read as incoherent - 505
+    // of the 260818 run's 2,997 chunks, a fifth of the CoherentChunks shortfall.
     [JsonIgnore] public bool StartsClean => Content.Length > 0 && (char.IsUpper(Content[0]) || char.IsDigit(Content[0]));
-    [JsonIgnore] public bool EndsClean   => Content.Length > 0 && ".!?:)\"'".Contains(Content[^1]);
+    [JsonIgnore] public bool EndsClean   => Content.Length > 0 && ".!?:)\"'|".Contains(Content[^1]);
     [JsonIgnore] public bool IsCoherent  => StartsClean && EndsClean;
 
     // ── The structural index fields ─────────────────────────────────────────
@@ -216,6 +219,20 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     // That is what IdentityResolutionResult.FamilyMoves exists to signal.
     [JsonIgnore] public string ContentHash =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(EmbeddingText)));
+
+    // IChunkStatsSource.StatsText - the string ChunkingStageMetrics measures sizes and duplicates
+    // on. EmbeddingText, not Content, and the reason is on the interface: Content stopped being
+    // prefix + body, so leaving the stats on it would shift every band down by the prefix length
+    // and collapse two sections with identical bodies under different headings into a duplicate.
+    //
+    // IsCoherent above deliberately does NOT follow it. StartsClean/EndsClean ask whether the
+    // chunk begins and ends at sentence boundaries, and the prefix is a title line that always
+    // starts with a capital - measured on EmbeddingText, StartsClean would be true by
+    // construction, which is what it silently was before the split. On the bare body it asks the
+    // question it was written to ask. Expect CoherentChunks to drop against pre-refactor runs for
+    // that reason, and read the drop as the measurement being repaired rather than the chunker
+    // regressing.
+    [JsonIgnore] public string StatsText => EmbeddingText;
 }
 
 // Everything step 4 stamps onto a cut: what the DOCUMENT is (extracted once, copied onto every

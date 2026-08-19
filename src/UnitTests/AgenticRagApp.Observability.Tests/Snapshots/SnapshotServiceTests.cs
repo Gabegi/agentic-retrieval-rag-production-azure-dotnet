@@ -14,55 +14,6 @@ public class SnapshotServiceTests
     private static readonly DateTimeOffset StartedAt = new(2024, 3, 15, 0, 0, 0, TimeSpan.Zero);
     private const string PointerPath = "_latest-snapshot-pdf.json";
 
-    // Only the fields these tests actually assert on are constructor parameters. The rest of
-    // ISnapshotSource is satisfied with type defaults, because SnapshotService is being tested
-    // on pointer/diff behaviour - which fields a chunk carries is SnapshotChunk's contract, and
-    // it has its own tests. Kept as explicit members rather than left off so that ADDING a field
-    // to the interface breaks here loudly, which is exactly what the interface's own comment
-    // asks for.
-    private sealed record TestChunk(
-        string Id, string DocumentId, string? Title, DateTimeOffset? LastModifiedDate,
-        string Content, string? HeadingText, int PageStart, int ChildIndex, string ContentHash)
-        : ISnapshotSource
-    {
-        public string  Prefix             => "";
-        public string? SectionId          => null;
-        public int     SectionIndex       => 0;
-        public string  Grain              => "child";
-        public string? ParentText         => null;
-
-        public string? HeadingPath        => null;
-        public int     HeadingDepth       => 0;
-        public string? HeadingSource      => null;
-        public bool    HeadingLocated     => false;
-        public bool    IsOverlap          => false;
-
-        public int     PageEnd            => 0;
-        public bool    PageExtractionFlag => false;
-
-        public string?               FamilyId       => null;
-        public string?               DomainTag      => null;
-        public IReadOnlyList<string> ConfusableWith => [];
-        public string?               Population     => null;
-        public string?               Language       => null;
-
-        public int                   TokenCount     => 0;
-        public int                   TableCount     => 0;
-        public IReadOnlyList<string> FigureCaptions => [];
-
-        public DateTimeOffset? CreatedAt => null;
-        public DateTimeOffset? ModDate   => null;
-        public int?            PageCount => null;
-        public DateTimeOffset? ValidFrom => null;
-        public DateTimeOffset? ValidTo   => null;
-        public string?         Version   => null;
-
-        public string? ZenyaDocumentId => null;
-        public string? ZenyaVersion    => null;
-        public string? ZenyaStatus     => null;
-        public string? ZenyaUrl        => null;
-    }
-
     private static SnapshotService BuildService(Mock<IBlobStore> blobStore) =>
         new(blobStore.Object, new Mock<BlobContainerClient>().Object, NullLogger<SnapshotService>.Instance);
 
@@ -97,7 +48,7 @@ public class SnapshotServiceTests
     {
         var blobStore = new Mock<IBlobStore>();
         SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
-        var previousChunks = new List<SnapshotChunk> { new("old-id", "doc-untouched", "Old", null, "old content", null, 0, 0, "old-hash") };
+        var previousChunks = new List<SnapshotChunk> { TestChunk.Snapshot("old-id", "doc-untouched", "Old", "old content", "old-hash") };
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
                 It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(previousChunks);
@@ -124,8 +75,8 @@ public class SnapshotServiceTests
         SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
         var previousChunks = new List<SnapshotChunk>
         {
-            new("stale-id", "doc-stale", "Stale", null, "stale content", null, 0, 0, "stale-hash"),
-            new("keep-id", "doc-keep", "Keep", null, "keep content", null, 0, 0, "keep-hash"),
+            TestChunk.Snapshot("stale-id", "doc-stale", "Stale", "stale content", "stale-hash"),
+            TestChunk.Snapshot("keep-id", "doc-keep", "Keep", "keep content", "keep-hash"),
         };
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
                 It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
@@ -148,7 +99,7 @@ public class SnapshotServiceTests
     {
         var blobStore = new Mock<IBlobStore>();
         SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
-        var previousChunks = new List<SnapshotChunk> { new("stale-id", "Doc-Stale", "Stale", null, "stale content", null, 0, 0, "stale-hash") };
+        var previousChunks = new List<SnapshotChunk> { TestChunk.Snapshot("stale-id", "Doc-Stale", "Stale", "stale content", "stale-hash") };
         blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
                 It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
             .ReturnsAsync(previousChunks);

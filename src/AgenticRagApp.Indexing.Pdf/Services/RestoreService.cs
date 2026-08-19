@@ -126,7 +126,11 @@ public class RestoreService : IRestoreService
                 "{Missing} of {Total} restored chunk(s) had no cached vector — uploaded without content_vector, needs re-embedding on next incremental run.",
                 missingVector, chunks.Count);
 
-        var uploadResult = await _uploadService.UploadDocumentsAsync(chunks, staleDocumentIds: [], ct);
+        // No family moves on a restore: the snapshot already carries each chunk's family_id, so
+        // the rows go in correct rather than being patched afterwards. A restore rebuilds the
+        // index from a point in time; it does not re-run the clustering that produces a move.
+        var uploadResult = await _uploadService.UploadDocumentsAsync(
+            chunks, staleDocumentIds: [], familyMoves: [], ct);
 
         _logger.LogInformation(
             "Restore from snapshot '{InstanceId}' complete — {Restored} chunk(s) uploaded, {Failed} failed, {Missing} missing vectors.",

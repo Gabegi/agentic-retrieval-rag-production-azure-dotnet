@@ -12,10 +12,20 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 // (docs/2608/260812/action-plan.md B2), and the CSV pipeline is not wired into the
 // FunctionApp at all - no trigger, no DI registration.
 //
-// Fields whose producer does not exist yet (section_id, grain, population,
-// page_extraction_flag, ...) are still declared. That is deliberate: the schema is applied
-// as ONE migration rather than one per item that lands, because adding a field later means
-// another rebuild of the index.
+// Fields whose producer does not exist yet are still declared. That is deliberate: the schema
+// is applied as ONE migration rather than one per item that lands, because adding a field later
+// means another rebuild of the index. It is also why a producer-less field is not evidence of a
+// bug - reviewed on 260818 and kept, deliberately, against the alternative of dropping them and
+// paying for a second rebuild if a producer arrives (chunking-done.md §17 item 7).
+//
+// The list has shrunk since that rule was written, so it is named rather than left as "...":
+//   - population           - genuinely unproduced. A client-group axis (LVB/MVB), distinct from
+//                            domain_tag, and it needs a vocabulary nobody has settled yet.
+//   - grain                - stamped, but a constant "child": the parent/document grains it
+//                            distinguishes are not emitted by any route today.
+// section_id and page_extraction_flag were on this list and are no longer - both are produced by
+// ChunkMetadataBuilder. Anything added here should be removed from it the moment that changes,
+// or the comment starts excusing fields that have no excuse.
 public class IndexService : IIndexService
 {
     private readonly SearchIndexClient     _client;

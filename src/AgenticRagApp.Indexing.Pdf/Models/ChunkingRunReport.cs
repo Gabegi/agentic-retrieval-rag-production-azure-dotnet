@@ -1,3 +1,4 @@
+using AgenticRagApp.Indexing.Pdf.Services;
 using AgenticRagApp.Indexing.Pdf.Utils;
 using AgenticRagApp.Observability.Reports;
 
@@ -48,6 +49,13 @@ public sealed record DocumentOutcome(
     string?  Title,
 
     // "chunked"                 - produced at least one chunk
+    // "chunked_unanchored"      - produced chunks on the declared-boundary route while locating
+    //                             NONE of its declared headings, so the document was cut as one
+    //                             unnamed section. The chunks are real; the claim that they
+    //                             follow declared boundaries is not. Split out from "chunked"
+    //                             because the routing gate counts headings before location runs,
+    //                             which makes this case otherwise visible only by reading
+    //                             HeadingCount and HeadingsLocated together.
     // "zero_chunks"             - a strategy ran but emitted nothing (or only residue)
     // "failed"                  - the strategy threw on this document; the stage still fails,
     //                             but only after every document was processed and reported
@@ -70,6 +78,12 @@ public sealed record DocumentOutcome(
     // literal "£ £" chunk). Nonzero is normal on image-heavy documents; a document whose every
     // unit was residue reports outcome "zero_chunks" with the count in Reason.
     int      ResidueChunksDropped,
+
+    // Units the table-of-contents rule removed. Nonzero on any document with front matter and
+    // expected to be small; a document reporting a large count has had a real section mistaken
+    // for navigation, which is the failure worth looking for - see TocFilter's class note on
+    // why the rule is deliberately conservative.
+    int      TocChunksDropped,
 
     // Null on every outcome where identity was not resolved - which is itself the point: a
     // chunk with a null family_id got it from here.

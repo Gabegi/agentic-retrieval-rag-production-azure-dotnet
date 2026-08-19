@@ -27,6 +27,14 @@ public class PdfCleanResult
     public int InvisibleCharsStripped   { get; private set; }
     public int LigaturesExpanded        { get; private set; }
     public int HyphenationJoinsRepaired { get; private set; }
+    public int LineWrapsReflowed        { get; private set; }
+
+    // Numbered list markers rejoined to the clause they number, plus stray leading ". "
+    // fragments stripped - the two halves of one break, counted together because they repair
+    // the same defect from opposite sides. Baseline from the 260818 run: 111 orphaned markers
+    // and 53 stray periods in the retrieved corpus, so a run reporting ~0 here means the
+    // source stopped producing them, not that the pass stopped firing.
+    public int ListMarkersRejoined      { get; private set; }
 
     // A <table> whose shape ConvertTable couldn't parse (no rows, empty grid, zero
     // columns) - previously the whole block was deleted outright with no signal at all;
@@ -46,6 +54,8 @@ public class PdfCleanResult
         InvisibleCharsStripped   += counts.InvisibleChars;
         LigaturesExpanded        += counts.Ligatures;
         HyphenationJoinsRepaired += counts.HyphenJoins;
+        LineWrapsReflowed        += counts.LineWrapJoins;
+        ListMarkersRejoined      += counts.ListMarkerJoins;
     }
 
     // Folds another file's PdfCleanResult (produced by cleaning that one file's pages in
@@ -63,9 +73,13 @@ public class PdfCleanResult
         InvisibleCharsStripped    += other.InvisibleCharsStripped;
         LigaturesExpanded         += other.LigaturesExpanded;
         HyphenationJoinsRepaired  += other.HyphenationJoinsRepaired;
+        LineWrapsReflowed         += other.LineWrapsReflowed;
+        ListMarkersRejoined       += other.ListMarkersRejoined;
         TableConversionFallbacks  += other.TableConversionFallbacks;
     }
 }
 
 // One page's transform counts, before they're summed into PdfCleanResult's run-level totals.
-public readonly record struct PdfCleaningCounts(int ControlChars, int InvisibleChars, int Ligatures, int HyphenJoins);
+public readonly record struct PdfCleaningCounts(
+    int ControlChars, int InvisibleChars, int Ligatures, int HyphenJoins, int LineWrapJoins,
+    int ListMarkerJoins);

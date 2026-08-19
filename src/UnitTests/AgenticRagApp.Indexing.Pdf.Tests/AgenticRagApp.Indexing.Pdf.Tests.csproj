@@ -15,4 +15,13 @@
   <ItemGroup>
     <ProjectReference Include="..\..\AgenticRagApp.Indexing.Pdf\AgenticRagApp.Indexing.Pdf.csproj" />
   </ItemGroup>
+  <!--
+    Extraction output for two of the four validation documents, copied from
+    docs/2608/260810/validation/ so CorpusRegressionTests can assert against real headings rather
+    than synthetic ones. Small on purpose: these are the heading lists (109 KB), not the
+    ~132 MB of raw page JSON the same folder holds.
+  -->
+  <ItemGroup>
+    <Content Include="CorpusData\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

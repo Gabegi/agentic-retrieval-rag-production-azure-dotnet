@@ -96,8 +96,11 @@ public class CsvChunkingService : ICsvChunkingService
 
         // Per-chunk histogram — preserves the real distribution in App Insights,
         // not just the aggregates already in ChunkingStageMetrics.
+        // StatsText, not Content, so this histogram and the bands below (computed by
+        // ChunkingStageMetrics on the same property) describe the same string. See
+        // IChunkStatsSource.StatsText.
         foreach (var chunk in chunks)
-            Instrumentation.ChunkSizeChars.Record(chunk.Content.Length, strategyTag);
+            Instrumentation.ChunkSizeChars.Record(chunk.StatsText.Length, strategyTag);
 
         Instrumentation.ChunkSizeBand.Add(stats.BandUnder100,  strategyTag, new("band", "under_100"));
         Instrumentation.ChunkSizeBand.Add(stats.Band100To500,  strategyTag, new("band", "100_to_500"));

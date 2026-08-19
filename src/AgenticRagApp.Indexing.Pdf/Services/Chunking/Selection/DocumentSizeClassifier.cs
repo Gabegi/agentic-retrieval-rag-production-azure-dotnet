@@ -2,6 +2,26 @@ using AgenticRagApp.Indexing.Pdf.Models;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
 
+// Size class, from the routing measurements (docs/2608/260811/chunking-signals-map.md).
+// Picture is decided on density/extraction loss, the other three on estimated tokens.
+//
+// It lives beside the classifier that produces it, rather than with the routing decision record
+// it used to share a file with: that record and the four-way strategy vocabulary around it are
+// gone, and this is the only surviving member of that group. Nothing routes on the class any
+// more - the gate reads the token count directly - so what remains is a REPORTED signal, read by
+// the metadata stamp and the run report's per-document row.
+public enum DocumentSizeClass
+{
+    // charsPerPage < 1,000 OR bytesPerChar >= 100 - the content likely lives in images.
+    Picture,
+    // >= 50,000 estimated tokens. Sits in a real corpus gap (~25.1k -> ~90.9k, nothing between).
+    Large,
+    // >= 4,000 estimated tokens. This line is reasoned, not measured - see Phase D.
+    Medium,
+    // Below 4,000: small enough that returning the whole document costs about one chunk.
+    Small,
+}
+
 // Step 1 of DetermineStrategy: which size class is this document?
 //
 // Picture is read off the profile's own HasExtractableContent (computed at extraction from

@@ -5,6 +5,10 @@ public record EmbedUploadStageMetrics(
     int   DocsFailed,
     // Orphaned chunks cleaned up after upload succeeded - see UploadService.UploadDocumentsAsync.
     int   ChunksRemoved,
+    // Existing indexed chunks whose family_id was rewritten in place because OTHER documents'
+    // clustering re-homed their document (UploadService.PatchMovedFamiliesAsync). Absent from
+    // reports before 2026-08-19; older runs read back as 0.
+    int   ChunkFamiliesPatched,
     int   ChunksTruncated,
     int   EmbeddingRetries,
     int   VectorDimErrors,

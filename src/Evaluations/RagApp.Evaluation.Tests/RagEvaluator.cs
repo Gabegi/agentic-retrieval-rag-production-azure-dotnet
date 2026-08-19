@@ -183,6 +183,13 @@ public sealed class RagEvaluator
             Retrieval: retrievalResult.Get<NumericMetric>(RetrievalEvaluator.RetrievalMetricName)?.Value ?? 0,
             F1:        f1,
             CitationMatch: ComputeCitationMatch(testQuery.ExpectedSources, result.Citations),
+            // Deterministic, not a judge: a figure in the answer that appears nowhere in the
+            // retrieved context is model memory wearing this context's citations. The 260818
+            // run's "8,33% vakantietoeslag" rows scored Equivalence 5 while carrying exactly
+            // this defect - which is why it gets its own column instead of hiding in
+            // Groundedness.
+            UngroundedNumbers: AgenticRagApp.Querying.Guards.NumericGroundingGuard
+                .FindUngrounded(result.Answer, result.RetrievedContext).Count,
             RefusalScore:    -1,
             RefusalRationale: "",
             Timestamp:    DateTimeOffset.UtcNow);
@@ -233,6 +240,7 @@ public sealed class RagEvaluator
             Retrieval:    -1,
             F1:           -1,
             CitationMatch: -1,
+            UngroundedNumbers: -1,
             RefusalScore: refusalScore,
             RefusalRationale: refusalRationale,
             Timestamp:    DateTimeOffset.UtcNow);

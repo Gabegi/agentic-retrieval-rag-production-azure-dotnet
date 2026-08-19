@@ -43,6 +43,7 @@ public static class DocumentRowBuilder
             // and a route-derived answer would be an invention rather than a measurement.
             FailedExtractionGate:  doc.Profile is { HasExtractableContent: false },
             ResidueChunksDropped:  facts?.ResidueDropped ?? 0,
+            TocChunksDropped:      facts?.TocDropped     ?? 0,
 
             FamilyId:              family?.FamilyId,
             IsInMultiMemberFamily: isInMultiMemberFamily,
@@ -66,7 +67,7 @@ public static class DocumentRowBuilder
             SectionCount:          chunks.Select(c => c.SectionIndex).Distinct().Count(),
             TokenP50:              Percentile(tokens, 0.50),
             TokenP99:              Percentile(tokens, 0.99),
-            ChunksAboveCeiling:    tokens.Count(t => t > SectionSplitter.DefaultTokenCeiling),
+            ChunksAboveCeiling:    tokens.Count(t => t > ChunkingBudget.TokenCeiling),
             ShortChunks:           tokens.Count(t => t < ShortChunkTokens),
             DegradedChunks:        chunks.Count(c => c.Degraded),
 

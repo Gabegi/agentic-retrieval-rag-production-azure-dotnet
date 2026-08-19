@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using AgenticRagApp.Indexing.Pdf.Models;
@@ -227,5 +228,133 @@ public class PdfDocumentValidatorTests
         Assert.IsNotNull(error);
         Assert.AreEqual(1, diagnostics.Errors.Count);
         Assert.AreSame(error, diagnostics.Errors[0]);
+    }
+
+    // ── the Debug-enabled logging paths ──────────────────────────────────────
+    //
+    // Every rejection and warning above also emits a log line, but only when Debug logging is
+    // on - development only, so per-file rejection detail never adds to Production log volume.
+    // Under NullLogger (IsEnabled false) none of those lines run at all, which leaves the
+    // formatting of the more elaborate ones - the MB and percentage conversions - never
+    // executed anywhere. These re-run the same scenarios with Debug on, and assert that the
+    // OUTCOME is unchanged: logging is diagnostics, never load-bearing.
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        // The gate the validator checks. True here is the whole point of this double.
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_EmptyFile_LogsAndStillFailsTheSameWay()
+    {
+        var logger = new RecordingLogger();
+
+        var ok = PdfDocumentValidator.IsPDFValid([], "doc.pdf", logger, out _, out var error, out _);
+
+        Assert.IsFalse(ok);
+        Assert.AreEqual(PdfOpenFailureReason.EmptyFile, error!.Reason);
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("0 bytes")));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_TooLargeFile_FormatsTheSizeInMegabytes()
+    {
+        // The rejection message and the log line each do their own MB conversion; the log
+        // one had never been executed by a test.
+        var logger = new RecordingLogger();
+        var bytes  = new byte[PdfDocumentValidator.MaxBytes + 1];
+
+        var ok = PdfDocumentValidator.IsPDFValid(bytes, "doc.pdf", logger, out _, out var error, out _);
+
+        Assert.IsFalse(ok);
+        Assert.AreEqual(PdfOpenFailureReason.TooLarge, error!.Reason);
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("500 MB")));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_NearLimitSize_LogsThePercentageOfTheLimit()
+    {
+        var logger = new RecordingLogger();
+        var bytes  = new byte[(long)(PdfDocumentValidator.MaxBytes * 0.81)];
+
+        PdfDocumentValidator.IsPDFValid(bytes, "doc.pdf", logger, out _, out _, out var diagnostics);
+
+        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("MB")));
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("80 %") || m.Contains("80%")));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_SmallFile_LogsThePlaceholderWarning()
+    {
+        var logger = new RecordingLogger();
+
+        PdfDocumentValidator.IsPDFValid(new byte[64], "doc.pdf", logger, out _, out _, out var diagnostics);
+
+        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("byte(s)")));
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("64 byte(s)")));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_UnopenableFile_LogsTheOpenFailure()
+    {
+        // Garbage of a reasonable size: past the size gates, straight into the open attempt.
+        var logger = new RecordingLogger();
+        var bytes  = new byte[20 * 1024];
+
+        var ok = PdfDocumentValidator.IsPDFValid(bytes, "doc.pdf", logger, out _, out var error, out _);
+
+        Assert.IsFalse(ok);
+        Assert.IsNotNull(error);
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("doc.pdf")));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_ValidPdf_LogsTheOpenAndSucceedsUnchanged()
+    {
+        var logger = new RecordingLogger();
+
+        var ok = PdfDocumentValidator.IsPDFValid(BuildMinimalPdf(), "doc.pdf", logger, out var pdf, out var error, out var diagnostics);
+
+        Assert.IsTrue(ok);
+        Assert.IsNull(error);
+        Assert.AreEqual(0, diagnostics.Errors.Count);
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("Opened PDF")));
+        pdf!.Dispose();
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_PageCountOverLimit_LogsTheRejection()
+    {
+        var logger = new RecordingLogger();
+
+        var ok = PdfDocumentValidator.IsPDFValid(
+            BuildMinimalPdf(pageCount: PdfDocumentValidator.MaxPages + 1), "doc.pdf", logger, out _, out var error, out _);
+
+        Assert.IsFalse(ok);
+        Assert.AreEqual(PdfOpenFailureReason.TooManyPages, error!.Reason);
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains("2001")));
+    }
+
+    [TestMethod]
+    public void DebugLoggingOn_PageCountNearLimit_LogsTheWarningAndStillSucceeds()
+    {
+        var logger = new RecordingLogger();
+        var pages  = (int)(PdfDocumentValidator.MaxPages * 0.9);
+
+        var ok = PdfDocumentValidator.IsPDFValid(
+            BuildMinimalPdf(pageCount: pages), "doc.pdf", logger, out var pdf, out _, out var diagnostics);
+
+        Assert.IsTrue(ok);
+        Assert.IsTrue(diagnostics.Warnings.Any(w => w.Message.Contains("pages")));
+        Assert.IsTrue(logger.Messages.Any(m => m.Contains(pages.ToString())));
+        pdf!.Dispose();
     }
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.Pdf.Models;
+using AgenticRagApp.Indexing.Pdf.Utils;
 using AgenticRagApp.Observability;
 
 namespace AgenticRagApp.Indexing.Pdf.Services;
@@ -16,7 +17,13 @@ public class EmbeddingService : IEmbeddingService
 
     private const int MaxParallelism = 4;
     private const int BatchSize = 100;    // one request per batch instead of one per chunk
+    // A cheap pre-filter in the wrong unit - see EmbedBatchAsync. Kept because it costs a length
+    // check where the token count costs a tokenizer pass, and it catches the pathological case
+    // before that pass runs.
     private const int TruncationLimit = 24_000;
+
+    // text-embedding-3-large's per-input limit. The real one, in the unit the model counts in.
+    private const int MaxInputTokens = 8_191;
 
     // Cache reads/writes are just blob GETs/PUTs, not paid API calls - bounded concurrency
     // keeps them off the critical path without hammering the container. Same knob shape as
@@ -119,6 +126,15 @@ public class EmbeddingService : IEmbeddingService
             for (int i = 0; i < batch.Count; i++)
             {
                 var text = batch[i].EmbeddingText;
+
+                // Two guards, and only the second one measures the limit that actually exists.
+                //
+                // The character cut is a cheap pre-filter, not the rule: the model's limit is in
+                // TOKENS, and chars-per-token is not a constant. Prose runs 3.10-3.28 chars/token
+                // and table markdown 1.88-2.79 (TokenCounter's own measurements), so 24,000 chars
+                // is ~7,300 tokens of prose but ~12,700 of table - the second is over the limit
+                // and would have been truncated by the API instead of by us, silently, with the
+                // count reported as untruncated.
                 if (text.Length > TruncationLimit)
                 {
                     _logger.LogWarning("Truncating oversized chunk {Id} ({Length} chars)", batch[i].Id, text.Length);
@@ -126,6 +142,40 @@ public class EmbeddingService : IEmbeddingService
                     truncated[i] = true;
                     Instrumentation.ChunksTruncated.Add(1);
                 }
+
+                // The real count, on whatever survived the character cut - but only measured
+                // when the text could possibly breach it: a BPE token consumes at least one
+                // character, so length <= MaxInputTokens proves tokens <= MaxInputTokens
+                // without a tokenizer pass. That keeps the pre-filter design honest (ordinary
+                // ~512-token chunks never pay for counting) while staying exact - nothing that
+                // could exceed the limit skips the count. This is the last point before the
+                // text leaves for the API, and truncation past here is invisible.
+                if (text.Length > MaxInputTokens)
+                {
+                    var tokens = TokenCounter.Count(text);
+                    if (tokens > MaxInputTokens)
+                    {
+                        _logger.LogWarning(
+                            "Chunk {Id} is {Tokens} tokens, over the {Limit}-token embedding input limit, in {Chars} chars — truncating on a token boundary",
+                            batch[i].Id, tokens, MaxInputTokens, text.Length);
+
+                        // Cut proportionally and re-measure rather than binary-searching the exact
+                        // boundary: overshooting costs a few tokens of a chunk that should not exist,
+                        // and a loop here would be complexity paid for a case measured at zero.
+                        var keep = (int)(text.Length * (MaxInputTokens / (double)tokens));
+                        while (keep > 0 && TokenCounter.Count(text[..keep]) > MaxInputTokens)
+                            keep -= Math.Max(keep / 20, 1);
+
+                        text = text[..Math.Max(keep, 0)];
+
+                        if (!truncated[i])
+                        {
+                            truncated[i] = true;
+                            Instrumentation.ChunksTruncated.Add(1);
+                        }
+                    }
+                }
+
                 texts[i] = text;
             }
 

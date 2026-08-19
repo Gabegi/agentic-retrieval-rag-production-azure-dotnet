@@ -60,6 +60,12 @@ public class AgenticRagQueryService : IRagQueryService
     {
         var sw = Stopwatch.StartNew();
 
+        // The index is NFC throughout (PdfCleaner normalizes bodies; ExtractedTextRepair
+        // covers titles and headings), so the question must be too - a user typing a
+        // decomposed "ë" (common from macOS keyboards) would otherwise miss every lexical
+        // match on the very term they typed.
+        question = question.Normalize(System.Text.NormalizationForm.FormC);
+
         // Criterion 5, question side. Must run before the retrieve call, otherwise the PII
         // has already left the process.
         // NOTE: under GuardsLogOnly this no longer stops the question being sent, so PII in a
@@ -168,6 +174,17 @@ public class AgenticRagQueryService : IRagQueryService
         // sources for a suppressed answer.
         if (await _piiGuard.ContainsPiiAsync(answer, ct) && Enforce("pii", "answer"))
             return Blocked(PiiFallback, "blocked_pii", CategoryPrivacy, sw.ElapsedMilliseconds, chunks.Count);
+
+        // Numeric grounding: a figure in the answer that appears in none of the retrieved
+        // chunks is a claim from model memory wearing this context's citations (the 260818
+        // eval's "8,33% vakantietoeslag" case - correct number, fabricated attribution).
+        // Log-only by design: excising sentences from Dutch prose breaks the answer, and the
+        // eval records the same measurement per scenario so the class fails a run visibly.
+        var ungrounded = NumericGroundingGuard.FindUngrounded(answer, string.Join("\n", chunks));
+        if (ungrounded.Count > 0)
+            _logger.LogWarning(
+                "Answer asserts {Count} number(s) absent from the retrieved context: {Numbers}",
+                ungrounded.Count, string.Join(", ", ungrounded));
 
         var (inputTokens, outputTokens) = KnowledgeBaseActivitySummary.SumTokens(result.Activity);
         var retrievedContext = string.Join("\n\n---\n\n", chunks);

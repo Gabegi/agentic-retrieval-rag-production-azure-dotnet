@@ -44,7 +44,7 @@ public class ChunkingServiceTests
     // without a blob store. Null resolver means "use the default", so a test can substitute
     // one that throws.
     private static (ChunkingService Service, List<ChunkingRunReport> Reports) BuildWithReports(
-        int tokenCeiling = SectionSplitter.DefaultTokenCeiling,
+        int tokenCeiling = ChunkingBudget.TokenCeiling,
         DocumentIdentityResolver? resolver = null)
     {
         var reports = new List<ChunkingRunReport>();
@@ -60,7 +60,7 @@ public class ChunkingServiceTests
         return (service, reports);
     }
 
-    private static ChunkingService BuildService(int tokenCeiling = SectionSplitter.DefaultTokenCeiling)
+    private static ChunkingService BuildService(int tokenCeiling = ChunkingBudget.TokenCeiling)
     {
         return BuildChunkingService(
             tokenCeiling, BuildDocumentIdentityResolver(),
@@ -77,8 +77,12 @@ public class ChunkingServiceTests
         IPipelineArtifactWriter  writer) =>
         new(new DeclaredBoundaryStrategy(),
             new RecursiveStrategy(),
-            resolver, writer,
-            NullLogger<ChunkingService>.Instance);
+            resolver,
+            new ChunkMetadataBuilder(),
+            // Step 5 owns the writer now - the service never touches it. Built here rather than
+            // mocked so these tests exercise the real row assembly, which is what the report
+            // assertions below are actually about.
+            new ChunkingReporter(writer, NullLogger<ChunkingReporter>.Instance));
 
     private static PdfExtractionDocument Doc(
         string sourceId, string content,
@@ -151,7 +155,7 @@ public class ChunkingServiceTests
     {
         // The page number used to be in the key, so inserting one page shifted the id of every
         // chunk after it - and an id change is a delete-plus-insert in the index, not an update.
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "content", page: 7)]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "content", page: 7)]);
 
         Assert.AreEqual(ChunkingHelper.SafeKey("doc1::s0", 0), docs[0].Id);
     }
@@ -162,7 +166,7 @@ public class ChunkingServiceTests
         // There is no parent row for section_id to point at - parent text is materialized onto
         // each child instead. It is a grouping key, so what matters is that siblings agree.
         var body = string.Join(" ", Enumerable.Repeat("woord", 400));
-        var (docs, _) = await BuildService(tokenCeiling: 60).ChunkDocumentsAsync([Doc("doc1", body)]);
+        var (docs, _, _) = await BuildService(tokenCeiling: 60).ChunkDocumentsAsync([Doc("doc1", body)]);
 
         Assert.IsTrue(docs.Count > 1, "expected the section to be split");
         Assert.AreEqual(1, docs.Select(d => d.SectionId).Distinct().Count());
@@ -172,7 +176,7 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task EveryUnitIsAChild_UntilParentsAreIndexedSeparately()
     {
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "content")]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "content")]);
 
         Assert.AreEqual(ChunkGrain.Child, docs[0].Grain);
     }
@@ -185,7 +189,7 @@ public class ChunkingServiceTests
         var content = "Eerste kop\n\nBody one.\n\nTweede kop\n\nBody two.";
         var doc     = Doc("doc1", content, headings: [H("Eerste kop", 0), H("Tweede kop", 25)]);
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual(2, docs.Count);
         CollectionAssert.AreEqual(new[] { 0, 1 }, docs.Select(d => d.SectionIndex).ToArray());
@@ -195,14 +199,19 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task ContentBeforeTheFirstHeading_BecomesItsOwnSection()
     {
+        // The profile is not decoration here: with ONE heading, the gate's first clause (>= 2
+        // headings) fails, so the document reaches route 1 only through the small-document
+        // clause - and a null profile deliberately does not take it, because null < int is
+        // false and a missing measurement must never be read as "small".
         var content = "Cover text.\n\nHoofdstuk 1\n\nBody.";
-        var doc     = Doc("doc1", content, headings: [H("Hoofdstuk 1", 0)]);
+        var doc     = Doc("doc1", content, headings: [H("Hoofdstuk 1", 0)], profile: Profile(hasContent: true));
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual(2, docs.Count);
         Assert.IsNull(docs[0].HeadingText);
         Assert.AreEqual(ChunkHeadingSource.None, docs[0].HeadingSource);
+        Assert.IsFalse(docs[0].HeadingLocated, "a preamble is a real section with no heading, not a located one");
     }
 
     [TestMethod]
@@ -210,7 +219,7 @@ public class ChunkingServiceTests
     {
         // Branch 5 of the cascade. It has no route of its own precisely so that it cannot be
         // forgotten - it is the normal path with zero located headings.
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "Just prose, no headings.")]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "Just prose, no headings.")]);
 
         Assert.AreEqual(1, docs.Count);
         Assert.IsNull(docs[0].HeadingText);
@@ -224,21 +233,31 @@ public class ChunkingServiceTests
         // The child IS the section here, so a copy would be byte-for-byte identical to
         // Content. Phase A measured 83-87% of sections as never split, so storing it
         // unconditionally would roughly double the corpus's stored text to say nothing.
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "Short body.")]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "Short body.")]);
 
         Assert.IsNull(docs[0].ParentText);
     }
 
     [TestMethod]
-    public async Task ParentText_IsTheWholeSection_WhenItWasSplit()
+    public async Task ASplitSection_IdentifiesItsParentByIdAndOrdinals_NotByACopyOfItsText()
     {
+        // ParentText has NO producer under the two-strategy design - draft §5.5 replaced the
+        // materialized parent with parent_id plus ordinals and a structural window that slices
+        // the source at query time. The field survives only so a snapshot written before that
+        // change still round-trips, which is why this asserts it stays null rather than
+        // asserting it is filled.
         var body = string.Join(" ", Enumerable.Repeat("woord", 400));
-        var (docs, _) = await BuildService(tokenCeiling: 60).ChunkDocumentsAsync([Doc("doc1", body)]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", body)]);
 
-        Assert.IsTrue(docs.Count > 1);
-        Assert.IsTrue(docs.All(d => d.ParentText is not null));
-        Assert.AreEqual(1, docs.Select(d => d.ParentText).Distinct().Count());
-        Assert.IsTrue(docs[0].ParentText!.Length > docs[0].Content.Length);
+        Assert.IsTrue(docs.Count > 1, "the body has to exceed the ceiling for there to be a split at all");
+        Assert.IsTrue(docs.All(d => d.ParentText is null));
+
+        // What replaced it: one SectionId shared by every child, and ordinals that place each
+        // child inside it.
+        Assert.AreEqual(1, docs.Select(d => d.SectionId).Distinct().Count());
+        CollectionAssert.AreEqual(
+            Enumerable.Range(0, docs.Count).ToArray(),
+            docs.Select(d => d.ChildIndex).ToArray());
     }
 
     // ── the embedded prefix ──────────────────────────────────────────────────
@@ -246,16 +265,21 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task Title_IsPrependedToTheEmbeddedText()
     {
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body text", title: "My Title")]);
+        // The prefix rides in EmbeddingText, not in Content. Content is the BARE BODY so that
+        // Content == doc.Content[Start..(Start + Length)] stays assertable - page attribution,
+        // the snapshot round-trip and the minimum-content rule all read that invariant.
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body text", title: "My Title")]);
 
-        Assert.IsTrue(docs[0].Content.StartsWith("My Title", StringComparison.Ordinal));
-        Assert.IsTrue(docs[0].Content.EndsWith("body text", StringComparison.Ordinal));
+        Assert.AreEqual("body text", docs[0].Content);
+        Assert.AreEqual("My Title", docs[0].Prefix);
+        Assert.IsTrue(docs[0].EmbeddingText.StartsWith("My Title", StringComparison.Ordinal));
+        Assert.IsTrue(docs[0].EmbeddingText.EndsWith("body text", StringComparison.Ordinal));
     }
 
     [TestMethod]
     public async Task NoTitleOrHeading_LeavesTheBodyUnprefixed()
     {
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body text")]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body text")]);
 
         Assert.AreEqual("body text", docs[0].Content);
     }
@@ -263,12 +287,16 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task HeadingPath_IsPrependedAfterTheTitle()
     {
+        // Route 1 only - there is no heading path on the recursive route - so the profile is
+        // what gets this single-heading document onto that route at all.
         var content = "Hoofdstuk 1\n\nBody.";
-        var doc     = Doc("doc1", content, title: "Doc", headings: [H("Hoofdstuk 1", 0)]);
+        var doc     = Doc("doc1", content, title: "Doc", headings: [H("Hoofdstuk 1", 0)],
+                          profile: Profile(hasContent: true));
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
-        Assert.IsTrue(docs[0].Content.StartsWith("Doc\n\nHoofdstuk 1", StringComparison.Ordinal));
+        Assert.IsTrue(docs[0].EmbeddingText.StartsWith("Doc\n\nHoofdstuk 1", StringComparison.Ordinal));
+        Assert.IsFalse(docs[0].Content.StartsWith("Doc", StringComparison.Ordinal), "the body is not prefixed in place");
     }
 
     [TestMethod]
@@ -278,10 +306,13 @@ public class ChunkingServiceTests
         // similarity score can flag. The filter is the deterministic fix; putting the tag in
         // the embedded text as well pushes the signal into the vector. It has to be in from
         // the first build - adding it later changes every vector.
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", title: "CAO GGZ 2025")]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", title: "CAO GGZ 2025")]);
 
         Assert.AreEqual("GGZ", docs[0].DomainTag);
-        Assert.IsTrue(docs[0].Content.Contains("[GGZ]", StringComparison.Ordinal));
+        Assert.IsTrue(docs[0].EmbeddingText.Contains("[GGZ]", StringComparison.Ordinal),
+            "in the vector as well as in the filterable field - the tag is priced into the prefix before the cut");
+        Assert.IsFalse(docs[0].Content.Contains("[GGZ]", StringComparison.Ordinal),
+            "but not written into the body, which stays a slice of the source");
     }
 
     // ── pages ────────────────────────────────────────────────────────────────
@@ -289,7 +320,7 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task PageStartAndEnd_ComeFromThePageMap()
     {
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "content", page: 5)]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "content", page: 5)]);
 
         Assert.AreEqual(5, docs[0].PageStart);
         Assert.AreEqual(5, docs[0].PageEnd);
@@ -310,7 +341,7 @@ public class ChunkingServiceTests
             ],
         };
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual(1, docs[0].PageStart);
         Assert.AreEqual(2, docs[0].PageEnd);
@@ -324,7 +355,7 @@ public class ChunkingServiceTests
             PageSpans = [new PageSpan(1, 0, 4, null, IsPictureOnly: true)],
         };
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
         Assert.IsTrue(docs[0].PageExtractionFlag);
     }
@@ -338,7 +369,7 @@ public class ChunkingServiceTests
         // literal "£ £" 30-character chunk). Emitting those is worse than emitting nothing.
         var doc = Doc("doc1", "£ £", profile: Profile(hasContent: false));
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
         Assert.AreEqual(0, docs.Count);
     }
@@ -347,7 +378,7 @@ public class ChunkingServiceTests
     public async Task NoProfileComputed_IsTreatedAsHavingContent()
     {
         // A missing measurement must never silently drop a document.
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", profile: null)]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", profile: null)]);
 
         Assert.AreEqual(1, docs.Count);
     }
@@ -367,12 +398,12 @@ public class ChunkingServiceTests
             language: "nl",
             tables: [new TableInfo(2, 3, [], null, 1, null, [], [])]);
 
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
         var chunk = docs[0];
 
         Assert.AreEqual("doc1", chunk.DocumentId);
         Assert.AreEqual("T",    chunk.Title);
-        Assert.AreEqual("mherbst", chunk.Author);
+        Assert.AreEqual("mherbst", chunk.Metadata.Author);
         Assert.AreEqual(created, chunk.CreatedAt);
         Assert.AreEqual(mod,     chunk.ModDate);
         Assert.AreEqual(last,    chunk.LastModifiedDate);
@@ -383,20 +414,36 @@ public class ChunkingServiceTests
         Assert.AreEqual("https://z", chunk.ZenyaUrl);
         Assert.AreEqual("nl",    chunk.Language);
         Assert.AreEqual(1,       chunk.TableCount);
-        Assert.IsTrue(chunk.HasTable);
+
+        // TableCount and HasTable answer DIFFERENT questions, deliberately. TableCount is
+        // page-scoped - extraction found a table on the pages this cut covers - and is stamped
+        // in step 4. HasTable is computed from Content and asks whether THIS chunk contains
+        // one, which is the narrower claim that survives a restore. A prose chunk sharing a
+        // page with a table has TableCount 1 and HasTable false, and that is not a
+        // disagreement.
+        Assert.IsFalse(chunk.HasTable, "the body carries no markdown table of its own");
     }
 
     [TestMethod]
     public async Task TokenCount_IsTheRealCountOverTheEmbeddedText()
     {
-        var (docs, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body text", title: "My Title")]);
+        // Over the EMBEDDED text - prefix included - not over Content. That is the number the
+        // 512-token ceiling governs, and counting the body alone would understate every chunk
+        // by the cost of its own prefix.
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body text", title: "My Title")]);
 
-        Assert.AreEqual(TokenCounter.Count(docs[0].Content), docs[0].TokenCount);
+        Assert.AreEqual(TokenCounter.Count(docs[0].EmbeddingText), docs[0].TokenCount);
+        Assert.AreNotEqual(TokenCounter.Count(docs[0].Content), docs[0].TokenCount);
     }
 
     [TestMethod]
-    public async Task DocumentsAreOrderedBySourceId()
+    public async Task ChunksComeBackInInputDocumentOrder()
     {
+        // The chunk list preserves the order the documents arrived in - the loop never sorts,
+        // and a caller that needs a stable order across runs is looking at the run REPORT,
+        // whose rows are ordered by SourceId (see ChunkingReporterTests). Asserting a sorted
+        // chunk list here asserted an ordering nothing produces.
+        //
         // Bodies have to clear the minimum-content rule, or every unit is dropped as vector
         // residue and there is nothing left to assert an order on.
         var docs = new[]
@@ -406,17 +453,17 @@ public class ChunkingServiceTests
             Doc("docB", "Body of the second document."),
         };
 
-        var (result, _) = await BuildService().ChunkDocumentsAsync(docs);
+        var (result, _, _) = await BuildService().ChunkDocumentsAsync(docs);
 
         CollectionAssert.AreEqual(
-            new[] { "Body of the first document.", "Body of the second document.", "Body of the third document." },
+            new[] { "Body of the third document.", "Body of the first document.", "Body of the second document." },
             result.Select(d => d.Content).ToList());
     }
 
     [TestMethod]
     public async Task NoDocuments_ReturnsEmpty()
     {
-        var (docs, stats) = await BuildService().ChunkDocumentsAsync([]);
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync([]);
 
         Assert.AreEqual(0, docs.Count);
         Assert.AreEqual(0, stats.ChunksProduced);
@@ -425,7 +472,7 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task StatsCarryTheStrategyNameAndChunkCount()
     {
-        var (docs, stats) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body")]);
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body")]);
 
         Assert.AreEqual("TwoAxisChunking", stats.Strategy);
         Assert.AreEqual(docs.Count, stats.ChunksProduced);
@@ -479,7 +526,7 @@ public class ChunkingServiceTests
         var (service, reports) = BuildWithReports();
         var doc = Doc("gated", "body", profile: Profile(hasContent: false));
 
-        var (chunks, _) = await service.ChunkDocumentsAsync([doc], "instance-1");
+        var (chunks, _, _) = await service.ChunkDocumentsAsync([doc], "instance-1");
 
         Assert.IsTrue(chunks.Count > 0, "a gated document must still produce chunks");
 
@@ -534,9 +581,9 @@ public class ChunkingServiceTests
             .ThrowsAsync(new InvalidOperationException("blob storage is down"));
 
         var service = BuildChunkingService(
-            SectionSplitter.DefaultTokenCeiling, BuildDocumentIdentityResolver(), writer.Object);
+            ChunkingBudget.TokenCeiling, BuildDocumentIdentityResolver(), writer.Object);
 
-        var (chunks, _) = await service.ChunkDocumentsAsync([Doc("doc1", "body")], "instance-1");
+        var (chunks, _, _) = await service.ChunkDocumentsAsync([Doc("doc1", "body")], "instance-1");
 
         Assert.AreEqual(1, chunks.Count);
     }

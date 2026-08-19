@@ -12,16 +12,7 @@ namespace AgenticRagApp.Indexing.Pdf.Services;
 // the steps and nothing else - no anchoring, no token arithmetic, no cutting.
 public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
 {
-    // Microsoft's starting point, and what the whole prefix-before-cut ordering is budgeted
-    // against: the ceiling governs the EMBEDDED text, prefix included.
-    private const int TokenCeiling = 512;
-
-    // The floor the body keeps no matter how expensive the prefix got. A deep heading chain on
-    // a long title can price the body down to nothing; below this the chunk stops being worth
-    // retrieving, so the ceiling is breached by choice instead.
-    private const int MinBodyTokenBudget = 128;
-
-    public string Name => "DeclaredBoundary";
+    public string Name => RouteNames.DeclaredBoundary;
 
     public ValueTask<IReadOnlyList<ChunkObject>> ChunkDocumentAsync(
         PdfExtractionDocument doc, CancellationToken ct = default)
@@ -70,7 +61,7 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
             var prefixTokens = TokenEstimator.Estimate(prefix);
 
             // 2c. What is left of the budget for the body.
-            var bodyCeiling = Math.Max(TokenCeiling - prefixTokens, MinBodyTokenBudget);
+            var bodyCeiling = Math.Max(ChunkingBudget.TokenCeiling - prefixTokens, ChunkingBudget.MinBodyTokenBudget);
 
             // 2d. Price the body.
             var bodyTokens = TokenEstimator.Estimate(body);
@@ -97,10 +88,23 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
                 continue;
             }
 
-            // Over the ceiling - TO DO. Nothing is emitted for such a section yet, so an
-            // oversized section is currently DROPPED rather than split: the cutting cascade
-            // route 2 runs (CutToCeiling) has no route-1 caller. Deliberate and temporary - see
-            // the handoff doc - but it means this route's chunk count is a floor, not a total.
+            // 5. Over the ceiling - the other 13-17%. The section keeps its boundary and its
+            //    heading; only its BODY is cut, by the same cascade route 2 runs on whole
+            //    documents (tables on rows, key-value runs on pairs, lists on items, prose last
+            //    down the line -> sentence -> word -> hard ladder).
+            //
+            //    Reusing route 2's cascade rather than writing a route 1 one is the point: an
+            //    oversized section and an unstructured document pose the identical question -
+            //    where may this text be cut - and two answers to it would drift apart about
+            //    what a table is.
+            //
+            //    The window is the section, not the document, and BlockCascade returns pieces
+            //    in doc.Content coordinates, so the slice invariant survives the narrowing.
+            //    bodyCeiling is this section's, already floored at ChunkingBudget.MinBodyTokenBudget, so the
+            //    prefix stays paid for on every piece the cut produces.
+            chunks.AddRange(SectionChunkBuilder.Build(
+                section,
+                BlockCascade.Cut(doc.Content, section.Start, section.End, bodyCeiling)));
         }
 
         return ValueTask.FromResult<IReadOnlyList<ChunkObject>>(chunks);

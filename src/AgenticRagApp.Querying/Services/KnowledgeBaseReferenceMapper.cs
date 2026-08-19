@@ -35,6 +35,11 @@ public static class KnowledgeBaseReferenceMapper
             r.SourceData.TryGetValue("page_count", out var pageCountRaw);
             r.SourceData.TryGetValue("created_at", out var createdAtRaw);
             r.SourceData.TryGetValue("mod_date", out var modDateRaw);
+            // The identity fields ToContextText rebuilds the embedded prefix from. The index
+            // stores the bare body, so without these the model's context has no sector tag and
+            // no heading chain - the exact axis the cao-ambig scenarios failed on.
+            r.SourceData.TryGetValue("heading_path", out var headingPathRaw);
+            r.SourceData.TryGetValue("domain_tag", out var domainTagRaw);
 
             chunks.Add(new RetrievedChunk(
                 Id:              AsText(idRaw) ?? "",
@@ -52,7 +57,9 @@ public static class KnowledgeBaseReferenceMapper
                 ZenyaUrl:        AsText(zenyaUrlRaw),
                 PageCount:       AsNullableInt(pageCountRaw),
                 CreatedAt:       AsDateTimeOffset(createdAtRaw),
-                ModDate:         AsDateTimeOffset(modDateRaw)));
+                ModDate:         AsDateTimeOffset(modDateRaw),
+                HeadingPath:     AsText(headingPathRaw),
+                DomainTag:       AsText(domainTagRaw)));
         }
         return chunks;
     }

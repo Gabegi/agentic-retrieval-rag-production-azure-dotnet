@@ -1,6 +1,7 @@
 using System.ClientModel.Primitives;
 using System.Text.Json;
 using Azure.Search.Documents.KnowledgeBases.Models;
+using AgenticRagApp.Querying.Models;
 using AgenticRagApp.Querying.Services;
 
 namespace RagApp.UnitTests.Querying;
@@ -87,6 +88,45 @@ public class KnowledgeBaseReferenceMapperTests
         Assert.AreEqual(12, chunk.PageCount);
         Assert.AreEqual(DateTimeOffset.Parse("2018-02-01T00:00:00Z"), chunk.CreatedAt);
         Assert.AreEqual(DateTimeOffset.Parse("2023-06-15T00:00:00Z"), chunk.ModDate);
+    }
+
+    [TestMethod]
+    public void HeadingPathAndDomainTag_AreMappedIntoTheContextText()
+    {
+        // The index stores the bare chunk body (SearchUploadChunk maps chunk.Content; the
+        // embedded prefix lives only inside the vector), so ToContextText is the one place
+        // the model's context gets the document identity back. It rebuilds PrefixBuilder's
+        // exact composition: "Title [tag]", heading path, body, blank-line separated. The
+        // sector tag is what separates CAO VVT from CAO GGZ from CAO GHZ on sector-ambiguous
+        // questions - the old "[Title]" header dropped it (260818 eval, cao-ambig scenarios).
+        var reference = Reference(new()
+        {
+            ["id"]           = "chunk1",
+            ["document_id"]  = "doc1",
+            ["title"]        = "CAO GHZ (Versie 4)",
+            ["content"]      = "De vakantietoeslag bedraagt 8%.",
+            ["heading_path"] = "Hoofdstuk 3 > Artikel 4:10 Vakantietoeslag",
+            ["domain_tag"]   = "GHZ",
+        });
+
+        var chunk = KnowledgeBaseReferenceMapper.Map([reference]).Single();
+
+        Assert.AreEqual("GHZ", chunk.DomainTag);
+        Assert.AreEqual(
+            "CAO GHZ (Versie 4) [GHZ]\n\n" +
+            "Hoofdstuk 3 > Artikel 4:10 Vakantietoeslag\n\n" +
+            "De vakantietoeslag bedraagt 8%.",
+            chunk.ToContextText());
+    }
+
+    [TestMethod]
+    public void ContextText_WithoutIdentityFields_IsJustTheBody()
+    {
+        // Neighbor-expanded chunks arrive with no title, path or tag - they follow the
+        // matched chunk of the same document, and a bare body is the intended shape there.
+        var chunk = new RetrievedChunk("id", "doc", 1, 0, Title: null, Summary: null, Content: "Body.");
+
+        Assert.AreEqual("Body.", chunk.ToContextText());
     }
 
     [TestMethod]

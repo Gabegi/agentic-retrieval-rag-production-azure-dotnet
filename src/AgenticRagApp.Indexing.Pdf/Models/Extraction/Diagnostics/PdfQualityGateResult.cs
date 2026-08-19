@@ -32,6 +32,7 @@ public class PdfQualityGateResult
     public int                                    InvisibleCharsStripped   { get; init; }
     public int                                    LigaturesExpanded        { get; init; }
     public int                                    HyphenationJoinsRepaired { get; init; }
+    public int                                    LineWrapsReflowed        { get; init; }
     public IReadOnlyList<CleaningSpotCheckEntry>  CleaningSpotCheckSample  { get; init; } = [];
 
     // How many <table> blocks fell back to plain text because ConvertTable couldn't parse

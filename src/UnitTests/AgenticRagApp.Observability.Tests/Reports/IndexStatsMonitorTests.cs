@@ -106,4 +106,68 @@ public class IndexStatsMonitorTests
         reportWriter.Verify(w => w.GetLastIndexStatsAsync("csv", It.IsAny<CancellationToken>()), Times.Once);
         reportWriter.Verify(w => w.SaveLastIndexStatsAsync("csv", 10, 20, It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // The 260819 regression. UploadService reads index statistics immediately after upload
+    // and Azure Search's stats lag those writes by minutes, so a run that had just uploaded
+    // 2,932 chunks read 0 documents. Two consequences, and the second is the dangerous one.
+    [TestMethod]
+    public async Task RecordAndCheckDriftAsync_ZeroCurrentDocumentCount_DoesNotFlagDrift()
+    {
+        var (monitor, reportWriter) = BuildMonitor();
+        reportWriter.Setup(w => w.GetLastIndexStatsAsync("pdf", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long DocumentCount, long StorageSizeBytes)?)(2997L, 45389222L));
+
+        // What the 260819 run actually read, having uploaded 2,932 chunks moments earlier.
+        var result = await monitor.RecordAndCheckDriftAsync("pdf", 0, 0);
+
+        Assert.AreEqual(0, result.RedFlags.Count, "a lagging stats read is not corpus loss");
+    }
+
+    [TestMethod]
+    public async Task RecordAndCheckDriftAsync_ZeroCurrentDocumentCount_LeavesTheLastRealBaselineInPlace()
+    {
+        var (monitor, reportWriter) = BuildMonitor();
+        reportWriter.Setup(w => w.GetLastIndexStatsAsync("pdf", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long DocumentCount, long StorageSizeBytes)?)(2997L, 45389222L));
+
+        await monitor.RecordAndCheckDriftAsync("pdf", 0, 0);
+
+        // Persisting the 0 would overwrite the baseline, and the drift check only runs when
+        // the baseline is > 0 - so the NEXT run's check would be silently skipped entirely.
+        reportWriter.Verify(
+            w => w.SaveLastIndexStatsAsync("pdf", 0, 0, It.IsAny<CancellationToken>()),
+            Times.Never);
+        reportWriter.Verify(
+            w => w.SaveLastIndexStatsAsync(It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [TestMethod]
+    public async Task RecordAndCheckDriftAsync_ZeroCurrentDocumentCount_StillReturnsThePreviousStats()
+    {
+        var (monitor, reportWriter) = BuildMonitor();
+        reportWriter.Setup(w => w.GetLastIndexStatsAsync("pdf", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long DocumentCount, long StorageSizeBytes)?)(2997L, 45389222L));
+
+        var result = await monitor.RecordAndCheckDriftAsync("pdf", 0, 0);
+
+        // The run report still shows what the last known-good corpus size was.
+        Assert.AreEqual(2997L,     result.PreviousDocumentCount);
+        Assert.AreEqual(45389222L, result.PreviousStorageSizeBytes);
+    }
+
+    [TestMethod]
+    public async Task RecordAndCheckDriftAsync_RealDropToNonZero_IsStillFlagged()
+    {
+        var (monitor, reportWriter) = BuildMonitor();
+        reportWriter.Setup(w => w.GetLastIndexStatsAsync("pdf", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long DocumentCount, long StorageSizeBytes)?)(2997L, 45389222L));
+
+        // Only an exact zero is treated as a lagging read - genuine corpus loss still trips.
+        var result = await monitor.RecordAndCheckDriftAsync("pdf", 1, 1000);
+
+        Assert.AreEqual(1, result.RedFlags.Count);
+        Assert.IsTrue(result.RedFlags[0].Contains("index_doc_count_drift"));
+        reportWriter.Verify(w => w.SaveLastIndexStatsAsync("pdf", 1, 1000, It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

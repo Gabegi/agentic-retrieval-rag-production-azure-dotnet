@@ -51,6 +51,45 @@ public class IndexDocumentService : IIndexDocumentService
         return (succeeded, failed);
     }
 
+    // Same batching as the upsert above, different action: MergeDocuments overwrites only the
+    // fields the payload carries. See IIndexDocumentService for why it is Merge and not
+    // MergeOrUpload, and why the payload type matters.
+    //
+    // A failure here is logged per key and counted rather than thrown, matching the upsert: the
+    // caller (UploadService) has already put replacement content live by this point, and a failed
+    // patch leaves the previous value in place rather than corrupting the row.
+    public async Task<(int Succeeded, int Failed)> MergeDocumentFieldsAsync<T>(IEnumerable<T> patches, CancellationToken ct = default)
+    {
+        var patchList = patches.ToList();
+        if (patchList.Count == 0) return (0, 0);
+
+        var succeeded = 0;
+        var failed    = 0;
+
+        foreach (var batch in patchList.Chunk(1000))
+        {
+            var response = await _client.MergeDocumentsAsync(batch, cancellationToken: ct);
+            foreach (var result in response.Value.Results)
+            {
+                if (result.Succeeded)
+                {
+                    succeeded++;
+                }
+                else
+                {
+                    // Most likely cause is a key the index does not hold, which means the caller's
+                    // view of what is indexed has drifted from the index itself - worth the key in
+                    // the log, since that is what makes it chaseable.
+                    _logger.LogWarning("Failed to merge fields onto {Key}: {Error}", result.Key, result.ErrorMessage);
+                    failed++;
+                }
+            }
+        }
+
+        _logger.LogInformation("Field merge complete — {Succeeded} succeeded, {Failed} failed", succeeded, failed);
+        return (succeeded, failed);
+    }
+
     // This is the "target" side of ExtractionService's new/updated/skipped diff - the one
     // thing that decides whether we pay Document Intelligence to (re-)extract a document.
     // A flat Size=1000 with no paging silently truncated this to the first 1000 CHUNKS
@@ -102,8 +141,17 @@ public class IndexDocumentService : IIndexDocumentService
     }
 
     // Batches document IDs into groups of 50 to keep the OData filter length manageable.
+    //
+    // Within each batch, paged by "id gt {lastSeenId}" exactly like
+    // GetCurrentlyIndexedDocsIdsNDatesAsync above, and for the same reason: a flat Size=1000
+    // capped the result at the first 1000 CHUNKS. Both callers of this method delete or patch
+    // exactly the rows it returns and then report success - so every chunk past the cap
+    // stayed in the index as a stale row (old content, or the wrong family_id) that nothing
+    // would ever revisit.
     public async Task<IReadOnlyList<string>> GetChunkIdsForDocumentsAsync(IEnumerable<string> documentIds, CancellationToken ct = default)
     {
+        const int pageSize = 1000;
+
         var idList = documentIds.ToList();
         if (idList.Count == 0) return [];
 
@@ -111,15 +159,36 @@ public class IndexDocumentService : IIndexDocumentService
 
         foreach (var batch in idList.Chunk(50))
         {
-            var escaped = batch.Select(id => id.Replace("'", "''"));
-            var filter  = $"search.in(document_id, '{string.Join(",", escaped)}', ',')";
-            var options = new SearchOptions { Filter = filter, Select = { "id" }, Size = 1000 };
+            var escaped   = batch.Select(id => id.Replace("'", "''"));
+            var docFilter = $"search.in(document_id, '{string.Join(",", escaped)}', ',')";
 
-            var response = await _client.SearchAsync<SearchDocument>("*", options, ct);
-            await foreach (var r in response.Value.GetResultsAsync().WithCancellation(ct))
+            string? lastId = null;
+            while (true)
             {
-                if (r.Document.TryGetValue("id", out var idObj) && idObj is string chunkId)
-                    chunkIds.Add(chunkId);
+                var options = new SearchOptions
+                {
+                    Filter  = lastId is null
+                        ? docFilter
+                        : $"{docFilter} and id gt '{lastId.Replace("'", "''")}'",
+                    Select  = { "id" },
+                    OrderBy = { "id" },
+                    Size    = pageSize,
+                };
+
+                var response  = await _client.SearchAsync<SearchDocument>("*", options, ct);
+                var pageCount = 0;
+                await foreach (var r in response.Value.GetResultsAsync().WithCancellation(ct))
+                {
+                    pageCount++;
+                    if (r.Document.TryGetValue("id", out var idObj) && idObj is string chunkId)
+                    {
+                        chunkIds.Add(chunkId);
+                        lastId = chunkId;
+                    }
+                }
+
+                // A short page means we've reached the end - a full page means there may be more.
+                if (pageCount < pageSize) break;
             }
         }
 
