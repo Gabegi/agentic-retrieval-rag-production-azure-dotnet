@@ -1,3 +1,5 @@
+using Azure.Search.Documents.Indexes.Models;
+
 namespace AgenticRagApp.Infrastructure.Clients.Search;
 
 // Manages the single shared Azure AI Search index's lifecycle. PDF and CSV chunks both
@@ -14,4 +16,12 @@ public interface IIndexService
     // get-or-create. Callers must repopulate afterwards (full reindex or restore-from-snapshot)
     // - this alone leaves the index empty.
     Task RecreateIndexAsync();
+
+    // The schema this service would create, without touching the service. Exposed because
+    // get-or-create means "what the code declares" and "what is actually live" can disagree
+    // indefinitely: a field added or a flag flipped in a deployed build reaches an existing
+    // index only through RecreateIndexAsync. Anything that needs to detect that gap compares
+    // this against the live definition - see IndexSchemaComparer, and the drift check in the
+    // eval suite's ClassInit, which is what stops a run scoring the app against the old shape.
+    SearchIndex BuildDefinition();
 }

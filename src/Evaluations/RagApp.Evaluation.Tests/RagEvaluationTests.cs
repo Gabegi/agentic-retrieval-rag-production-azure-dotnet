@@ -1,10 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Azure;
 using Azure.AI.OpenAI;
 using Azure.AI.TextAnalytics;
 using Azure.Identity;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
+using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.KnowledgeBases;
 using Azure.Search.Documents.Models;
 using Microsoft.Extensions.AI;
@@ -96,11 +98,14 @@ public class RagEvaluationTests
         // doesn't, eval scores the app against a different wire version than production runs
         // on - and on the knowledge-base surface that is not a cosmetic difference, since the
         // two preview generations project the resource differently (SearchServiceVersion).
-        var knowledgeService = new KnowledgeService(config,
-            new SearchIndexClient(new Uri(config.SearchEndpoint), credential, SearchServiceVersion.Options()),
+        var searchIndexClient = new SearchIndexClient(new Uri(config.SearchEndpoint), credential, SearchServiceVersion.Options());
+
+        var knowledgeService = new KnowledgeService(config, searchIndexClient,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeService>.Instance);
         await knowledgeService.EnsureKnowledgeSourceAsync();
         await knowledgeService.EnsureKnowledgeBaseAsync();
+
+        await VerifyIndexSchemaMatchesCodeAsync(config, searchIndexClient);
 
         var searchClient = new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential, SearchServiceVersion.Options());
 
@@ -136,6 +141,91 @@ public class RagEvaluationTests
             NullLogger<AgenticRagQueryService>.Instance);
         _evaluator = new RagEvaluator(judgeClient);
         _writer = new EvalResultWriter(ResultsFilePath);
+
+        await VerifyKnowledgeBaseAnswersAsync(config);
+    }
+
+    // The knowledge source and base are pushed from THIS build on every run (the two
+    // CreateOrUpdate calls above), so the suite always scores the definitions the code
+    // declares - instructions, searchFields, sourceDataFields included. The index is the
+    // opposite: EnsureIndexAsync is get-or-create, so a deployed schema change reaches an
+    // existing index only through a recreate, and until then the suite would be scoring the
+    // app against a shape the code no longer declares, with nothing anywhere saying so.
+    // Every symptom of that looks like a quality regression: fields the query path reads come
+    // back null, citations lose their provenance, retrieval degrades. Comparing the two
+    // definitions is the only thing that names the real cause.
+    //
+    // Fails the whole class rather than warning - a run scored against a stale schema is
+    // worse than no run, because its numbers get published and compared against previous ones.
+    private static async Task VerifyIndexSchemaMatchesCodeAsync(IndexerConfig config, SearchIndexClient client)
+    {
+        var expected = new IndexService(config, client,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<IndexService>.Instance).BuildDefinition();
+
+        SearchIndex live;
+        try
+        {
+            live = await client.GetIndexAsync(config.SearchIndexName);
+        }
+        catch (RequestFailedException ex) when (ex.Status is 403 or 401)
+        {
+            // Reading an index DEFINITION is a control-plane call, which "Search Index Data
+            // Reader" - the only Search role Terraform grants this identity (Rbac.md) - does
+            // not cover. It works in the pipeline because that service principal is far more
+            // privileged; a developer running the suite locally may well get a 403 here. That
+            // is not a reason to fail their run over a check the pipeline still performs.
+            Console.WriteLine(
+                $"[eval] WARNING: no permission to read the definition of '{config.SearchIndexName}' " +
+                $"({ex.Status}) - skipping the schema-drift check. The pipeline run performs it.");
+            return;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            Assert.Fail(
+                $"Index '{config.SearchIndexName}' does not exist. Nothing has created it: run " +
+                "POST /api/index?force=true&recreate=true on the Function App, or wait for the " +
+                "17:00 scheduled rebuild.");
+            return;
+        }
+
+        var drift = IndexSchemaComparer.Compare(expected, live);
+        Assert.IsTrue(drift.Count == 0,
+            $"Index '{config.SearchIndexName}' does not match the schema this build declares, so the " +
+            "suite would score the app against an index shape the code no longer describes:" +
+            Environment.NewLine + "  - " + string.Join(Environment.NewLine + "  - ", drift) +
+            Environment.NewLine +
+            "A schema change only reaches an existing index through a recreate (IndexService is " +
+            "get-or-create by design). Run POST /api/index?force=true&recreate=true on the Function " +
+            "App and re-run this suite once it completes, or wait for the 17:00 scheduled rebuild.");
+    }
+
+    // Closes the window the pipeline's own knowledge-base gate cannot see. That gate runs
+    // BEFORE this suite starts, so it checks the PREVIOUS definition - the one ClassInit then
+    // replaces with the deployed build's. A deploy that breaks the knowledge source therefore
+    // sails past it and lands as a scored collapse instead of a named failure, which is
+    // precisely how 2026-08-11 read (every reference came back with sourceData null and the
+    // app answered 31 of 32 answerable questions with the buiten-scope fallback).
+    //
+    // One question through the production path, after the push, is what makes that visible.
+    // Deliberately the same question the pipeline gate uses, for the same reason it picked it:
+    // the corpus answers it in every environment.
+    private static async Task VerifyKnowledgeBaseAnswersAsync(IndexerConfig config)
+    {
+        const string question = "Hoe moet ik mij ziekmelden?";
+
+        var result = await _ragService.AskAsync(question);
+
+        Assert.IsTrue(result.ChunksRetrieved > 0,
+            $"Knowledge base '{config.KnowledgeBaseName}' returned no chunks for a question the corpus " +
+            $"answers (\"{question}\") right after this build's knowledge source and base were pushed. " +
+            "Retrieval side: check the knowledge source's searchFields and that the index is populated.");
+
+        Assert.IsTrue(result.Citations.Count > 0,
+            $"Knowledge base '{config.KnowledgeBaseName}' retrieved {result.ChunksRetrieved} chunk(s) for " +
+            $"\"{question}\" but produced no citations, so every scored answer would be the buiten-scope " +
+            "fallback rather than a real answer. This is the 2026-08-11 failure: check that the knowledge " +
+            "source this build just pushed still lists 'content' in sourceDataFields, and that " +
+            "AgenticRagQueryService still requests reference source data.");
     }
 
 

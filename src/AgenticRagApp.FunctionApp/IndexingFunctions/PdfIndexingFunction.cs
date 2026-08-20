@@ -83,10 +83,16 @@ public class PdfIndexingFunction
         [DurableClient] DurableTaskClient client)
     {
         var forceReindex = req.Query["force"] == "true";
+        // The same drop-and-rebuild the daily scheduled run does (see RunScheduled), exposed
+        // here so that path can be triggered on demand instead of only at its 17:00 tick. No
+        // ?confirm= guard like FullIndexRecreation's: that one leaves the index empty, this
+        // one repopulates it in the same run.
+        var recreateIndex = req.Query["recreate"] == "true";
 
         var instanceId = await client.ScheduleNewOrchestrationInstanceAsync(
-            "IndexingOrchestrator", new PdfIndexRequest(forceReindex));
-        _logger.LogInformation("Indexing started — instance {InstanceId}", instanceId);
+            "IndexingOrchestrator", new PdfIndexRequest(forceReindex, recreateIndex));
+        _logger.LogInformation("Indexing started — instance {InstanceId}, force={Force}, recreate={Recreate}",
+            instanceId, forceReindex, recreateIndex);
         return client.CreateCheckStatusResponse(req, instanceId);
     }
 
@@ -96,11 +102,11 @@ public class PdfIndexingFunction
     // longer than a day just causes the next tick to skip rather than overlap, which is what
     // keeps SnapshotService's read-merge-write safe - runs never race each other.
     //
-    // Once daily at 22:00 - relies on WEBSITE_TIME_ZONE = "W. Europe Standard Time"
-    // (function_app.tf) so this means 22:00 Dutch wall-clock time, not UTC.
+    // Once daily at 17:00 - relies on WEBSITE_TIME_ZONE = "W. Europe Standard Time"
+    // (function_app.tf) so this means 17:00 Dutch wall-clock time, not UTC.
     [Function("ScheduledIndexing")]
     public async Task RunScheduled(
-        [TimerTrigger("0 0 22 * * *")] TimerInfo timer,
+        [TimerTrigger("0 0 17 * * *")] TimerInfo timer,
         [DurableClient] DurableTaskClient client)
     {
         const string instanceId = "PdfIndexing";
@@ -111,11 +117,19 @@ public class PdfIndexingFunction
                 or OrchestrationRuntimeStatus.Failed
                 or OrchestrationRuntimeStatus.Terminated)
         {
-            // TODO: remove once this is in production - forcing a full reindex on every
-            // scheduled run is a development-only setting; the daily run should use the
-            // new/updated diff (ForceReindex: false) once the index is stable.
+            // Rebuild-from-scratch semantics, deliberately: the daily run drops the index
+            // (and the knowledge source/base on top of it) and re-extracts the whole corpus,
+            // rather than applying the new/updated diff to what is already there. Two costs
+            // ride along with that and are accepted, not overlooked - every source document
+            // goes through Document Intelligence again on every run, and the index answers
+            // nothing from 17:00 until the run completes, because RecreateIndexActivity
+            // leaves it empty and only EmbedAndUploadActivity refills it.
+            //
+            // TODO: revisit once this is stable in production - the cheap steady-state shape
+            // is ForceReindex: false, RecreateIndex: false (diff-only), with the recreate
+            // reserved for schema changes via POST /api/index?force=true&recreate=true.
             await client.ScheduleNewOrchestrationInstanceAsync(
-                "IndexingOrchestrator", new PdfIndexRequest(ForceReindex: true),
+                "IndexingOrchestrator", new PdfIndexRequest(ForceReindex: true, RecreateIndex: true),
                 new StartOrchestrationOptions { InstanceId = instanceId });
         }
     }
@@ -146,10 +160,24 @@ public class PdfIndexingFunction
         // Durable overwrites the value rather than accumulating, so a replayed orchestration
         // just rewrites the same sequence. Counts are carried forward from the stage that
         // measured them, so a terminal run's status still shows what it produced.
-        context.SetCustomStatus(new IndexingProgress(IndexingProgress.Extracting, startedAt));
+        context.SetCustomStatus(new IndexingProgress(
+            input.RecreateIndex ? IndexingProgress.RecreatingIndex : IndexingProgress.Extracting, startedAt));
 
         try
         {
+            // Shared with RestoreOrchestrator, which declares it (IndexRestoreFunction) -
+            // Durable resolves activities by name across the whole app, so both pipelines go
+            // through the one IIndexRebuildService.RecreateEmptyAsync teardown/rebuild order
+            // rather than a second copy of it. Deliberately inside the try: a failed recreate
+            // has to land in the run report like any other stage failure, and it has to abort
+            // before extraction, since ExtractActivity's own EnsureIndexAsync would otherwise
+            // quietly recreate the index this just dropped and the run would continue.
+            if (input.RecreateIndex)
+            {
+                await context.CallActivityAsync("RecreateIndexActivity");
+                context.SetCustomStatus(new IndexingProgress(IndexingProgress.Extracting, startedAt));
+            }
+
             extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new PdfExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.Chunking, startedAt,
                 DocsExtracted: extractResults.DocsToProcess));

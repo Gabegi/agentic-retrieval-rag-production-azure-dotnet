@@ -92,6 +92,79 @@ public class PdfIndexingFunctionTests
         context.Verify(c => c.CallActivityAsync<ChunkingStageMetrics>(It.IsAny<TaskName>(), It.IsAny<object>(), It.IsAny<TaskOptions>()), Times.Never);
     }
 
+    // The daily scheduled run's shape: the index is dropped and rebuilt empty before
+    // extraction, not indexed into as-is.
+    [TestMethod]
+    public async Task RunOrchestrator_RecreateIndexRequested_RecreatesBeforeExtracting()
+    {
+        var deps    = new Deps();
+        var context = MockOrchestrationContext();
+        var order   = new List<string>();
+        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(ForceReindex: true, RecreateIndex: true));
+        context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .Callback(() => order.Add("recreate")).Returns(Task.CompletedTask);
+        context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .Callback(() => order.Add("extract")).ReturnsAsync(ExtractStats());
+        context.Setup(c => c.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(ChunkingStageMetrics.Empty("v1"));
+        context.Setup(c => c.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(EmbedStats());
+        context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .Returns(Task.CompletedTask);
+
+        var function = deps.Build();
+
+        await function.RunOrchestrator(context.Object);
+
+        CollectionAssert.AreEqual(new[] { "recreate", "extract" }, order);
+    }
+
+    // A failed recreate must abort the run rather than fall through to extraction, where
+    // ExtractActivity's EnsureIndexAsync would recreate the index and hide the failure.
+    [TestMethod]
+    public async Task RunOrchestrator_RecreateIndexActivityThrows_SavesFailureReportAndSkipsExtraction()
+    {
+        var deps    = new Deps();
+        var context = MockOrchestrationContext();
+        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(ForceReindex: true, RecreateIndex: true));
+        context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ThrowsAsync(new InvalidOperationException("RecreateIndexActivity failed: boom"));
+        context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .Returns(Task.CompletedTask);
+
+        var function = deps.Build();
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => function.RunOrchestrator(context.Object));
+
+        context.Verify(c => c.CallActivityAsync("SaveIndexReportActivity",
+            It.Is<PdfIndexRunReport>(r => !r.Success && r.ErrorMessage != null), It.IsAny<TaskOptions>()), Times.Once);
+        context.Verify(c => c.CallActivityAsync<ExtractionStageMetrics>(It.IsAny<TaskName>(), It.IsAny<object>(), It.IsAny<TaskOptions>()), Times.Never);
+    }
+
+    // The on-demand path (POST /api/index without ?recreate=true) must leave the live index
+    // in place - a run that wipes it when it was not asked to is the expensive mistake here.
+    [TestMethod]
+    public async Task RunOrchestrator_RecreateIndexNotRequested_DoesNotRecreateIndex()
+    {
+        var deps    = new Deps();
+        var context = MockOrchestrationContext();
+        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(ForceReindex: true));
+        context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(ExtractStats());
+        context.Setup(c => c.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(ChunkingStageMetrics.Empty("v1"));
+        context.Setup(c => c.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .ReturnsAsync(EmbedStats());
+        context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
+            .Returns(Task.CompletedTask);
+
+        var function = deps.Build();
+
+        await function.RunOrchestrator(context.Object);
+
+        context.Verify(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()), Times.Never);
+    }
+
     // ── ExtractActivity ──────────────────────────────────────────────────────
 
     [TestMethod]

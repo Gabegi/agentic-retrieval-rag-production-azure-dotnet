@@ -7,6 +7,18 @@ public class PdfActivityRequestRecordsTests
 {
     private static readonly DateTimeOffset StartedAt = new(2026, 7, 27, 10, 35, 0, TimeSpan.Zero);
 
+    // Defaulted rather than required so an orchestration queued by an earlier deployment,
+    // whose persisted JSON input has no RecreateIndex property, still deserializes - and
+    // deserializes to the non-destructive value.
+    [TestMethod]
+    public void PdfIndexRequest_RecreateIndex_DefaultsToFalse()
+    {
+        var request = new PdfIndexRequest(ForceReindex: true);
+
+        Assert.IsTrue(request.ForceReindex);
+        Assert.IsFalse(request.RecreateIndex);
+    }
+
     [TestMethod]
     public void PdfExtractRequest_Constructor_PropagatesAllFields()
     {

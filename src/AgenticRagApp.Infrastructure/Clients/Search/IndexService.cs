@@ -43,7 +43,7 @@ public class IndexService : IIndexService
     // above for why.
     public async Task EnsureIndexAsync()
     {
-        var index   = BuildIndexDefinition(BuildVectorSearch(), BuildSemanticSearch());
+        var index   = BuildDefinition();
         var created = await EnsureIndexExistsAsync(index);
         _logger.LogInformation(created ? "Index '{Name}' created" : "Index '{Name}' already exists — skipping creation", _config.SearchIndexName);
     }
@@ -55,10 +55,14 @@ public class IndexService : IIndexService
             ? "Index '{Name}' deleted — all previously indexed documents are gone until a restore or reindex repopulates it"
             : "Index '{Name}' didn't exist to delete", _config.SearchIndexName);
 
-        var index = BuildIndexDefinition(BuildVectorSearch(), BuildSemanticSearch());
+        var index = BuildDefinition();
         await EnsureIndexExistsAsync(index);
         _logger.LogInformation("Index '{Name}' recreated empty", _config.SearchIndexName);
     }
+
+    // See IIndexService.BuildDefinition - read-only, no service call.
+    public SearchIndex BuildDefinition() =>
+        BuildIndexDefinition(BuildVectorSearch(), BuildSemanticSearch());
 
     // Get-or-create only — never updates an existing index (avoids a code-driven push
     // silently overwriting portal-side customisation). Returns true if it was created,

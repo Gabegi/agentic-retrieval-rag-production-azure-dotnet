@@ -29,7 +29,9 @@ public record IndexingProgress(
     public const string Completed       = "completed";
     public const string Failed          = "failed";
 
-    // Restore pipeline stages - same payload, different stage vocabulary.
+    // Restore pipeline stages - same payload, different stage vocabulary. RecreatingIndex is
+    // shared with the indexing pipeline, which reports it too when a run was asked to drop and
+    // rebuild the index first (PdfIndexRequest.RecreateIndex); Restoring is restore-only.
     public const string RecreatingIndex = "recreating-index";
     public const string Restoring       = "restoring-from-snapshot";
 }

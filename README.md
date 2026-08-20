@@ -2,6 +2,43 @@
 
 Azure-based Retrieval-Augmented Generation (RAG) app: indexes PDF/CSV documents into Azure AI Search, then answers questions over that knowledge base via an agentic query pipeline.
 
+## Rebuilding the Whole Index in One Call
+
+```
+POST /api/index?force=true&recreate=true
+```
+
+`StartIndexing` ([`PdfIndexingFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/PdfIndexingFunction.cs),
+function-key auth). Drops the index — plus the knowledge source and knowledge base on top of it —
+rebuilds it empty on the current schema, then runs the normal extract → chunk → embed → upload
+pipeline over the whole corpus, all in one Durable orchestration. This is what the daily
+`ScheduledIndexing` timer sends at 17:00 Dutch wall-clock time.
+
+The two query flags are independent:
+
+| Flag | Effect |
+| --- | --- |
+| `force=true` | Ignore change detection — re-extract, re-chunk and re-embed **every** source document through Document Intelligence, not just new/updated ones |
+| `recreate=true` | Run `RecreateIndexActivity` first: drop the index + knowledge source/base and rebuild them empty on the current schema, then continue into the pipeline |
+
+- **The index answers nothing until the run finishes** — it is empty from the recreate until the
+  upload stage lands. Queries in that window return no results.
+- `recreate=true` alone wipes the index but then only refills what change detection considers
+  new — rarely what you want after a wipe. Pair it with `force=true`.
+- `force=true` alone reprocesses everything into the **existing** index without dropping it, so
+  it won't pick up a schema change.
+- No `?confirm=` guard here, unlike `FullIndexRecreation` — this path repopulates in the same
+  run rather than leaving the index empty.
+
+Other one-click paths, for when this isn't the one you want:
+
+| Endpoint | What it does | Use when |
+| --- | --- | --- |
+| `POST /api/index/restore` (`StartRestore`) | Wipes the index, repopulates from the rolling full-corpus snapshot | Index suspected corrupt/incomplete — but the snapshot is in the *previous* schema shape, so useless after a field rename |
+| `POST /api/index/full-recreation?confirm=<index-name>` (`FullIndexRecreation`) | Wipes the index and rebuilds it **empty** on the current schema; repopulates nothing | You want the schema change applied now and will reindex separately. Destructive and irreversible — `?confirm=` must exactly match the configured index name or the call is refused with `400` |
+
+See [Operations](#operations) for the scheduled rebuild and the full recovery procedure.
+
 ## Architecture Overview
 
 ```
@@ -77,6 +114,23 @@ See [RunningLocally.md](RunningLocally.md) for prerequisites, configuration, and
 See [AgenticRagApp.Observability/Reports.md](src/AgenticRagApp.Observability/Reports.md) for the full table of everything the pipelines write to blob storage, by container.
 
 ## Operations
+
+### Scheduled Daily Rebuild
+
+`ScheduledIndexing` (`PdfIndexingFunction`) fires once a day at **17:00 Dutch wall-clock time**
+(`WEBSITE_TIME_ZONE`, not UTC) and runs the index from scratch: `RecreateIndexActivity` drops
+the knowledge base, the knowledge source and the index and rebuilds them empty on the current
+schema, then the normal extract → chunk → embed → upload pipeline repopulates it with
+`force=true`, so every source document goes through Document Intelligence again.
+
+- **The index answers nothing between 17:00 and the run finishing** — it is empty from the
+  recreate until the upload stage lands. Queries during that window return no results.
+- A fixed instance ID (`PdfIndexing`) keeps it single-flight: if a run is still going at the
+  next tick, that tick is skipped rather than overlapping.
+- Same thing on demand: `POST /api/index?force=true&recreate=true`. Without `recreate=true`
+  the run indexes into the existing index as before.
+- Cheaper steady-state once the corpus is stable: drop both flags on the timer (diff-only) and
+  keep the recreate for schema changes. See the TODO on `RunScheduled`.
 
 ### Post-Deployment Steps
 
