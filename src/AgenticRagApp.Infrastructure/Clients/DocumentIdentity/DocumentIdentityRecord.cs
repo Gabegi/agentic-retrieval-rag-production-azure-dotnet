@@ -13,8 +13,8 @@ namespace AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 // written before this field existed deserialize without it - those are treated as unknown,
 // i.e. excluded from clustering until their document is next reindexed.
 //
-// Lives in Infrastructure with the store rather than beside DocumentFamily in Indexing.Pdf:
-// Infrastructure cannot reference Indexing.Pdf (the dependency points the other way), so the
+// Lives in Infrastructure with the store rather than beside DocumentFamily in Indexing.CU:
+// Infrastructure cannot reference Indexing.CU (the dependency points the other way), so the
 // record has to sit on the storage side of that line. DocumentFamily stays where it is - it is
 // the per-chunk carry-along value, not the stored one.
 public sealed record DocumentIdentityRecord(

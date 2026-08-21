@@ -2,8 +2,8 @@ using Microsoft.DurableTask;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using AgenticRagApp.Functions;
-using AgenticRagApp.Indexing.Pdf.Models;
-using AgenticRagApp.Indexing.Pdf.Services;
+using AgenticRagApp.Indexing.CU.Models;
+using AgenticRagApp.Indexing.CU.Services;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Observability.Reports;
 

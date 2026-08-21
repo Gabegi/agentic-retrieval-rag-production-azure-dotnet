@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 using AgenticRagApp.Functions.ReportEmail;
 using AgenticRagApp.Infrastructure;
 using AgenticRagApp.Infrastructure.Clients.Blob;
-using AgenticRagApp.Indexing.Pdf;
+using AgenticRagApp.Indexing.CU;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 using AgenticRagApp.Querying;
@@ -92,7 +92,7 @@ var host = new HostBuilder()
         // Persistent full-content archive - same "pipeline-reports" container as every other
         // report (run reports, stage diagnostics, snapshots, eval results), always on (not
         // gated by environment or a config flag - see IPipelineArtifactWriter). Only
-        // vector-cache/ (VectorCache, wired in AgenticRagApp.Indexing.Pdf/ServiceCollectionExtensions.cs)
+        // vector-cache/ (VectorCache, wired in AgenticRagApp.Indexing.CU/ServiceCollectionExtensions.cs)
         // stays on the separate "pipeline-artifacts" container - it's a content-hash-keyed
         // cache, not a report, and moving it would turn its O(1) lookups into O(n) listings.
         services.AddSingleton<IPipelineArtifactWriter>(sp =>
@@ -120,7 +120,7 @@ var host = new HostBuilder()
         services.AddQuerying();
 
         // PDF indexing pipeline — extraction, chunking, embedding, upload, index. See
-        // AgenticRagApp.Indexing.Pdf/ServiceCollectionExtensions.cs for what this wires in.
+        // AgenticRagApp.Indexing.CU/ServiceCollectionExtensions.cs for what this wires in.
         services.AddPdfIndexing(config);
 
         // ── Per-run report email ─────────────────────────────────────────────

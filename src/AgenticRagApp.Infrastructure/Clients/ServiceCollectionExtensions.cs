@@ -154,7 +154,7 @@ public static class ServiceCollectionExtensions
 
         // Corpus-wide family/domain identity store — "pipeline-artifacts" container, under its
         // own document-identity/ path prefix (see DocumentIdentityStore), the same container
-        // Indexing.Pdf's VectorCache uses. Consumed by DocumentIdentityResolver over there;
+        // Indexing.CU's VectorCache uses. Consumed by DocumentIdentityResolver over there;
         // registered here because it is a storage client holding a raw BlobContainerClient.
         services.AddSingleton<IDocumentIdentityStore>(sp =>
             new DocumentIdentityStore(

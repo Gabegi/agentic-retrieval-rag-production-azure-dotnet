@@ -12,10 +12,10 @@ namespace AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 // spaces - see PdfExtractionDocument.SourceId), so it's base64-encoded into the blob key
 // rather than used as a path segment directly.
 //
-// Lives in Infrastructure rather than Indexing.Pdf because it is a storage client, and this
+// Lives in Infrastructure rather than Indexing.CU because it is a storage client, and this
 // project's rule is that raw SDK clients (here BlobContainerClient) are only ever held behind
 // a wrapper defined here - see the registration comment in ServiceCollectionExtensions. Its
-// consumer is DocumentIdentityResolver in Indexing.Pdf, which now depends on the interface
+// consumer is DocumentIdentityResolver in Indexing.CU, which now depends on the interface
 // rather than owning the implementation.
 public class DocumentIdentityStore : IDocumentIdentityStore
 {

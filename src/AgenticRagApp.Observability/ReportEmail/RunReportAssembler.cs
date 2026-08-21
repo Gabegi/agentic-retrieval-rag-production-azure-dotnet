@@ -203,7 +203,7 @@ public sealed class RunReportAssembler
 
     // ── Parsers ──────────────────────────────────────────────────────────────
     // These read the reports as loose JSON rather than binding to their concrete types.
-    // PdfQualityGateResult and the two anonymous-typed reports live in Indexing.Pdf, and the
+    // PdfQualityGateResult and the two anonymous-typed reports live in Indexing.CU, and the
     // diff/file-facts blobs have no declared type at all - a shape change there should degrade
     // one section of an email, not break the build or throw at send time.
 

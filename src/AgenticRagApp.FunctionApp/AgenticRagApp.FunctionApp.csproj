@@ -39,11 +39,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AgenticRagApp.Infrastructure\AgenticRagApp.Infrastructure.csproj" />
     <ProjectReference Include="..\AgenticRagApp.Observability\AgenticRagApp.Observability.csproj" />
-    <ProjectReference Include="..\AgenticRagApp.Indexing.Pdf\AgenticRagApp.Indexing.Pdf.csproj" />
+    <ProjectReference Include="..\AgenticRagApp.Indexing.CU\AgenticRagApp.Indexing.CU.csproj" />
     <ProjectReference Include="..\AgenticRagApp.Querying\AgenticRagApp.Querying.csproj" />
-    <!-- CSV is dormant. Functions/CsvIndexingFunction.cs is commented out; uncomment it
-         together with this reference when activating CSV becomes a deliberate decision.
-    <ProjectReference Include="..\AgenticRagApp.Indexing.Csv\AgenticRagApp.Indexing.Csv.csproj" />
-    -->
   </ItemGroup>
 </Project>

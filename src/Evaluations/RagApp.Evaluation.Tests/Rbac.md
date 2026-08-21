@@ -30,7 +30,7 @@ been a while, since grants can drift independently of Terraform (e.g. manual por
 |---|---|---|
 | Azure AI Search service identity | Cognitive Services OpenAI User | `infra/search.tf` → `search_openai_user` |
 | Function App `indexer` identity | Cognitive Services OpenAI User | `infra/function_app.tf` → `openai_user` |
-| Function App `indexer` identity | Cognitive Services User | `infra/document_intelligence.tf` → `func_document_intelligence_user` |
+| Function App `indexer` identity | Cognitive Services User | `infra/content_understanding.tf` → `func_content_understanding_user` |
 | CI/CD deploy pipeline SPN (`data.azurerm_client_config.current`) | Cognitive Services OpenAI User | `infra/eval_access.tf` → `eval_openai_user` (this is the eval suite's own identity, see above) |
 | App Service `api` identity | Cognitive Services OpenAI User | `infra/app_service.tf` → `openai_user` |
 

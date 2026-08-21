@@ -247,7 +247,7 @@ public sealed class RagEvaluator
     }
 
     // Fraction of document ids listed in ExpectedSources (semicolon-separated PDF filenames,
-    // matching Citation.DocumentId - see AgenticRagApp.Indexing.Pdf.Models.SearchUploadChunk)
+    // matching Citation.DocumentId - see AgenticRagApp.Indexing.CU.Models.SearchUploadChunk)
     // that also appear among the chunks the RAG call actually cited — the cheapest, most
     // deterministic retrieval signal available. Returns -1 (not scorable) when ExpectedSources
     // is empty, e.g. a Refusal scenario or an "Onbekend" known-gap scenario.

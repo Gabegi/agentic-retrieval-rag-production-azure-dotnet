@@ -6,4 +6,4 @@ Shared models referenced by other `src/` projects — no logic, no dependencies 
 
 ## Integration
 
-Referenced by `AgenticRagApp.Indexing.Pdf`, `AgenticRagApp.Indexing.Csv`, `AgenticRagApp.Querying`, and `AgenticRagApp.Infrastructure`.
+Referenced by `AgenticRagApp.Indexing.CU`, `AgenticRagApp.Querying`, and `AgenticRagApp.Infrastructure`.

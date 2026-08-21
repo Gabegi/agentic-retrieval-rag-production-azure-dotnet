@@ -7,7 +7,7 @@ namespace AgenticRagApp.Common.Models;
 // record declares its own.
 //
 // ZenyaDocumentId/Version/Status/Url: PDF-only, sourced from blob metadata set at upload
-// time (see ZenyaMetadata in AgenticRagApp.Indexing.Pdf) - not guaranteed to be present.
+// time (see ZenyaMetadata in AgenticRagApp.Indexing.CU) - not guaranteed to be present.
 public abstract record DocumentReferenceBase(
     string  DocumentId,
     string? Title,
