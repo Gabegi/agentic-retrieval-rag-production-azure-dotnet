@@ -66,6 +66,7 @@ public static class ServiceCollectionExtensions
             KnowledgeSourceName          = configuration["KNOWLEDGE_SOURCE_NAME"]!,
             KnowledgeBaseName            = configuration["KNOWLEDGE_BASE_NAME"]!,
             OpenAiEmbeddingModelName     = configuration["OPENAI_EMBEDDING_MODEL_NAME"] ?? "text-embedding-3-large",
+            OpenAiMiniDeployment         = configuration["OPENAI_MINI_DEPLOYMENT"] ?? "gpt-4.1-mini",
             OpenAiEmbeddingDimensions    = int.TryParse(configuration["OPENAI_EMBEDDING_DIMENSIONS"], out var dims) ? dims : 3072,
         };
 
@@ -147,6 +148,9 @@ public static class ServiceCollectionExtensions
             services.AddSingleton(_ =>
                 new ContentUnderstandingClient(new Uri(config.ContentUnderstandingEndpoint), credential));
             services.AddSingleton<IContentAnalysisClient, ContentAnalysisClient>();
+            // Written by ContentUnderstandingDefaultsSetup (registered indexing-side, in
+            // AddPdfIndexing), read by the extraction stage into the run report's red flags.
+            services.AddSingleton<ContentUnderstandingDefaultsState>();
         }
 
         // Prompt Shields has no .NET SDK wrapper (see PromptShieldClient's comment), so this

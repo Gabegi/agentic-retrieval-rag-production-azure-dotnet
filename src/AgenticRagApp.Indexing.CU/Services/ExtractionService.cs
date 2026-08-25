@@ -51,6 +51,8 @@ public class ExtractionService : IExtractionService
     private readonly ExtractionReporter           _reporter;
     private readonly ILogger<ExtractionService>   _logger;
     private readonly TimeSpan                     _corpusWallClockLimit;
+    // Nullable for tests only; the DI registration always passes it. See the red flag below.
+    private readonly ContentUnderstandingDefaultsState? _cuDefaultsState;
 
     // Which extractor ran, as reported in the log line, the metric tags and the stats row. A
     // constant rather than a property read off an injected pipeline: there is one source, and the
@@ -86,7 +88,8 @@ public class ExtractionService : IExtractionService
         IBlobStore                   blobStore,
         ExtractionReporter           reporter,
         ILogger<ExtractionService>   logger,
-        TimeSpan?                    corpusWallClockLimit = null)
+        TimeSpan?                    corpusWallClockLimit = null,
+        ContentUnderstandingDefaultsState? cuDefaultsState = null)
     {
         _diffService          = diffService;
         _documentsContainer   = documentsContainer;
@@ -96,6 +99,7 @@ public class ExtractionService : IExtractionService
         _reporter             = reporter;
         _logger               = logger;
         _corpusWallClockLimit = corpusWallClockLimit ?? CorpusWallClockLimit;
+        _cuDefaultsState      = cuDefaultsState;
     }
 
     // Orchestrates the whole step: cheaply diff what's available against the current index
@@ -164,9 +168,14 @@ public class ExtractionService : IExtractionService
 
                         results.Add(await ExtractFileAsync(name, cancellationToken));
                     }
-                    catch (OperationCanceledException)
+                    // Filtered on the token, not the exception type: Azure.Core surfaces an
+                    // exhausted network timeout as a TaskCanceledException too, and rethrowing
+                    // that here would abort the whole run - discarding every other in-flight paid
+                    // call - over one slow file. Only a real cancellation stops the run; anything
+                    // else falls through and is recorded as that file's error.
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
-                        throw; // real cancellation should still stop the run, not log as a file error
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -231,7 +240,14 @@ public class ExtractionService : IExtractionService
         // What the stage returns, assembled in one place - including the rule about which
         // documents may have their existing chunks torn down, which is not a formality: get it
         // wrong and a document disappears from the index. See ExtractionStatsBuilder.
-        return ExtractionStatsBuilder.BuildResult(Source, diff, extractionOutput, forceReindex);
+        //
+        // The CU defaults state rides along as a red flag on every run - success included -
+        // because the startup check's outcome was otherwise only visible in App Insights, and
+        // the first live bring-up stalled on exactly that blind spot. Demote to failures-only
+        // once the pipeline has produced its first healthy run.
+        return ExtractionStatsBuilder.BuildResult(
+            Source, diff, extractionOutput, forceReindex,
+            _cuDefaultsState is null ? null : $"cu_model_defaults: {_cuDefaultsState.Summary}");
     }
 
     // --- One document ---------------------------------------------------------

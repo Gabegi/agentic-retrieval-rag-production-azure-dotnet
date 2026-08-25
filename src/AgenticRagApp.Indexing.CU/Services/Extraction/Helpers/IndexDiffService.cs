@@ -43,9 +43,9 @@ public class IndexDiffService : IIndexDiffService
         var indexedDates = await _indexDocumentService.GetCurrentlyIndexedDocsIdsNDatesAsync(ct);
 
         // We extract a document if either:
-            // 1. It's new â€” sourceId isn't in indexedDates at all, or
-            // 2. It's updated â€” it is in indexedDates, but sourceListing's LastModified is newer than what's recorded there, or
-            // 3. forceReindex is true â€” process everything regardless.
+            // 1. It's new — sourceId isn't in indexedDates at all, or
+            // 2. It's updated — it is in indexedDates, but sourceListing's LastModified is newer than what's recorded there, or
+            // 3. forceReindex is true — process everything regardless.
         // A document Zenya marks inactive (ZenyaMetadata.IsActive false) is excluded from
         // processing even if new/updated, and torn down like a removed one if it's currently
         // indexed - see CompareSourceListingToIndex.
@@ -64,7 +64,7 @@ public class IndexDiffService : IIndexDiffService
     }
 
     // Cheap listing of every PDF blob's name + LastModified + ContentLength + Zenya metadata
-    // only â€” no download, no analyze call. This is the "source" side of the diff;
+    // only — no download, no analyze call. This is the "source" side of the diff;
     // ExtractionService's extraction loop does the expensive download + extraction,
     // only for whatever CompareSourceListingToIndex decides is actually needed, using this
     // same data instead of listing the container a second time.
@@ -80,7 +80,7 @@ public class IndexDiffService : IIndexDiffService
             // LastModified is a system property Azure Blob Storage sets automatically (updated whenever the blob's content changes)
             if (lastModified is null)
                 _logger.LogWarning(
-                    "'{Blob}' has no LastModified from blob storage â€” treating as never-modified so it isn't reprocessed every run.",
+                    "'{Blob}' has no LastModified from blob storage — treating as never-modified so it isn't reprocessed every run.",
                     name);
 
             result[name] = new PdfBlobInfo(lastModified ?? DateTimeOffset.MinValue, contentLength, ZenyaMetadata.FromBlobMetadata(metadata));

@@ -36,10 +36,16 @@ public class IndexerConfig
     // rather than a re-plumbing.
     public string ContentUnderstandingEndpoint { get; init; } = "";
     // No analyzer-id or completion-model setting any more: the analyzer is the prebuilt
-    // "prebuilt-documentSearch", hardcoded in ContentAnalysisClient, and the models it needs are
-    // resolved by the service through the account-wide default model->deployment mapping rather
-    // than named per request.
+    // "prebuilt-documentSearch", hardcoded in ContentAnalysisClient. The models it needs resolve
+    // through the account-wide default model->deployment mapping, which
+    // ContentUnderstandingDefaultsSetup verifies at host startup (from this value, the two
+    // below and OpenAiEmbeddingDeployment) and writes only when missing or wrong.
     public string OpenAiEmbeddingModelName     { get; init; } = "text-embedding-3-large";
+    // The gpt-4.1-mini deployment Content Understanding's prebuilt analyzers resolve against
+    // (infra/ai_deployments.tf "mini"). Consumed only by ContentUnderstandingDefaultsSetup -
+    // the app's own OpenAI calls never touch it. Default matches infra/variables.tf
+    // openai_mini_deployment.
+    public string OpenAiMiniDeployment         { get; init; } = "gpt-4.1-mini";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
 
     // TEMPORARY - set true 2026-08-12 by request, to be revisited once eval shows how often

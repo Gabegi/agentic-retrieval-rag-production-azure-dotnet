@@ -113,6 +113,11 @@ resource "azurerm_windows_function_app" "indexer" {
     "OPENAI_GPT_DEPLOYMENT"            = var.openai_gpt_deployment
     "OPENAI_GPT_MODEL_NAME"            = var.openai_gpt_model_name
     "OPENAI_EXTRACTION_DEPLOYMENT"     = var.openai_extraction_deployment
+    # Consumed only by ContentUnderstandingDefaultsSetup: at host startup it verifies the
+    # account-wide default model->deployment mapping that prebuilt-documentSearch resolves
+    # against (this value plus OPENAI_EMBEDDING_DEPLOYMENT above) and writes it only when
+    # missing or wrong - replacing the manual defaults PATCH (content_understanding.tf).
+    "OPENAI_MINI_DEPLOYMENT" = var.openai_mini_deployment
     # Same account/endpoint as OPENAI_ENDPOINT above (content_understanding.tf): Content
     # Understanding is a different data-plane path on the same multi-service account, not a
     # different resource. This is now the ONLY extraction-backend setting - the Document

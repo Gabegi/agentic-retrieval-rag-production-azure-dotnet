@@ -27,18 +27,23 @@ internal static class ExtractionStatsBuilder
     private const double HighNewDocFractionThreshold = 0.5;
 
     // The whole return value of the extraction stage, from the run's diff and its output.
+    // extraRedFlag: a caller-supplied line for the metrics row's red flags (currently the CU
+    // model-defaults state from host startup - see ExtractionService's comment at the call).
     internal static (IReadOnlyList<PdfExtractionDocument> Docs, ExtractionStageMetrics Stats) BuildResult(
-        string source, IndexDiff diff, PdfExtractionOutput output, bool forceReindex)
+        string source, IndexDiff diff, PdfExtractionOutput output, bool forceReindex,
+        string? extraRedFlag = null)
     {
         var result = new DiffResult(
             source, output, output.Docs.ToList(), diff.RemovedSourceIds.ToList(),
             StaleDocumentIds(diff, output), diff.NewCount, diff.Updated, diff.Skipped);
 
-        return (result.ToProcess,
-                BuildStats(
-                    result,
-                    HighNewDocFractionRedFlag(
-                        diff.SourceCount, diff.IndexedCount, diff.NewCount, forceReindex)));
+        IReadOnlyList<string> extras =
+        [
+            .. HighNewDocFractionRedFlag(diff.SourceCount, diff.IndexedCount, diff.NewCount, forceReindex),
+            .. extraRedFlag is null ? Array.Empty<string>() : [extraRedFlag],
+        ];
+
+        return (result.ToProcess, BuildStats(result, extras));
     }
 
     // A document slated for update (EntriesToProcess) is only safe to mark stale if this run's

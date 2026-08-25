@@ -100,7 +100,7 @@ internal static class ExtractionOutputBuilder
         var redFlags = new List<string>();
         if (traceabilityGapCount > 0)
             redFlags.Add(
-                $"{traceabilityGapCount} document(s) have no zenya_document_id blob metadata set â€” " +
+                $"{traceabilityGapCount} document(s) have no zenya_document_id blob metadata set — " +
                 "citations built from these will show a traceability gap (Citation.TraceabilityGap).");
         redFlags.AddRange(DuplicateContentRedFlag(contentHashes));
 
@@ -131,7 +131,7 @@ internal static class ExtractionOutputBuilder
             // over the same corpus produce comparable reports.
             SpotCheckSample        = [.. documents.Take(3).Select(d => new SpotCheckEntry(
                                         d.SourceId, d.Title,
-                                        d.Content.Length > 300 ? d.Content[..300] + "â€¦" : d.Content))],
+                                        d.Content.Length > 300 ? d.Content[..300] + "…" : d.Content))],
             ContentHashes          = contentHashes,
         };
     }

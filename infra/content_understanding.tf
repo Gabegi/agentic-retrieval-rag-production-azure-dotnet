@@ -32,38 +32,30 @@ resource "azurerm_role_assignment" "func_content_understanding_user" {
 }
 
 # ---------------------------------------------------------------------------
-# THE ONE MANUAL STEP - the account-wide default model->deployment mapping.
+# NO MANUAL STEP - the account-wide default model->deployment mapping is
+# verified (and fixed if wrong) by the app itself, once, at host startup.
 #
 # The application submits against the PREBUILT analyzer prebuilt-documentSearch
 # (hardcoded in ContentAnalysisClient), so there is no custom analyzer to create
-# any more - the cap-pdf-layout analyzer, the provisioner that created it and the
-# verifier that checked it were all deleted on 2026-08-25 when the client was cut
-# back to the SDK sample shape.
+# - the cap-pdf-layout analyzer, the provisioner that created it and the
+# verifier that checked it were all deleted on 2026-08-25.
 #
-# What did NOT go away is the prerequisite the prebuilt analyzers carry: they
-# resolve their models through this account's default model->deployment mapping,
-# and there is nothing left in the app that writes it. AnalyzeBinaryAsync has no
-# per-request modelDeployments parameter - only the Analyze(inputs) overload does
-# - so it cannot be passed per call either. Miss the mapping and the first
-# analyze call fails with "Model deployment not found".
+# What the prebuilts still require (SDK Sample00: "required one-time setup per
+# Foundry resource") is the default model->deployment mapping. That is handled
+# by ContentUnderstandingDefaultsSetup (AgenticRagApp.Infrastructure), an
+# IHostedService: GetDefaults -> compare against the app's configured names ->
+# UpdateDefaults ONLY when an entry is missing or wrong. Read-then-write-if-
+# needed, because the mapping is account-global state shared with every other
+# consumer of this account; UpdateDefaults is merge-patch, so entries for
+# models this app does not use are never touched. It runs under the function
+# app's managed identity, whose "Cognitive Services User" assignment above is
+# exactly what authorizes it - no human role grant, no PATCH by hand.
 #
-# Not done from here for the same reason it never was: driving this data plane
-# from Terraform means opening this landing-zone-owned account's firewall to a
-# hosted pipeline agent on every run that touches it. Run it once, by hand,
-# against the deployments in ai_deployments.tf:
-#
-#   PATCH {foundry_endpoint}/contentunderstanding/defaults?api-version=2025-11-01
-#   Authorization: Bearer <token for https://cognitiveservices.azure.com>
-#   Content-Type: application/json
-#   {
-#     "modelDeployments": {
-#       "gpt-4.1-mini":           "gpt-4.1-mini",
-#       "text-embedding-3-large": "embedding-3-large"
-#     }
-#   }
-#
-# Keys are MODEL names, values are DEPLOYMENT names (var.openai_mini_deployment
-# and var.openai_embedding_deployment). The mapping is account-global and
-# merge-patched, so it is visible to every other consumer of this account -
-# which is also why Terraform state could never see drift on it.
+# Keys are MODEL names, values are DEPLOYMENT names: gpt-4.1-mini ->
+# var.openai_mini_deployment ("gpt-4.1-mini"), text-embedding-3-large ->
+# var.openai_embedding_deployment ("embedding-3-large" - note the deployment
+# name is NOT the model name here; an earlier version of this comment showed
+# the wrong value). Not driven from Terraform for the original reason: data
+# plane writes from a hosted pipeline agent would require opening this
+# landing-zone-owned account's firewall on every run.
 # ---------------------------------------------------------------------------

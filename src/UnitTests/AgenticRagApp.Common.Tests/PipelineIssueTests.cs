@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgenticRagApp.Common.Models;
 
 namespace RagApp.UnitTests.Common;
@@ -5,6 +6,29 @@ namespace RagApp.UnitTests.Common;
 [TestClass]
 public class PipelineIssueTests
 {
+    // Stand-in for a source-specific reason (PdfOpenFailureReason lives in Indexing.CU,
+    // which this project doesn't reference) - what matters is that it derives from the base.
+    private sealed record TestOpenFailureReason(string Code) : OpenFailureReasonBase(Code);
+
+    // Regression: PipelineIssue rides inside ExtractionStageMetrics across the Durable
+    // activity boundary, where System.Text.Json deserializes Reason by its DECLARED type.
+    // When OpenFailureReasonBase was abstract this threw NotSupportedException and killed
+    // the whole orchestration on the first reason-carrying issue (run 51b528c0, 2026-08-25).
+    // The declared-type round-trip keeps only Code, which is all any reader uses.
+    [TestMethod]
+    public void Reason_SurvivesJsonRoundTrip_ByDeclaredType()
+    {
+        var issue = PipelineIssue.Error(
+            PipelineStage.ParsePages, "doc1.pdf", "analysis failed",
+            reason: new TestOpenFailureReason("Unknown"));
+
+        var roundTripped = JsonSerializer.Deserialize<PipelineIssue>(JsonSerializer.Serialize(issue))!;
+
+        Assert.AreEqual("Unknown", roundTripped.Reason!.Code);
+        Assert.AreEqual(issue.Message, roundTripped.Message);
+        Assert.AreEqual(issue.Severity, roundTripped.Severity);
+    }
+
     [TestMethod]
     public void Error_Factory_SetsSeverityAndFields()
     {

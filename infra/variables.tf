@@ -111,6 +111,6 @@ variable "dev_eval_service_principal_object_id" {
 
 variable "openai_mini_deployment" {
   type        = string
-  description = "Deployment name for the gpt-4.1-mini model that Content Understanding's prebuilt analyzers require (see ai_deployments.tf). Not used by the application's own OpenAI calls - CU resolves it through the account's default model->deployment mapping, which is set outside Terraform."
+  description = "Deployment name for the gpt-4.1-mini model that Content Understanding's prebuilt analyzers require (see ai_deployments.tf). Not used by the application's own OpenAI calls - ContentAnalysisClient passes it per analyze request via modelDeployments (app setting OPENAI_MINI_DEPLOYMENT, function_app.tf)."
   default     = "gpt-4.1-mini"
 }

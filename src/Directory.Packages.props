@@ -4,11 +4,10 @@
     <CentralPackageFloatingVersionsEnabled>true</CentralPackageFloatingVersionsEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Pinned exact, unlike its floating DocumentIntelligence neighbour below. The CU surface
-         is new and still moving, and a minor bump that adds a
-         ContentUnderstandingClientOptions.ServiceVersion member silently moves the SDK's default
-         api-version. The wire version is pinned separately and deliberately in
-         Infrastructure/Clients/ContentUnderstanding/ContentUnderstandingServiceVersion.cs. -->
+    <!-- Pinned exact: the CU surface is new and still moving, and the client takes the SDK's
+         default api-version (the explicit ContentUnderstandingServiceVersion pin was deleted with
+         the analyzer provisioning), so a floating minor bump could silently move the wire
+         version. -->
     <PackageVersion Include="Azure.AI.ContentUnderstanding" Version="1.1.0" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
     <PackageVersion Include="Azure.AI.TextAnalytics" Version="5.3.0" />

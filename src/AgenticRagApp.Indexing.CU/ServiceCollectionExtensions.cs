@@ -66,6 +66,13 @@ public static class ServiceCollectionExtensions
                 "CONTENT_UNDERSTANDING_ENDPOINT is not configured. Document extraction runs on Content " +
                 "Understanding and has no fallback backend.");
 
+        // One-time setup at host startup: verify the account-wide default model->deployment
+        // mapping the prebuilt analyzer resolves against, and write it only if missing/wrong.
+        // Registered here rather than by AddAgenticRagAppInfrastructure because only the
+        // indexing side needs the mapping - the class itself lives in Infrastructure with the
+        // raw client it uses.
+        services.AddHostedService<ContentUnderstandingDefaultsSetup>();
+
         // The pre-extraction diff (container listing + index state + comparison), split out of
         // ExtractionService so the decision logic is testable on its own.
         services.AddSingleton<IIndexDiffService>(sp => new IndexDiffService(
@@ -88,7 +95,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredKeyedService<BlobContainerClient>("pipeline-temp"),
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<ExtractionReporter>(),
-            sp.GetRequiredService<ILogger<ExtractionService>>()));
+            sp.GetRequiredService<ILogger<ExtractionService>>(),
+            cuDefaultsState: sp.GetRequiredService<ContentUnderstandingDefaultsState>()));
         services.AddSingleton<IEmbeddingService,       EmbeddingService>();
         services.AddSingleton<IUploadService,          UploadService>();
         // IIndexService/IIndexDocumentService are registered once by

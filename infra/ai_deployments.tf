@@ -71,19 +71,33 @@ locals {
     # documented as requiring gpt-4.1-mini and text-embedding-3-large deployments, and
     # ContentAnalysisClient submits against prebuilt-documentSearch. The app never calls this
     # deployment itself: CU resolves it through the account's default model->deployment mapping,
-    # which is NOT written from here (AnalyzeBinaryAsync has no per-request modelDeployments
-    # parameter, and the provisioner that used to merge-PATCH the account defaults was deleted with
-    # the rest of the CU bootstrap code). Setting that mapping is a one-off manual step - see
-    # content_understanding.tf.
+    # which ContentUnderstandingDefaultsSetup verifies (and fixes if wrong) at host startup -
+    # see content_understanding.tf. The mapping can only point at a deployment that exists, so
+    # this apply is the hard prerequisite.
     #
     # model_version is the GA gpt-4.1-mini version; confirm it against the region's model list
     # before the first apply (az cognitiveservices account list-models), since a wrong version
-    # fails the apply rather than degrading quietly.
+    # fails the apply rather than degrading quietly. Note the header above: gpt-4.1 was already
+    # ServiceModelDeprecating for NEW deployments in this sub/region on 2026-07-02 - if that
+    # extends to gpt-4.1-mini, this entry fails to apply and prebuilt-documentSearch has no
+    # completion model (the exact ResourceError seen live on 2026-08-25).
+    # Capacity 50 -> 5000 (2026-08-25): the first working extraction run was TPM-bound on this
+    # deployment - prebuilt-documentSearch contextualizes every page of every document through
+    # it, 8 documents in parallel (ExtractionService.MaxExtractionParallelism), and at 50 K TPM
+    # the 51-doc corpus crawled for the better part of an hour. 5000 is the whole
+    # gpt-4.1-mini GlobalStandard pool in this sub/region (docs/ai-foundry-models.md: 0/5000 in
+    # use), and this deployment is that pool's only consumer, so taking all of it starves
+    # nothing. If the apply is rejected (the model is Deprecating for NEW deployments; scaling
+    # an EXISTING one is normally still allowed), step down until it passes.
+    #
+    # Shelf life: the same survey lists gpt-4.1-mini retiring 2026-10-14. CU's prebuilt
+    # analyzers resolve onto it by name, so before that date Microsoft's prebuilts must have
+    # moved on - revisit the defaults mapping (ContentUnderstandingDefaultsSetup) when they do.
     mini = {
       name          = var.openai_mini_deployment
       model_name    = "gpt-4.1-mini"
       model_version = "2025-04-14"
-      capacity      = 50
+      capacity      = 5000
     }
   }
 }

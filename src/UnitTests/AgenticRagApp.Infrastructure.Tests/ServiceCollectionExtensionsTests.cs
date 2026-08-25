@@ -182,10 +182,11 @@ public class ServiceCollectionExtensionsTests
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
     }
 
-    // CONTENT_UNDERSTANDING_ENDPOINT is the only Content Understanding setting there is now. The
-    // analyzer id and completion model went with the provisioner: the analyzer is the prebuilt
-    // "prebuilt-documentSearch", hardcoded in ContentAnalysisClient, and its models are resolved
-    // by the service through the account-wide default mapping rather than named per request.
+    // CONTENT_UNDERSTANDING_ENDPOINT is the main Content Understanding setting. The analyzer id
+    // went with the provisioner: the analyzer is the prebuilt "prebuilt-documentSearch",
+    // hardcoded in ContentAnalysisClient. Its account-wide model->deployment mapping is
+    // verified/fixed once at host startup by ContentUnderstandingDefaultsSetup, built from
+    // OPENAI_MINI_DEPLOYMENT (defaulted) plus the embedding settings the app already has.
     [TestMethod]
     public void AddAgenticRagAppInfrastructure_ContentUnderstandingEndpoint_DefaultsToEmptyWhenKeyAbsent()
     {
