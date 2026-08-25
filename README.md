@@ -42,13 +42,13 @@ See [Operations](#operations) for the scheduled rebuild and the full recovery pr
 ## Architecture Overview
 
 ```
-PDF/CSV sources ──▶ Indexing.Pdf / Indexing.Csv ──▶ Azure AI Search index
-                     (extract → chunk → embed)         │
-                                                        ▼
+PDF sources ──▶ Indexing.CU ──▶ Azure AI Search index
+                 (extract → chunk → embed)         │
+                                                  ▼
                      User question ──▶ Querying ──▶ Knowledge Base retrieval ──▶ cited answer
 ```
 
-- **Indexing** (`AgenticRagApp.Indexing.Pdf`/`.Csv`): extracts source documents (via Document Intelligence for PDFs), chunks and embeds them, and uploads to the Azure AI Search index. Runs as a Durable Functions orchestration in `AgenticRagApp.FunctionApp` (`con-func-idx-*`).
+- **Indexing** (`AgenticRagApp.Indexing.CU`): extracts source documents (via Content Understanding / Document Intelligence), chunks and embeds them, and uploads to the Azure AI Search index. Runs as a Durable Functions orchestration in `AgenticRagApp.FunctionApp` (`con-func-idx-*`).
 - **Querying** (`AgenticRagApp.Querying`): takes a user question, retrieves relevant chunks from the Search knowledge base, and generates a cited answer. Currently also exposed through `AgenticRagApp.FunctionApp` (`/api/query`); `infra/app_service.tf` provisions a separate Linux App Service (`con-app-api-*`) for this, for a future split-out query API deployment.
 - **Observability** (`AgenticRagApp.Observability`): cross-cutting run reports, snapshots (for index restore), and telemetry shared by both sides.
 - **Infrastructure** (`AgenticRagApp.Infrastructure`): the Azure client wiring (Search, Blob, Document Intelligence, Embedding, Knowledge Base) both sides depend on.
@@ -60,8 +60,7 @@ See [infra/Infrastructure.md](infra/Infrastructure.md) for the underlying Azure 
 Each title is clickable
 - [`AgenticRagApp.Common`](src/AgenticRagApp.Common/README.md) — shared models used across projects
 - [`AgenticRagApp.Infrastructure`](src/AgenticRagApp.Infrastructure/README.md) — Azure clients (Search, Blob, Document Intelligence, Embedding, Knowledge Base) + DI wiring; see [Clients.md](src/AgenticRagApp.Infrastructure/Clients.md) for the full client/method table
-- [`AgenticRagApp.Indexing.Pdf`](src/AgenticRagApp.Indexing.Pdf/README.md) — PDF extraction → chunking → embedding → upload pipeline
-- [`AgenticRagApp.Indexing.Csv`](src/AgenticRagApp.Indexing.Csv/README.md) — CSV extraction → chunking → embedding → upload pipeline
+- [`AgenticRagApp.Indexing.CU`](src/AgenticRagApp.Indexing.CU/README.md) — document extraction → chunking → embedding → upload pipeline
 - [`AgenticRagApp.Querying`](src/AgenticRagApp.Querying/README.md) — agentic retrieval + answer generation at query time
 - [`AgenticRagApp.Observability`](src/AgenticRagApp.Observability/README.md) — run reports, snapshots, telemetry
 - [`AgenticRagApp.FunctionApp`](src/AgenticRagApp.FunctionApp/README.md) — Azure Functions host exposing indexing and querying endpoints
@@ -89,8 +88,7 @@ See [RunningLocally.md](RunningLocally.md) for prerequisites, configuration, and
 ├── src/                        # .NET application code (see Projects below for what each does)
 │   ├── AgenticRagApp.Common/             # shared entities 
 │   ├── AgenticRagApp.Infrastructure/       # Clients
-│   ├── AgenticRagApp.Indexing.Pdf/          # Complete indexing->chunking->embedding->indexing pipeline for pdf (Document Intelligence & pdfpig)
-│   ├── AgenticRagApp.Indexing.Csv/          # Complete indexing->chunking->embedding->indexing pipeline for csv (not in used currently, kept in case)
+│   ├── AgenticRagApp.Indexing.CU/           # Complete indexing->chunking->embedding->indexing pipeline (Content Understanding & pdfpig)
 │   ├── AgenticRagApp.Querying/      # Query logic to the knowledge base
 │   ├── AgenticRagApp.Observability/    # Reporting, stats...
 │   ├── AgenticRagApp.FunctionApp/          # Azure Functions
@@ -98,6 +96,7 @@ See [RunningLocally.md](RunningLocally.md) for prerequisites, configuration, and
 │   ├── UnitTests/              # xUnit test projects, one per project above
 │   └── AgenticRagApplication.sln
 ├── docs/                       # dated status notes
+│   └── archive/                # retired projects, kept for reference only — not built (see docs/archive/README.md)
 ├── data/                       # sample data
 ├── .pipelines/                 # Azure DevOps pipelines
 │   ├── pipeline.yml            # main build/deploy pipeline

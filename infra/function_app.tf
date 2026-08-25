@@ -59,7 +59,7 @@ resource "azurerm_windows_function_app" "indexer" {
     # up to 15 once dots become dashes ("255-255-255-255"), so the prefix has at most 17 to
     # play with. "dev-direct-access-" was 18: it fit every IP allowlisted until 2026-08-12
     # and then failed the apply outright on the first one with three 3-digit octets after
-    # the first ("178-230-108-151" = 15, total 33). "dev-access-" is 11, leaving room for
+    # the first ("192-168-100-151" = 15, total 33). "dev-access-" is 11, leaving room for
     # any valid address.
     dynamic "ip_restriction" {
       for_each = var.environment == "development" ? var.dev_allowed_ips : []
@@ -113,17 +113,23 @@ resource "azurerm_windows_function_app" "indexer" {
     "OPENAI_GPT_DEPLOYMENT"            = var.openai_gpt_deployment
     "OPENAI_GPT_MODEL_NAME"            = var.openai_gpt_model_name
     "OPENAI_EXTRACTION_DEPLOYMENT"     = var.openai_extraction_deployment
-    # Same account/endpoint as OPENAI_ENDPOINT above (document_intelligence.tf) -
-    # setting this is what flips DocumentIntelligenceExtractor from unregistered
-    # to active in program.cs (config.DocumentIntelligenceEndpoint gate).
-    "DOCUMENT_INTELLIGENCE_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
+    # Same account/endpoint as OPENAI_ENDPOINT above (content_understanding.tf): Content
+    # Understanding is a different data-plane path on the same multi-service account, not a
+    # different resource. This is now the ONLY extraction-backend setting - the Document
+    # Intelligence path it used to sit beside was removed from the application, so
+    # DOCUMENT_INTELLIGENCE_ENDPOINT is gone from here too. Nothing reads it any more; leaving
+    # it set would just be a stale app setting on the Function App.
+    #
+    # Required, not optional, on the indexing side: AddPdfIndexing throws at startup without it
+    # rather than discovering mid-run that it cannot extract anything.
+    "CONTENT_UNDERSTANDING_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
     # Same account/endpoint again - Content Safety (Prompt Shields) and AI Language
     # (PII detection) are both exposed on this one AIServices-kind multi-service
     # account, confirmed live via direct REST calls (2026-08-06): both
     # text:shieldPrompt and language/:analyze-text return "PermissionDenied" (RBAC),
     # not 404, so no separate Content Safety/Language resource is needed. RBAC is
-    # already covered too - func_document_intelligence_user in
-    # document_intelligence.tf grants "Cognitive Services User" on this same
+    # already covered too - func_content_understanding_user in
+    # content_understanding.tf grants "Cognitive Services User" on this same
     # account, whose dataActions is the wildcard Microsoft.CognitiveServices/*.
     "CONTENT_SAFETY_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
     "LANGUAGE_ENDPOINT"       = data.azurerm_cognitive_account.foundry.endpoint
@@ -132,8 +138,8 @@ resource "azurerm_windows_function_app" "indexer" {
     "KNOWLEDGE_BASE_NAME"     = var.knowledge_base_name
 
     # Windows-only app setting: makes TimerTrigger cron expressions (e.g. ScheduledIndexing's
-    # daily 22:00 run) evaluate against Dutch wall-clock time instead of UTC, so the trigger
-    # stays at 22:00 local time across the DST transition rather than drifting by an hour.
+    # daily 17:00 run) evaluate against Dutch wall-clock time instead of UTC, so the trigger
+    # stays at 17:00 local time across the DST transition rather than drifting by an hour.
     "WEBSITE_TIME_ZONE" = "W. Europe Standard Time"
   }
 

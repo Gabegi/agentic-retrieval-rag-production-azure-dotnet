@@ -1,3 +1,23 @@
+# ===========================================================================
+# COMMENTED OUT 2026-08-21 - the sandbox Foundry project is being removed.
+#
+# Commenting a resource out does not orphan it: on the next apply Terraform
+# DESTROYS azapi_resource.sandbox (the project con-cap-sandbox-dev, together
+# with whatever agent/thread state lives in it - that state is not in
+# Terraform and is not recoverable from this repo). Production is unaffected;
+# count was already 0 there.
+#
+# Its deployment, content filter and role grants are commented out in
+# ai_sandbox.tf, and its four outputs in outputs.tf - all of them referenced
+# this resource, so they could not stay behind: a reference to a commented-out
+# resource is a terraform validate error, not a silent no-op.
+#
+# To restore: uncomment here, in ai_sandbox.tf and in outputs.tf together.
+# var.openai_sandbox_deployment, var.sandbox_deployment_capacity and
+# var.sandbox_user_object_ids are left declared in variables.tf (an unused
+# variable is legal) so a restore is uncomment-only.
+# ===========================================================================
+
 # ---------------------------------------------------------------------------
 # Foundry project, scoped under the existing Foundry AI Services account
 # (data.azurerm_cognitive_account.foundry, see data.tf). A project is a child
@@ -25,46 +45,46 @@
 # role grants that go with it are in ai_sandbox.tf and gate identically.
 # ---------------------------------------------------------------------------
 
-resource "azapi_resource" "sandbox" {
-  count = var.environment == "development" ? 1 : 0
-
-  type = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
-
-  # Deliberately follows the naming of the project the landing-zone team
-  # already created on this account (con-cap-dvt-dev) rather than the
-  # con-<type>-cap-<env>-<region>-<instance> convention in naming.tf - the
-  # project name ends up verbatim in the data-plane endpoint below, and the
-  # two projects on one account should read as siblings there.
-  name      = "con-cap-sandbox-${local.env}"
-  parent_id = data.azurerm_cognitive_account.foundry.id
-  location  = var.location
-
-  # purpose=sandbox marks this and its deployment (ai_sandbox.tf) as the one
-  # scope on this account that untrusted experimentation runs in - so a future
-  # reader can tell at a glance which resources are deliberately outside the
-  # app's data boundary.
-  tags = merge(local.common_tags, { purpose = "sandbox" })
-
-  # The project gets its own principal, separate from the account's. Note that
-  # Cognitive Services RBAC does not inherit upward from a project to its
-  # account (see the comment on search_openai_user in search.tf), so anything
-  # this identity needs on the account itself has to be granted explicitly.
-  identity {
-    type = "SystemAssigned"
-  }
-
-  body = {
-    properties = {
-      displayName = "Contoso AI - Sandbox (${local.env})"
-      description = "Sandbox project for experimentation - managed by Terraform"
-    }
-  }
-
-  # isDefault is left unset on purpose: con-cap-dvt-dev is currently the
-  # account's default project, and claiming that flag here would silently move
-  # it off a resource this config doesn't own.
-
-  # Exposes properties.endpoints["AI Foundry API"] for the output in
-  # outputs.tf - the endpoint is assigned by Azure, not composed by us.
-  response_export_values = ["properties.endpoints", "properties.internalId"]
-}
+# resource "azapi_resource" "sandbox" {
+#   count = var.environment == "development" ? 1 : 0
+#
+#   type = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
+#
+#   # Deliberately follows the naming of the project the landing-zone team
+#   # already created on this account (con-cap-dvt-dev) rather than the
+#   # con-<type>-cap-<env>-<region>-<instance> convention in naming.tf - the
+#   # project name ends up verbatim in the data-plane endpoint below, and the
+#   # two projects on one account should read as siblings there.
+#   name      = "con-cap-sandbox-${local.env}"
+#   parent_id = data.azurerm_cognitive_account.foundry.id
+#   location  = var.location
+#
+#   # purpose=sandbox marks this and its deployment (ai_sandbox.tf) as the one
+#   # scope on this account that untrusted experimentation runs in - so a future
+#   # reader can tell at a glance which resources are deliberately outside the
+#   # app's data boundary.
+#   tags = merge(local.common_tags, { purpose = "sandbox" })
+#
+#   # The project gets its own principal, separate from the account's. Note that
+#   # Cognitive Services RBAC does not inherit upward from a project to its
+#   # account (see the comment on search_openai_user in search.tf), so anything
+#   # this identity needs on the account itself has to be granted explicitly.
+#   identity {
+#     type = "SystemAssigned"
+#   }
+#
+#   body = {
+#     properties = {
+#       displayName = "Contoso AI - Sandbox (${local.env})"
+#       description = "Sandbox project for experimentation - managed by Terraform"
+#     }
+#   }
+#
+#   # isDefault is left unset on purpose: con-cap-dvt-dev is currently the
+#   # account's default project, and claiming that flag here would silently move
+#   # it off a resource this config doesn't own.
+#
+#   # Exposes properties.endpoints["AI Foundry API"] for the output in
+#   # outputs.tf - the endpoint is assigned by Azure, not composed by us.
+#   response_export_values = ["properties.endpoints", "properties.internalId"]
+# }

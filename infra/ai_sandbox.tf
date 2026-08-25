@@ -1,3 +1,15 @@
+# ===========================================================================
+# COMMENTED OUT 2026-08-21 - see the banner in ai_project.tf.
+#
+# On the next apply Terraform DESTROYS, in dev only:
+#   - azurerm_cognitive_deployment.sandbox   (the gpt-5.4-mini deployment)
+#   - azapi_resource.sandbox_rai_policy      (the custom strict content filter)
+# The two sandbox_user_* role assignments have no instances to destroy:
+# envs/dev.tfvars sets sandbox_user_object_ids = [].
+#
+# Restore by uncommenting this file, ai_project.tf and outputs.tf together.
+# ===========================================================================
+
 # ---------------------------------------------------------------------------
 # Everything that makes the sandbox project (ai_project.tf) usable, and
 # everything that keeps it contained: its own model deployment, its own
@@ -45,40 +57,40 @@
 # annotate. This is deliberately more aggressive than the app's own
 # deployments, which stay on the account default - a sandbox refusing too much
 # is an inconvenience, whereas the app refusing too much is a defect.
-resource "azapi_resource" "sandbox_rai_policy" {
-  count = var.environment == "development" ? 1 : 0
-
-  type      = "Microsoft.CognitiveServices/accounts/raiPolicies@2025-06-01"
-  name      = "con-cap-sandbox-strict"
-  parent_id = data.azurerm_cognitive_account.foundry.id
-
-  body = {
-    properties = {
-      mode           = "Blocking"
-      basePolicyName = "Microsoft.DefaultV2"
-
-      # Filter names and severityThreshold values are validated by ARM, not by
-      # Terraform - a typo here surfaces at apply time, not at plan time.
-      contentFilters = [
-        { name = "Hate", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
-        { name = "Hate", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
-        { name = "Sexual", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
-        { name = "Sexual", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
-        { name = "Violence", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
-        { name = "Violence", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
-        { name = "Selfharm", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
-        { name = "Selfharm", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
-
-        # Prompt shields and protected-material detection - off or
-        # annotate-only under the built-in defaults.
-        { name = "Jailbreak", blocking = true, enabled = true, source = "Prompt" },
-        { name = "Indirect Attack", blocking = true, enabled = true, source = "Prompt" },
-        { name = "Protected Material Text", blocking = true, enabled = true, source = "Completion" },
-        { name = "Protected Material Code", blocking = true, enabled = true, source = "Completion" },
-      ]
-    }
-  }
-}
+# resource "azapi_resource" "sandbox_rai_policy" {
+#   count = var.environment == "development" ? 1 : 0
+#
+#   type      = "Microsoft.CognitiveServices/accounts/raiPolicies@2025-06-01"
+#   name      = "con-cap-sandbox-strict"
+#   parent_id = data.azurerm_cognitive_account.foundry.id
+#
+#   body = {
+#     properties = {
+#       mode           = "Blocking"
+#       basePolicyName = "Microsoft.DefaultV2"
+#
+#       # Filter names and severityThreshold values are validated by ARM, not by
+#       # Terraform - a typo here surfaces at apply time, not at plan time.
+#       contentFilters = [
+#         { name = "Hate", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
+#         { name = "Hate", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
+#         { name = "Sexual", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
+#         { name = "Sexual", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
+#         { name = "Violence", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
+#         { name = "Violence", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
+#         { name = "Selfharm", severityThreshold = "Low", blocking = true, enabled = true, source = "Prompt" },
+#         { name = "Selfharm", severityThreshold = "Low", blocking = true, enabled = true, source = "Completion" },
+#
+#         # Prompt shields and protected-material detection - off or
+#         # annotate-only under the built-in defaults.
+#         { name = "Jailbreak", blocking = true, enabled = true, source = "Prompt" },
+#         { name = "Indirect Attack", blocking = true, enabled = true, source = "Prompt" },
+#         { name = "Protected Material Text", blocking = true, enabled = true, source = "Completion" },
+#         { name = "Protected Material Code", blocking = true, enabled = true, source = "Completion" },
+#       ]
+#     }
+#   }
+# }
 
 # --- Model deployment ------------------------------------------------------
 # Separate from local.openai_deployments in ai_deployments.tf on purpose: that
@@ -109,37 +121,37 @@ resource "azapi_resource" "sandbox_rai_policy" {
 #     --query "[?model.lifecycleStatus=='GenerallyAvailable'].{n:model.name,v:model.version}"
 # gpt-5.4-mini is GA with the longest retirement horizon of the small models
 # available here (2027-09-21), so this shouldn't need revisiting soon.
-resource "azurerm_cognitive_deployment" "sandbox" {
-  count = var.environment == "development" ? 1 : 0
-
-  name                 = var.openai_sandbox_deployment
-  cognitive_account_id = data.azurerm_cognitive_account.foundry.id
-  rai_policy_name      = azapi_resource.sandbox_rai_policy[0].name
-
-  # Pinned rather than auto-upgrading: a sandbox that silently changes model
-  # version underneath an experiment makes the experiment unreproducible, and
-  # nobody is watching this deployment for behaviour changes.
-  version_upgrade_option = "NoAutoUpgrade"
-
-  model {
-    format  = "OpenAI"
-    name    = "gpt-5.4-mini"
-    version = "2026-03-17"
-  }
-
-  sku {
-    name     = "GlobalStandard"
-    capacity = var.sandbox_deployment_capacity
-  }
-
-  # Explicitly off, and load-bearing. Dynamic throttling lets a deployment
-  # burst above its provisioned capacity when the account has spare capacity
-  # going - which is exactly the behaviour this deployment exists to prevent,
-  # since the spare capacity it would borrow is what the eval deployments need
-  # during a run. Leaving this unset would make the capacity ceiling above a
-  # soft target instead of a wall.
-  dynamic_throttling_enabled = false
-}
+# resource "azurerm_cognitive_deployment" "sandbox" {
+#   count = var.environment == "development" ? 1 : 0
+#
+#   name                 = var.openai_sandbox_deployment
+#   cognitive_account_id = data.azurerm_cognitive_account.foundry.id
+#   rai_policy_name      = azapi_resource.sandbox_rai_policy[0].name
+#
+#   # Pinned rather than auto-upgrading: a sandbox that silently changes model
+#   # version underneath an experiment makes the experiment unreproducible, and
+#   # nobody is watching this deployment for behaviour changes.
+#   version_upgrade_option = "NoAutoUpgrade"
+#
+#   model {
+#     format  = "OpenAI"
+#     name    = "gpt-5.4-mini"
+#     version = "2026-03-17"
+#   }
+#
+#   sku {
+#     name     = "GlobalStandard"
+#     capacity = var.sandbox_deployment_capacity
+#   }
+#
+#   # Explicitly off, and load-bearing. Dynamic throttling lets a deployment
+#   # burst above its provisioned capacity when the account has spare capacity
+#   # going - which is exactly the behaviour this deployment exists to prevent,
+#   # since the spare capacity it would borrow is what the eval deployments need
+#   # during a run. Leaving this unset would make the capacity ceiling above a
+#   # soft target instead of a wall.
+#   dynamic_throttling_enabled = false
+# }
 
 # --- Access ----------------------------------------------------------------
 # Scoped to the project resource ID, never to the account. Both roles are
@@ -164,22 +176,22 @@ resource "azurerm_cognitive_deployment" "sandbox" {
 # works here as well as a user's and is the better shape if this outlives the
 # current push: adding a person then becomes a group membership change with no
 # terraform apply and no PR.
-locals {
-  sandbox_principal_ids = (
-    var.environment == "development" ? toset(var.sandbox_user_object_ids) : toset([])
-  )
-}
-
-resource "azurerm_role_assignment" "sandbox_user_ai_developer" {
-  for_each             = local.sandbox_principal_ids
-  scope                = azapi_resource.sandbox[0].id
-  role_definition_name = "Azure AI Developer"
-  principal_id         = each.value
-}
-
-resource "azurerm_role_assignment" "sandbox_user_openai_user" {
-  for_each             = local.sandbox_principal_ids
-  scope                = azapi_resource.sandbox[0].id
-  role_definition_name = "Cognitive Services OpenAI User"
-  principal_id         = each.value
-}
+# locals {
+#   sandbox_principal_ids = (
+#     var.environment == "development" ? toset(var.sandbox_user_object_ids) : toset([])
+#   )
+# }
+#
+# resource "azurerm_role_assignment" "sandbox_user_ai_developer" {
+#   for_each             = local.sandbox_principal_ids
+#   scope                = azapi_resource.sandbox[0].id
+#   role_definition_name = "Azure AI Developer"
+#   principal_id         = each.value
+# }
+#
+# resource "azurerm_role_assignment" "sandbox_user_openai_user" {
+#   for_each             = local.sandbox_principal_ids
+#   scope                = azapi_resource.sandbox[0].id
+#   role_definition_name = "Cognitive Services OpenAI User"
+#   principal_id         = each.value
+# }

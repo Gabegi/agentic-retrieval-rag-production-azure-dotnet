@@ -113,7 +113,7 @@ resource "azurerm_storage_container" "pipeline_reports" {
   container_access_type = "private"
 }
 
-# Written by VectorCache (Indexing.Pdf/Services/Embedding/VectorCache.cs) only, under its
+# Written by VectorCache (Indexing.CU/Services/Embedding/VectorCache.cs) only, under its
 # vector-cache/ prefix - a content-addressed embedding-vector cache, not a report. Everything
 # else that used to live here (IPipelineArtifactWriter's per-stage content archives,
 # SnapshotService's rolling corpus snapshots) moved to the "pipeline-reports" container
