@@ -1,4 +1,5 @@
-using Azure.AI.DocumentIntelligence;
+using Azure.AI.ContentUnderstanding;
+using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AgenticRagApp.Infrastructure;
@@ -66,7 +67,6 @@ public class ServiceCollectionExtensionsTests
         var config = services.AddAgenticRagAppInfrastructure(configuration);
 
         Assert.AreEqual("gpt-41-extraction", config.OpenAiExtractionDeployment);
-        Assert.AreEqual("", config.DocumentIntelligenceEndpoint);
         Assert.AreEqual("protocols", config.StorageContainer);
         Assert.AreEqual("text-embedding-3-large", config.OpenAiEmbeddingModelName);
         Assert.AreEqual(3072, config.OpenAiEmbeddingDimensions);
@@ -79,7 +79,6 @@ public class ServiceCollectionExtensionsTests
         var configuration = BuildConfiguration(new()
         {
             ["OPENAI_EXTRACTION_DEPLOYMENT"]  = "custom-extraction",
-            ["DOCUMENT_INTELLIGENCE_ENDPOINT"] = "https://di.example.com",
             ["STORAGE_CONTAINER"]              = "custom-container",
             ["OPENAI_EMBEDDING_MODEL_NAME"]    = "custom-embedding-model",
             ["OPENAI_EMBEDDING_DIMENSIONS"]    = "1536",
@@ -88,7 +87,6 @@ public class ServiceCollectionExtensionsTests
         var config = services.AddAgenticRagAppInfrastructure(configuration);
 
         Assert.AreEqual("custom-extraction", config.OpenAiExtractionDeployment);
-        Assert.AreEqual("https://di.example.com", config.DocumentIntelligenceEndpoint);
         Assert.AreEqual("custom-container", config.StorageContainer);
         Assert.AreEqual("custom-embedding-model", config.OpenAiEmbeddingModelName);
         Assert.AreEqual(1536, config.OpenAiEmbeddingDimensions);
@@ -135,25 +133,15 @@ public class ServiceCollectionExtensionsTests
     }
 
     [TestMethod]
-    public void AddAgenticRagAppInfrastructure_DocumentIntelligenceEndpointNotConfigured_DoesNotRegisterDocumentIntelligenceClient()
+    public void AddAgenticRagAppInfrastructure_ContentUnderstandingEndpointNotConfigured_DoesNotRegisterAnalysisClient()
     {
         var services      = new ServiceCollection();
         var configuration = BuildConfiguration();
 
         services.AddAgenticRagAppInfrastructure(configuration);
 
-        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(DocumentIntelligenceClient)));
-    }
-
-    [TestMethod]
-    public void AddAgenticRagAppInfrastructure_DocumentIntelligenceEndpointConfigured_RegistersDocumentIntelligenceClient()
-    {
-        var services      = new ServiceCollection();
-        var configuration = BuildConfiguration(new() { ["DOCUMENT_INTELLIGENCE_ENDPOINT"] = "https://di.example.com" });
-
-        services.AddAgenticRagAppInfrastructure(configuration);
-
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(DocumentIntelligenceClient)));
+        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
+        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
     }
 
     [TestMethod]
@@ -168,5 +156,64 @@ public class ServiceCollectionExtensionsTests
         Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IIndexService"));
         Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IIndexDocumentService"));
         Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IIndexRebuildService"));
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_ContentUnderstandingEndpointNotConfigured_DoesNotRegisterContentUnderstandingClient()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration();
+
+        services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
+        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
+        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IContentUnderstandingVerifier)));
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_ContentUnderstandingEndpointConfigured_RegistersContentUnderstandingClient()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new() { ["CONTENT_UNDERSTANDING_ENDPOINT"] = "https://cu.example.com" });
+
+        services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentUnderstandingVerifier)));
+    }
+
+    // CONTENT_UNDERSTANDING_ENDPOINT is the only extraction-backend setting now - the Document
+    // Intelligence gate that used to sit beside it is gone with its client. The pair of tests
+    // that kept the two gates keyed to their own settings went with it; what still matters is
+    // that setting this one key lights up the whole CU client set, since the indexing side
+    // resolves IContentAnalysisClient on the strength of the same value.
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_ContentUnderstandingConfigured_RegistersTheWholeClientSet()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new() { ["CONTENT_UNDERSTANDING_ENDPOINT"] = "https://shared.example.com" });
+
+        services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentUnderstandingVerifier)));
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_ContentUnderstandingDefaults_AreAppliedWhenKeysAbsent()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration();
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.AreEqual("", config.ContentUnderstandingEndpoint);
+        Assert.AreEqual("cap-pdf-layout", config.ContentUnderstandingAnalyzerId);
+        // A MODEL name, never a deployment name - ContentAnalyzer.Models takes the model and the
+        // account defaults map it to the deployment. Must stay on CU's supported-model list.
+        Assert.AreEqual("gpt-5.4", config.ContentUnderstandingCompletionModel);
     }
 }
