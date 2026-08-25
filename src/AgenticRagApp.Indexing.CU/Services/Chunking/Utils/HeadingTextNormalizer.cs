@@ -24,16 +24,13 @@ public static class HeadingTextNormalizer
 {
     private static readonly char[] LineBreaks = ['\n', '\r'];
 
-    // Character repair rides on the same funnel (Services.ExtractedTextRepair): heading text
-    // comes off DI's RAW content and never passes through PdfCleaner, which is how the 260818
-    // index carried 508 decomposed U+0308 marks in heading fields while every page body was
-    // NFC-clean. Flatten is the one place all heading_text and heading_path values flow
-    // through, so repairing here covers both - and the embedded prefix built from them.
+    // Whitespace flattening only. Character repair used to ride on this funnel - Flatten is the
+    // one place all heading_text and heading_path values flow through, so it covered both plus
+    // the embedded prefix built from them - but no path normalizes characters any more.
     public static string? Flatten(string? content) =>
         string.IsNullOrWhiteSpace(content)
             ? null
-            : Services.ExtractedTextRepair.Repair(
-                  string.Join(' ', content.Split(LineBreaks, StringSplitOptions.RemoveEmptyEntries)
-                                          .Select(line => line.Trim())
-                                          .Where(line => line.Length > 0)));
+            : string.Join(' ', content.Split(LineBreaks, StringSplitOptions.RemoveEmptyEntries)
+                                      .Select(line => line.Trim())
+                                      .Where(line => line.Length > 0));
 }

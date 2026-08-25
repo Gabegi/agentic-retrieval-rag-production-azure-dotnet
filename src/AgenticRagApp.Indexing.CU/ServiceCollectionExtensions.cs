@@ -52,36 +52,43 @@ public static class ServiceCollectionExtensions
         // lives with the other ones rather than here.
         services.AddSingleton<DocumentIdentityResolver>();
 
-        // PDF extraction backend — only registered when Document Intelligence is
-        // configured (Infrastructure only registers the DocumentIntelligenceClient itself
-        // under the same condition); PdfExtractionPipeline resolves it explicitly by
-        // Name below rather than via GetRequiredService, so a future second backend can't
-        // silently change which one gets picked.
-        if (!string.IsNullOrWhiteSpace(config.DocumentIntelligenceEndpoint))
-        {
-            services.AddSingleton<PdfDocumentIntelligenceAnalyzer>();
-            services.AddSingleton<IPdfExtractor, PdfExtractor>();
-        }
-        services.AddSingleton<IPdfCleaner,           PdfCleaner>();
-        services.AddSingleton<IPdfPipelineValidator, PdfPipelineValidator>();
+        // Extraction runs on Content Understanding, and only on Content Understanding - there is
+        // no second backend to fall back to since the Document Intelligence path was removed.
+        //
+        // Fail fast, at registration, rather than at the first analyze call: a missing endpoint
+        // is a deployment mistake, and the alternative is a run that lists the corpus, diffs it,
+        // and only then discovers it cannot extract anything. Infrastructure registers
+        // IContentAnalysisClient under this same condition, so this throw is also what
+        // guarantees the resolve below succeeds.
+        if (string.IsNullOrWhiteSpace(config.ContentUnderstandingEndpoint))
+            throw new InvalidOperationException(
+                "CONTENT_UNDERSTANDING_ENDPOINT is not configured. Document extraction runs on Content " +
+                "Understanding and has no fallback backend.");
 
-        services.AddSingleton<IExtractionOrchestrator>(sp => new PdfExtractionPipeline(
+        services.AddSingleton<ContentUnderstandingAnalyzer>();
+
+        // The pre-extraction diff (container listing + index state + comparison), split out of
+        // ExtractionService so the decision logic is testable on its own.
+        services.AddSingleton<IIndexDiffService>(sp => new IndexDiffService(
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
+            sp.GetRequiredService<IBlobStore>(),
+            sp.GetRequiredService<IIndexDocumentService>(),
+            sp.GetRequiredService<ILogger<IndexDiffService>>()));
+
+        // Everything the extraction stage says about itself: counters, log lines and the report
+        // blobs. Registered rather than newed up for the same reason ChunkingReporter is - it
+        // writes through IRunReportWriter, which the host owns.
+        services.AddSingleton<ExtractionReporter>();
+
+        // The two containers are different and both positional: "documents" is what the per-file
+        // extraction downloads from, "pipeline-temp" is where the run-state baseline lives.
+        services.AddSingleton<IExtractionService>(sp => new ExtractionService(
+            sp.GetRequiredService<IIndexDiffService>(),
+            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
+            sp.GetRequiredService<ContentUnderstandingAnalyzer>(),
             sp.GetRequiredKeyedService<BlobContainerClient>("pipeline-temp"),
             sp.GetRequiredService<IBlobStore>(),
-            sp.GetRequiredService<IRunReportWriter>(),
-            sp.GetServices<IPdfExtractor>().Single(e => e.Name == "DocumentIntelligence"),
-            sp.GetRequiredService<IPdfCleaner>(),
-            sp.GetRequiredService<IPdfPipelineValidator>(),
-            sp.GetRequiredService<IHostEnvironment>(),
-            sp.GetRequiredService<ILogger<PdfExtractionPipeline>>()));
-
-        services.AddSingleton<IExtractionService>(sp => new ExtractionService(
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
-            sp.GetRequiredService<IBlobStore>(),
-            sp.GetRequiredService<IExtractionOrchestrator>(),
-            sp.GetRequiredService<IIndexDocumentService>(),
-            sp.GetRequiredService<IRunReportWriter>(),
+            sp.GetRequiredService<ExtractionReporter>(),
             sp.GetRequiredService<ILogger<ExtractionService>>()));
         services.AddSingleton<IEmbeddingService,       EmbeddingService>();
         services.AddSingleton<IUploadService,          UploadService>();

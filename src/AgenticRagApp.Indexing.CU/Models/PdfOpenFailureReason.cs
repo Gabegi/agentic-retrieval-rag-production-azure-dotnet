@@ -2,22 +2,28 @@ using AgenticRagApp.Common.Models;
 
 namespace AgenticRagApp.Indexing.CU.Models;
 
-// Structured category for a file-level PDF open/parse failure, set by
-// PdfDocumentValidator.TryOpenAndValidate. Lets PdfQualityGateResult break down
-// "how many files failed" by cause instead of grepping free-text messages.
+// Structured category for a file-level extraction failure. Lets a run report break down "how
+// many files failed" by cause instead of grepping free-text messages.
+//
+// Several members below were set by the local PdfPig preflight that ran before every analyze
+// call (Encrypted, MalformedFormat, EmptyFile, TooLarge, TooManyPages). That preflight is gone -
+// documents go straight to the service now, and a file it cannot read comes back as a service
+// error rather than a locally-diagnosed one. They are kept rather than deleted because they are
+// serialized into stored reports and because a future preflight, or a richer mapping of the
+// service's own error codes, would want exactly these categories back.
 public sealed record PdfOpenFailureReason(string Code) : OpenFailureReasonBase(Code)
 {
-    public static readonly PdfOpenFailureReason Unknown = new(nameof(Unknown)); // unexpected exception PdfPig doesn't have a dedicated type for
-    public static readonly PdfOpenFailureReason Encrypted = new(nameof(Encrypted)); // PdfDocumentEncryptedException - password-protected/unsupported encryption
-    public static readonly PdfOpenFailureReason MalformedFormat = new(nameof(MalformedFormat)); // PdfDocumentFormatException - corrupt header, broken xref, malformed objects
-    public static readonly PdfOpenFailureReason EmptyDocument = new(nameof(EmptyDocument)); // opened fine but has zero pages
-    public static readonly PdfOpenFailureReason NoReadablePages = new(nameof(NoReadablePages)); // opened fine but every page failed extraction
-    public static readonly PdfOpenFailureReason EmptyFile = new(nameof(EmptyFile)); // 0-byte input - never reaches PdfPig (PdfDocumentValidator)
-    public static readonly PdfOpenFailureReason TooLarge = new(nameof(TooLarge)); // exceeds Document Intelligence's max document size (PdfDocumentValidator)
-    public static readonly PdfOpenFailureReason TooManyPages = new(nameof(TooManyPages)); // exceeds Document Intelligence's max pages per analyze call (PdfDocumentValidator)
-    public static readonly PdfOpenFailureReason Throttled = new(nameof(Throttled)); // Document Intelligence returned 429 and retries were exhausted
-    public static readonly PdfOpenFailureReason DiServiceError = new(nameof(DiServiceError)); // Document Intelligence returned a non-429 request failure
-    public static readonly PdfOpenFailureReason UnexpectedContentFormat = new(nameof(UnexpectedContentFormat)); // DI returned Text instead of the requested Markdown - offsets would be untrustworthy
-    public static readonly PdfOpenFailureReason MissingAnalysisResult = new(nameof(MissingAnalysisResult)); // AnalyzeOutcome.Ok was true but Result was null - an internal bug, not a DI failure
-    public static readonly PdfOpenFailureReason TruncatedPages = new(nameof(TruncatedPages)); // DI returned a different page count than the native PDF has - partial/truncated analysis
+    public static readonly PdfOpenFailureReason Unknown = new(nameof(Unknown)); // unexpected exception with no more specific category
+    public static readonly PdfOpenFailureReason Encrypted = new(nameof(Encrypted)); // password-protected/unsupported encryption (no longer detected locally)
+    public static readonly PdfOpenFailureReason MalformedFormat = new(nameof(MalformedFormat)); // corrupt header, broken xref, malformed objects (no longer detected locally)
+    public static readonly PdfOpenFailureReason EmptyDocument = new(nameof(EmptyDocument)); // analyzed fine but produced no markdown or no pages
+    public static readonly PdfOpenFailureReason NoReadablePages = new(nameof(NoReadablePages)); // analyzed fine but every page failed extraction
+    public static readonly PdfOpenFailureReason EmptyFile = new(nameof(EmptyFile)); // 0-byte input
+    public static readonly PdfOpenFailureReason TooLarge = new(nameof(TooLarge)); // exceeds the service's max document size
+    public static readonly PdfOpenFailureReason TooManyPages = new(nameof(TooManyPages)); // exceeds the service's max pages per analyze call (300 for async Content Understanding)
+    public static readonly PdfOpenFailureReason Throttled = new(nameof(Throttled)); // the service returned 429 and poll retries were exhausted
+    public static readonly PdfOpenFailureReason DiServiceError = new(nameof(DiServiceError)); // the service returned a non-429 request failure
+    public static readonly PdfOpenFailureReason UnexpectedContentFormat = new(nameof(UnexpectedContentFormat)); // wrong string encoding, or YAML front matter - offsets/content would be untrustworthy
+    public static readonly PdfOpenFailureReason MissingAnalysisResult = new(nameof(MissingAnalysisResult)); // AnalyzeOutcome.Ok was true but Result was null - an internal bug, not a service failure
+    public static readonly PdfOpenFailureReason TruncatedPages = new(nameof(TruncatedPages)); // the markdown could not be mapped onto the pages the service reported
 }

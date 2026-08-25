@@ -1,0 +1,5 @@
+# The provisioner scripts behind terraform_data.cu_analyzer run on the Linux
+# pipeline agent. A CRLF checkout breaks them in ways that read as nonsense
+# ("bad interpreter: /usr/bin/env bash^M"), so pin them regardless of any
+# contributor's core.autocrlf.
+*.sh text eol=lf

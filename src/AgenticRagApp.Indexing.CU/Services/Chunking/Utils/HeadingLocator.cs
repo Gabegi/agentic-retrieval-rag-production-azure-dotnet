@@ -195,13 +195,11 @@ public static class HeadingLocator
     private static string FirstLine(string content) =>
         content.Split('\n')[0].Trim();
 
-    // Heading.Content is raw DI text; the page text has been through PdfCleaner. Applying
-    // the same character transforms to the needle is what lets an exact match work at all
-    // on a page that had ligatures, NBSPs, decomposed diacritics or folded symbols - the
-    // shared repair (ExtractedTextRepair) IS PdfCleaner's character set, so needle and
-    // haystack cannot drift apart again.
-    private static string Normalize(string s) =>
-        Services.ExtractedTextRepair.Repair(s).Trim();
+    // Trim only. This used to apply the shared character repair so the needle transformed
+    // exactly like the page text it searches; neither side is repaired now, so they match on
+    // whatever form Content Understanding produced. That holds ONLY while nothing else
+    // normalizes - restoring repair on one side without the other silently breaks every lookup.
+    private static string Normalize(string s) => s.Trim();
 
     // Walks a located heading's position back over the markdown marker that precedes it -
     // "#{1,6}" plus spacing - but only when that marker starts its own line, so a '#' inside
@@ -274,7 +272,7 @@ public static class HeadingLocator
             var body = content[at..end].Trim().TrimStart('#').TrimStart();
             var headingLine = Normalize(FirstLine(heading.Content));
 
-            var isBareLabel = GetHeadingsHelper.BareNumberedLabelWithWord()
+            var isBareLabel = HeadingNumbering.BareNumberedLabelWithWord()
                                                .IsMatch(FirstLine(heading.Content));
 
             // The same refusal, made on shape instead of on bareness. A pair is a heading and

@@ -1,7 +1,7 @@
 namespace AgenticRagApp.Indexing.CU.Models;
 
 // One of a SectionInfo's raw JSON-pointer Elements ("/paragraphs/15", "/tables/2", ...),
-// dereferenced against the same AnalyzeResult the pointer came from - what
+// dereferenced against the same response the pointer came from - what
 // pre-chunking-action-items.md A1 calls "resolving those refs into actual content."
 // - Kind is the pointer's own collection name ("paragraphs", "tables", "figures",
 //   "sections"), not remapped to this codebase's own type names, so a ref is traceable

@@ -31,21 +31,15 @@ public static class PrefixBuilder
         var parts = new[] { titleLine, CapPath(headingPath) }
             .Where(part => !string.IsNullOrWhiteSpace(part));
 
-        // The last funnel before the prefix becomes embedded text, and therefore the place the
-        // character repairs have to hold. Every upstream path is already repaired - titles in
-        // GetTitleHelper, headings in HeadingTextNormalizer.Flatten, bodies in PdfCleaner - but
-        // doc.Title does not always come from GetTitleHelper: when a document yields no usable
-        // title, it falls back to the source id, and a filename never went through any of them.
+        // This was the last funnel before the prefix becomes embedded text, and so the place the
+        // character repairs were applied. Nothing repairs now - not here, and not at any upstream
+        // path - so whatever form the title and heading path arrived in is what the prefix
+        // carries. The known case:
         // The 260819 artifact carries "Folder Beeldzorg - informatie clie\u0308nt -zidw" - a
         // decomposed diaeresis - straight into metadata.Prefix, and Prefix is half of
         // EmbeddingText (ChunkObject.EmbeddingText), so that chunk embeds and hashes against a
         // spelling of "cliënt" no NFC query will ever match.
-        //
-        // Repairing here rather than at each source is the same argument HeadingLocator makes
-        // for its needle: the composed string has to transform exactly like the body it is
-        // joined to. Repair is idempotent (NFC of NFC is NFC), so text that arrived already
-        // normalized is unchanged and its vector is unaffected.
-        return ExtractedTextRepair.Repair(string.Join("\n\n", parts));
+        return string.Join("\n\n", parts);
     }
 
     // Keeps the LAST levels, not the first: the leaf and its immediate parents are what

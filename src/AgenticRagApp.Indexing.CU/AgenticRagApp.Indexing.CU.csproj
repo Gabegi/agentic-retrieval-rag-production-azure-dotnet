@@ -1,10 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="Azure.Core" />
-    <PackageReference Include="Azure.AI.DocumentIntelligence" />
+    <PackageReference Include="Azure.AI.ContentUnderstanding" />
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Azure.Search.Documents" />
-    <PackageReference Include="PdfPig" />
     <PackageReference Include="Microsoft.Bcl.Memory" />
     <PackageReference Include="Microsoft.ML.Tokenizers" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" />

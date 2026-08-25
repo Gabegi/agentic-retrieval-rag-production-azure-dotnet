@@ -1,8 +1,8 @@
 namespace AgenticRagApp.Indexing.CU.Models;
 
-// A DI-detected section - the closest thing prebuilt-layout offers to real semantic
+// A service-detected section - the closest thing the layout model offers to real semantic
 // chunk boundaries, as opposed to the page-only boundaries GetPages relies on today.
-// - Elements are DI's own raw JSON-pointer refs (e.g. "/paragraphs/15", "/tables/2",
+// - Elements are the service's own raw JSON-pointer refs (e.g. "/paragraphs/15", "/tables/2",
 //   "/sections/3" for a nested subsection) into whichever paragraphs/tables/figures/
 //   subsections this section contains - kept verbatim for traceability back to the DI
 //   response.

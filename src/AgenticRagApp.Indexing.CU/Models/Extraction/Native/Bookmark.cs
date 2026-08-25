@@ -1,6 +1,12 @@
 namespace AgenticRagApp.Indexing.CU.Models;
 
-// One node from a PDF's outline/bookmark tree, as read by PdfNativeMetadataExtractor.
+// One node from a PDF's outline/bookmark tree.
+//
+// NOTHING POPULATES THIS TODAY. It was read by the PdfPig preflight, which was removed with the
+// Document Intelligence pipeline - Content Understanding returns no outline, so
+// PdfExtractionDocument.Bookmarks is always empty and the page-breadcrumb map built from it is
+// always empty too. Kept because stored snapshots contain it and because an outline is a real
+// signal worth recovering if a local pre-read ever returns.
 // PageNumber is null when the node's destination couldn't be resolved to a page in
 // this document - IsExternal/IsEmbedded tell PdfSectionBreadCrumbBuilder which PdfPig
 // node type produced that null, for separate diagnostics (both already collapse to

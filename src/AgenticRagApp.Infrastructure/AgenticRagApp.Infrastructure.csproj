@@ -2,7 +2,7 @@
   <ItemGroup>
     <PackageReference Include="Azure.Core" />
     <PackageReference Include="Azure.Identity" />
-    <PackageReference Include="Azure.AI.DocumentIntelligence" />
+    <PackageReference Include="Azure.AI.ContentUnderstanding" />
     <PackageReference Include="Azure.AI.TextAnalytics" />
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Azure.AI.OpenAI" />

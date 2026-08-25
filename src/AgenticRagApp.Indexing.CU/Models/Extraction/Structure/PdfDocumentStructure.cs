@@ -1,29 +1,30 @@
 namespace AgenticRagApp.Indexing.CU.Models;
 
-// Return types used by PdfDocumentIntelligenceAnalyzer's Get* methods:
-// - Each record in this folder matches one Get* method one-to-one.
-// - This keeps callers focused only on the fields they actually asked for.
+// Return types the extraction mapper (CuStructureMapper) produces:
+// - Each record in this folder is one kind of structure the service reports.
 // - Every Offset field in this folder (Heading, TableInfo, SelectionMarkInfo, FigureInfo,
 //   LineInfo) indexes into analysis.Content / RawContent. Because
-//   AnalyzeDocumentAsync requests OutputContentFormat.Markdown, that string IS the
-//   markdown-rendered content, not plain text - DI recomputes every span against
-//   whichever format was requested, so this isn't an edge case to guard against, it's
-//   how these offsets work now. A future ChunkMetadata builder must match content
-//   against these markdown-relative offsets, not plain-text ones.
+//   the service returns markdown, that string IS the markdown-rendered content, not plain
+//   text - every span is computed against it. So these offsets are markdown-relative, and
+//   they address the RAW markdown, not the cleaned Content that CuMarkdownPager assembles.
+//   See PageSpan for the two coordinate systems and HeadingLocator for how they are bridged.
 // - Heading/TableInfo/FigureInfo/LineInfo's Offset is nullable: it's an anchor into
-//   the first Span/BoundingRegion only, and when DI didn't provide one, null means
+//   the first span only, and when the service didn't provide one, null means
 //   "unknown" - never 0, since 0 is itself a legitimately valid offset (the very start
-//   of the content) and couldn't otherwise be told apart from "no span data". Selection
-//   marks don't have this ambiguity (DI always gives exactly one Span per mark).
+//   of the content) and couldn't otherwise be told apart from "no span data".
 //
-// Raw structural data extracted from one PDF - not the final chunk metadata.
+// - Selection marks and lines are always empty: Content Understanding has no typed selection
+//   marks (the checkbox characters survive inline in the markdown instead), and encodes
+//   geometry as an opaque source string rather than polygons.
+//
+// Raw structural data extracted from one document - not the final chunk metadata.
 // - At extraction time, chunk boundaries don't exist yet, so this record does NOT
 //   assemble chunks itself.
 // - It simply bundles everything the extraction step already produces for free.
 // - A later step builds the real ChunkMetadata by matching these items up using
 //   their Offset values.
-// - NativeMetadata/Bookmarks live once, at the top level of PdfExtractionResult -
-//   not duplicated in here.
+// - Selection marks and lines are always empty: Content Understanding has no typed selection
+//   marks, and encodes geometry as an opaque source string rather than polygons.
 public sealed record PdfDocumentStructure(
     IReadOnlyList<Heading> Headings,               // title / sectionHeading roles only
     IReadOnlyList<Heading> Boilerplate,             // pageHeader / pageFooter / footnote / pageNumber roles
