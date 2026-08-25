@@ -415,7 +415,6 @@ public class PdfIndexingFunctionTests
         ZenyaVersion:          null,
         ZenyaStatus:           null,
         ZenyaUrl:              null,
-        Bookmarks:             [],
         PageSpans:             [new PageSpan(1, 0, "content".Length, null, false)],
         PageBreadcrumbs:       new Dictionary<int, string>(),
         Sections:              [],

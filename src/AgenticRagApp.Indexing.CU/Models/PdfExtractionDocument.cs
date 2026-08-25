@@ -61,9 +61,6 @@ public sealed record PdfExtractionDocument(
     string? ZenyaStatus,
     string? ZenyaUrl,
 
-    // Raw bookmark/outline tree. Only 5 of 51 documents have one, and the four largest have
-    // none - which is why DI's detected headings, not this, are the primary boundary signal.
-    IReadOnlyList<Bookmark> Bookmarks,
 
     // Page number -> breadcrumb text, where the outline covers that page. Kept as a map
     // rather than resolved onto pages, since a chunk can now span pages.

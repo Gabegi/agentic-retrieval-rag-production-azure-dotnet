@@ -9,7 +9,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //   - Lines is out on measured cost. It was 57% of the entire extraction payload by itself
 //     (178 KB per document, a polygon per text line), and page-filtering only reduces it to
 //     roughly one copy per chunk covering that page.
-//   - Sections and Bookmarks are out for a stronger reason: they are per-DOCUMENT data, so
+//   - Sections are out for a stronger reason: they are per-DOCUMENT data, so
 //     attaching them costs sections x chunk-count. That is what took the chunks blob to
 //     772 MB for 3,046 chunks and OOM'd EmbedAndUploadActivity on 260812.
 public static class StructureFilter

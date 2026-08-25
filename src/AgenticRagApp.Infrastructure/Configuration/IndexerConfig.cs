@@ -35,16 +35,10 @@ public class IndexerConfig
     // keeping them as two keys is what made retiring Document Intelligence a deletion here
     // rather than a re-plumbing.
     public string ContentUnderstandingEndpoint { get; init; } = "";
-    // The custom analyzer this pipeline submits against. Must exist on the account before the
-    // first analyze call - POST /api/content-understanding/provision creates it. See
-    // infra/content_understanding.tf.
-    public string ContentUnderstandingAnalyzerId { get; init; } = "cap-pdf-layout";
-    // The *model* name CU resolves through its default deployment mapping, NOT a deployment name -
-    // ContentAnalyzer.Models is role -> model ({ "completion": "gpt-5.4" }) while the defaults map
-    // model -> deployment ("gpt-5.4" -> OpenAiExtractionDeployment). Putting a deployment name here
-    // fails at runtime as "Model deployment not found". Must match ai_deployments.tf's `extraction`
-    // model and stay on CU's supported list (gpt-5.5, gpt-5.4, gpt-5.2, gpt-5.1, gpt-4.1, ...).
-    public string ContentUnderstandingCompletionModel { get; init; } = "gpt-5.4";
+    // No analyzer-id or completion-model setting any more: the analyzer is the prebuilt
+    // "prebuilt-documentSearch", hardcoded in ContentAnalysisClient, and the models it needs are
+    // resolved by the service through the account-wide default model->deployment mapping rather
+    // than named per request.
     public string OpenAiEmbeddingModelName     { get; init; } = "text-embedding-3-large";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
 

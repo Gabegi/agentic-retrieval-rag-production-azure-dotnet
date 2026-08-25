@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Blob;
+using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.CU.Services;
@@ -65,8 +66,6 @@ public static class ServiceCollectionExtensions
                 "CONTENT_UNDERSTANDING_ENDPOINT is not configured. Document extraction runs on Content " +
                 "Understanding and has no fallback backend.");
 
-        services.AddSingleton<ContentUnderstandingAnalyzer>();
-
         // The pre-extraction diff (container listing + index state + comparison), split out of
         // ExtractionService so the decision logic is testable on its own.
         services.AddSingleton<IIndexDiffService>(sp => new IndexDiffService(
@@ -85,7 +84,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IExtractionService>(sp => new ExtractionService(
             sp.GetRequiredService<IIndexDiffService>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
-            sp.GetRequiredService<ContentUnderstandingAnalyzer>(),
+            sp.GetRequiredService<IContentAnalysisClient>(),
             sp.GetRequiredKeyedService<BlobContainerClient>("pipeline-temp"),
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<ExtractionReporter>(),

@@ -67,6 +67,24 @@ locals {
       model_version = "2025-11-13"
       capacity      = 200
     }
+    # Content Understanding's prebuilt analyzers - prebuilt-documentSearch included - are
+    # documented as requiring gpt-4.1-mini and text-embedding-3-large deployments, and
+    # ContentAnalysisClient submits against prebuilt-documentSearch. The app never calls this
+    # deployment itself: CU resolves it through the account's default model->deployment mapping,
+    # which is NOT written from here (AnalyzeBinaryAsync has no per-request modelDeployments
+    # parameter, and the provisioner that used to merge-PATCH the account defaults was deleted with
+    # the rest of the CU bootstrap code). Setting that mapping is a one-off manual step - see
+    # content_understanding.tf.
+    #
+    # model_version is the GA gpt-4.1-mini version; confirm it against the region's model list
+    # before the first apply (az cognitiveservices account list-models), since a wrong version
+    # fails the apply rather than degrading quietly.
+    mini = {
+      name          = var.openai_mini_deployment
+      model_name    = "gpt-4.1-mini"
+      model_version = "2025-04-14"
+      capacity      = 50
+    }
   }
 }
 

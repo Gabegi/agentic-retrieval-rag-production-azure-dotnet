@@ -168,7 +168,6 @@ public class ServiceCollectionExtensionsTests
 
         Assert.IsFalse(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
         Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
-        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IContentUnderstandingVerifier)));
     }
 
     [TestMethod]
@@ -181,29 +180,14 @@ public class ServiceCollectionExtensionsTests
 
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentUnderstandingVerifier)));
     }
 
-    // CONTENT_UNDERSTANDING_ENDPOINT is the only extraction-backend setting now - the Document
-    // Intelligence gate that used to sit beside it is gone with its client. The pair of tests
-    // that kept the two gates keyed to their own settings went with it; what still matters is
-    // that setting this one key lights up the whole CU client set, since the indexing side
-    // resolves IContentAnalysisClient on the strength of the same value.
+    // CONTENT_UNDERSTANDING_ENDPOINT is the only Content Understanding setting there is now. The
+    // analyzer id and completion model went with the provisioner: the analyzer is the prebuilt
+    // "prebuilt-documentSearch", hardcoded in ContentAnalysisClient, and its models are resolved
+    // by the service through the account-wide default mapping rather than named per request.
     [TestMethod]
-    public void AddAgenticRagAppInfrastructure_ContentUnderstandingConfigured_RegistersTheWholeClientSet()
-    {
-        var services      = new ServiceCollection();
-        var configuration = BuildConfiguration(new() { ["CONTENT_UNDERSTANDING_ENDPOINT"] = "https://shared.example.com" });
-
-        services.AddAgenticRagAppInfrastructure(configuration);
-
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentUnderstandingVerifier)));
-    }
-
-    [TestMethod]
-    public void AddAgenticRagAppInfrastructure_ContentUnderstandingDefaults_AreAppliedWhenKeysAbsent()
+    public void AddAgenticRagAppInfrastructure_ContentUnderstandingEndpoint_DefaultsToEmptyWhenKeyAbsent()
     {
         var services      = new ServiceCollection();
         var configuration = BuildConfiguration();
@@ -211,9 +195,5 @@ public class ServiceCollectionExtensionsTests
         var config = services.AddAgenticRagAppInfrastructure(configuration);
 
         Assert.AreEqual("", config.ContentUnderstandingEndpoint);
-        Assert.AreEqual("cap-pdf-layout", config.ContentUnderstandingAnalyzerId);
-        // A MODEL name, never a deployment name - ContentAnalyzer.Models takes the model and the
-        // account defaults map it to the deployment. Must stay on CU's supported-model list.
-        Assert.AreEqual("gpt-5.4", config.ContentUnderstandingCompletionModel);
     }
 }

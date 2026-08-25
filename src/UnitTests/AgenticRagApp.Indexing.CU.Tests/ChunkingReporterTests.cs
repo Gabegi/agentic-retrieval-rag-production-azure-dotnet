@@ -51,7 +51,6 @@ public class ChunkingReporterTests
             ZenyaVersion:     null,
             ZenyaStatus:      null,
             ZenyaUrl:         null,
-            Bookmarks:        [],
             PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         [],
             Headings:         headings ?? [],

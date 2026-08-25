@@ -1,12 +1,16 @@
 namespace AgenticRagApp.Indexing.CU.Models;
 
-// Return types the extraction mapper (CuStructureMapper) produces:
+// Return types the extraction mapper produced. NOTHING PRODUCES THEM TODAY: the CU response
+// mappers were deleted with the move to prebuilt-documentSearch, and ExtractionService now emits
+// raw markdown with a null Structure. The records stay because chunking still consumes them - a
+// new mapper written against prebuilt-documentSearch's response is what refills them.
+//
 // - Each record in this folder is one kind of structure the service reports.
 // - Every Offset field in this folder (Heading, TableInfo, SelectionMarkInfo, FigureInfo,
 //   LineInfo) indexes into analysis.Content / RawContent. Because
 //   the service returns markdown, that string IS the markdown-rendered content, not plain
 //   text - every span is computed against it. So these offsets are markdown-relative, and
-//   they address the RAW markdown, not the cleaned Content that CuMarkdownPager assembles.
+//   they address the RAW markdown.
 //   See PageSpan for the two coordinate systems and HeadingLocator for how they are bridged.
 // - Heading/TableInfo/FigureInfo/LineInfo's Offset is nullable: it's an anchor into
 //   the first span only, and when the service didn't provide one, null means

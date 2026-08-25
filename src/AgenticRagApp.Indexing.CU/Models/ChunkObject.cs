@@ -413,7 +413,7 @@ public sealed class ChunkMetadata
     public IReadOnlyList<string> FigureCaptions { get; set; } = [];
 
     // The page-scoped structural payload (tables, figures, boilerplate on the pages this cut
-    // covers). Carried, not Search-indexed - see ChunkStructure. Bookmarks and Sections are
+    // covers). Carried, not Search-indexed - see ChunkStructure. Sections are
     // deliberately absent: per-document data attached per chunk is quadratic in document size,
     // and it once produced 772 MB of chunks against a 16 MB extraction artifact.
     public ChunkStructure Structure { get; set; } = ChunkStructure.Empty;

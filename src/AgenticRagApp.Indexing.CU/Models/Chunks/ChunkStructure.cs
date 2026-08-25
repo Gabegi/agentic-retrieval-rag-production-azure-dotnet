@@ -17,7 +17,7 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // exists for a future highlight-on-source feature, which would read it from
 // PdfExtractionDocument (where it still lives, once) rather than from a chunk.
 //
-// Sections and Bookmarks are absent for a different and stronger reason - see ChunkObject.
+// Sections are absent for a different and stronger reason - see ChunkObject.
 // They are per-DOCUMENT data, so attaching them here costs sections x chunk-count, and both
 // factors peak on the same four documents. That is what took the chunks blob to 772 MB for
 // 3,046 chunks and OOM'd EmbedAndUploadActivity on 260812.

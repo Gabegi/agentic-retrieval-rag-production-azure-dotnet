@@ -4,8 +4,8 @@ using AgenticRagApp.Indexing.CU.Services;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
-// Assembly and output shape. The paid call itself is covered by
-// ContentUnderstandingAnalyzerTests; what matters here is what happens to the results once a
+// Assembly and output shape. The paid call itself has no test any more - it is one
+// AnalyzeBinaryAsync line in ExtractionService; what matters here is what happens to the results once a
 // corpus of them exists - above all that the order is stable, because chunk ids are derived
 // from a document's position in this list.
 [TestClass]

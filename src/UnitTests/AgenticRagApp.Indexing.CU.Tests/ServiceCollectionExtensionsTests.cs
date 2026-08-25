@@ -47,14 +47,17 @@ public class ServiceCollectionExtensionsTests
         StringAssert.Contains(ex.Message, "CONTENT_UNDERSTANDING_ENDPOINT");
     }
 
+    // The analyzer wrapper this used to assert is gone: ExtractionService now calls
+    // IContentAnalysisClient directly, and that client is registered by Infrastructure rather than
+    // here. What AddPdfIndexing still owns past the endpoint gate is the extraction stage itself.
     [TestMethod]
-    public void AddPdfIndexing_ContentUnderstandingConfigured_RegistersTheAnalyzer()
+    public void AddPdfIndexing_ContentUnderstandingConfigured_RegistersTheExtractionStage()
     {
         var services = new ServiceCollection();
 
         services.AddPdfIndexing(Config());
 
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingAnalyzer)));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IExtractionService)));
     }
 
     [TestMethod]
@@ -111,8 +114,8 @@ public class ServiceCollectionExtensionsTests
 
     // The cleaning and validation registrations that used to be asserted here (IPdfCleaner,
     // IPdfPipelineValidator) are gone with their classes. Cleaning moved into the extraction
-    // mapper (CuMarkdownPager); validation is deliberately absent and will be reintroduced at
-    // the seam in ExtractionService.
+    // mapper, which has since been deleted too; both cleaning and validation are absent and will be
+    // reintroduced at the seam in ExtractionService.
 
     [TestMethod]
     public void AddPdfIndexing_RegistersDiffEmbedUploadAndRecoveryPipeline()

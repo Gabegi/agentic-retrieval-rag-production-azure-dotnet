@@ -12,8 +12,11 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // than dropped - a document that could not be extracted is a fact the run report has to carry -
 // and every reader distinguishes them on Ok alone.
 //
-// Sits one level up from AnalyzeOutcome: that is what one analyze CALL returned, this is what one
-// FILE produced, mapping included.
+// Content is the analyzer's raw markdown and nothing else. PageSpans, Structure, Title, Profile
+// and Language are always null on the success path now - the mappers that used to fill them were
+// written against prebuilt-document's layout detail and were deleted with the switch to
+// prebuilt-documentSearch. Usage is null for a mechanical reason: it comes off the LRO Operation
+// via GetUsage(), and ContentAnalysisClient returns only operation.Value.
 internal sealed record ExtractedFile(
     bool                         Ok,
     string                       BlobName,

@@ -24,6 +24,6 @@ public sealed record PdfOpenFailureReason(string Code) : OpenFailureReasonBase(C
     public static readonly PdfOpenFailureReason Throttled = new(nameof(Throttled)); // the service returned 429 and poll retries were exhausted
     public static readonly PdfOpenFailureReason DiServiceError = new(nameof(DiServiceError)); // the service returned a non-429 request failure
     public static readonly PdfOpenFailureReason UnexpectedContentFormat = new(nameof(UnexpectedContentFormat)); // wrong string encoding, or YAML front matter - offsets/content would be untrustworthy
-    public static readonly PdfOpenFailureReason MissingAnalysisResult = new(nameof(MissingAnalysisResult)); // AnalyzeOutcome.Ok was true but Result was null - an internal bug, not a service failure
+    public static readonly PdfOpenFailureReason MissingAnalysisResult = new(nameof(MissingAnalysisResult)); // the analyze call succeeded but carried no result - an internal bug, not a service failure
     public static readonly PdfOpenFailureReason TruncatedPages = new(nameof(TruncatedPages)); // the markdown could not be mapped onto the pages the service reported
 }

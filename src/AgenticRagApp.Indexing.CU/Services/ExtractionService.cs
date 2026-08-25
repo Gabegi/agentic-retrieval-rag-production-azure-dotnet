@@ -4,6 +4,7 @@ using Azure.AI.ContentUnderstanding;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Blob;
+using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Common.Models;
 using AgenticRagApp.Observability;
@@ -35,8 +36,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // What is not here is what keeps this from being the whole stage in one file - and each of these
 // is reachable without going through this class:
 // - IndexDiffService              decides what to extract (listing, index state, comparison)
-// - ContentUnderstandingAnalyzer  the paid analyze call itself
-// - CuContentMapper               an analyze response -> content, page spans, structure
+// - ContentAnalysisClient         the paid analyze call itself
 // - ExtractionOutputBuilder       turns a run's results into the stage's output
 // - ExtractionReporter            counters, log lines, report blobs
 // - ExtractionStatsBuilder        what the stage returns: the documents to process, which of
@@ -45,7 +45,7 @@ public class ExtractionService : IExtractionService
 {
     private readonly IIndexDiffService            _diffService;
     private readonly BlobContainerClient          _documentsContainer;
-    private readonly ContentUnderstandingAnalyzer _analyzer;
+    private readonly IContentAnalysisClient       _analysisClient;
     private readonly BlobContainerClient          _stateContainer;
     private readonly IBlobStore                   _blobStore;
     private readonly ExtractionReporter           _reporter;
@@ -81,7 +81,7 @@ public class ExtractionService : IExtractionService
     public ExtractionService(
         IIndexDiffService            diffService,
         BlobContainerClient          documentsContainer,
-        ContentUnderstandingAnalyzer analyzer,
+        IContentAnalysisClient       analysisClient,
         BlobContainerClient          stateContainer,
         IBlobStore                   blobStore,
         ExtractionReporter           reporter,
@@ -90,7 +90,7 @@ public class ExtractionService : IExtractionService
     {
         _diffService          = diffService;
         _documentsContainer   = documentsContainer;
-        _analyzer             = analyzer;
+        _analysisClient       = analysisClient;
         _stateContainer       = stateContainer;
         _blobStore            = blobStore;
         _reporter             = reporter;
@@ -256,60 +256,65 @@ public class ExtractionService : IExtractionService
         return (await AnalyzeDocumentWithCUAsync(blobName, bytes, ct)) with { ContentHash = contentHash };
     }
 
-    // The paid call and the mapping of its response. Takes bytes, so it never touches blob
-    // storage and is testable without one.
+    // The paid call. Takes bytes, so it never touches blob storage and is testable without one.
+    //
+    // Raw markdown and nothing else. The response-to-pipeline mapping (page spans, structure,
+    // title, profile, language) is deliberately NOT wired: prebuilt-documentSearch returns
+    // service-side chunks and a summary rather than prebuilt-document's layout detail, so the old
+    // CU mappers did not apply to it and were deleted rather than left half-connected. Chunking
+    // downstream receives no structure until that is designed against a real response.
+    //
+    // Usage is null for the same reason it used to be populated: AnalyzeUsageDetails comes off the
+    // Operation via GetUsage(), and this path keeps only operation.Value. Cost reporting
+    // under-counts every run until that is threaded back through.
     private async Task<ExtractedFile> AnalyzeDocumentWithCUAsync(string blobName, byte[] bytes, CancellationToken ct)
     {
-        var outcome = await _analyzer.AnalyzeAsync(bytes, blobName, ct);
+        _logger.LogInformation("Submitting '{Blob}' to Content Understanding.", blobName);
 
-        var warnings = outcome.Warnings.Select(w => w.ToPipelineIssue(blobName)).ToList();
-
-        if (!outcome.Ok || outcome.Result is null)
-        {
-            _logger.LogWarning(
-                "Content Understanding analysis of '{Blob}' failed ({Reason}): {Message}",
-                blobName, outcome.Error?.Reason?.Code, outcome.Error?.Message);
-
-            return ExtractedFile.Failed(blobName, outcome.Error ?? PipelineIssue.Error(
-                PipelineStage.ParsePages, blobName,
-                "Content Understanding analysis failed with no error details.",
-                reason: PdfOpenFailureReason.Unknown), warnings);
-        }
-
-        var document = outcome.Result.Contents.OfType<DocumentContent>().First();
-
+        AnalysisResult result;
         try
         {
-            var mapped = CuContentMapper.Map(document, blobName, bytes.LongLength);
-
-            return new ExtractedFile(
-                true, blobName, mapped.Content, mapped.PageSpans, mapped.Structure,
-                mapped.Title, mapped.Profile, mapped.Language, outcome.Usage, null, warnings);
+            result = await _analysisClient.AnalyzeAsync(bytes, ct);
         }
-        catch (CuMarkdownPager.PageSegmentationException ex)
+        catch (RequestFailedException ex)
         {
-            // The page map could not be built. Loud and file-level on purpose: indexing this
-            // document anyway would give every chunk in it a guessed page number, which is
-            // invisible in the output and wrong in every citation.
-            _logger.LogError(ex, "Could not map Content Understanding pages for '{Blob}'.", blobName);
-
-            return ExtractedFile.Failed(blobName, PipelineIssue.Error(
-                PipelineStage.ParsePages, blobName, ex.Message,
-                reason: PdfOpenFailureReason.TruncatedPages), warnings);
-        }
-        catch (Exception ex)
-        {
-            // The analysis itself succeeded and is already paid for; this is a defect in our own
-            // mapping over a response shape we did not anticipate. Typed like every other
-            // failure so it cannot escape past the caller's error handling.
-            _logger.LogError(ex,
-                "Failed to map a successful Content Understanding response for '{Blob}'.", blobName);
+            // The submit or the LRO itself failed. Nothing is retried here - the SDK's own
+            // WaitUntil.Completed handles transient poll failures, and a resubmit would re-bill
+            // the analysis.
+            _logger.LogWarning(ex,
+                "Content Understanding analysis of '{Blob}' failed ({Status}).", blobName, ex.Status);
 
             return ExtractedFile.Failed(blobName, PipelineIssue.Error(
                 PipelineStage.ParsePages, blobName,
-                $"Mapping the Content Understanding response failed: {ex.Message}",
-                reason: PdfOpenFailureReason.Unknown), warnings);
+                $"Content Understanding analysis failed: {ex.Message}",
+                reason: PdfOpenFailureReason.Unknown));
         }
+
+        var warnings = (result.Warnings ?? [])
+            .Select(w => PipelineIssue.Warning(
+                PipelineStage.ParsePages, blobName, $"{w.Code}: {w.Message}"))
+            .ToList();
+
+        var document = result.Contents.OfType<DocumentContent>().FirstOrDefault();
+
+        if (document is null)
+        {
+            // A successful, fully billed response carrying no document content. Not a mapping
+            // defect - the analyzer returned something this pipeline cannot use at all.
+            _logger.LogError(
+                "Content Understanding returned no DocumentContent for '{Blob}' (analyzer '{AnalyzerId}').",
+                blobName, result.AnalyzerId);
+
+            return ExtractedFile.Failed(blobName, PipelineIssue.Error(
+                PipelineStage.ParsePages, blobName,
+                "Content Understanding returned no document content.",
+                reason: PdfOpenFailureReason.UnexpectedContentFormat), warnings);
+        }
+
+        return new ExtractedFile(
+            true, blobName, document.Markdown,
+            PageSpans: null, Structure: null, Title: null, Profile: null, Language: null,
+            Usage: null, Error: null, Warnings: warnings);
     }
 
     // --- Run state ------------------------------------------------------------

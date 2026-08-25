@@ -60,7 +60,6 @@ internal static class ExtractionOutputBuilder
                     ZenyaVersion:     zenya.Version,
                     ZenyaStatus:      zenya.Status,
                     ZenyaUrl:         zenya.Url,
-                    Bookmarks:        [],
                     PageBreadcrumbs:  new Dictionary<int, string>(),
                     Sections:         structure?.Sections       ?? [],
                     Headings:         structure?.Headings       ?? [],

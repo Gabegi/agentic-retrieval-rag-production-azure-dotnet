@@ -8,12 +8,9 @@ namespace AgenticRagApp.Indexing.CU.Models;
 public static class ChunkHeadingSource
 {
     // A Document Intelligence title/sectionHeading paragraph. The primary signal - it works
-    // even when the PDF has no bookmark outline at all, which is most of this corpus.
+    // even when the PDF has no outline at all, which is most of this corpus.
     public const string DiHeading = "di_heading";
 
-    // The PDF's own bookmark outline, via the page breadcrumb. Hierarchical where present,
-    // but only 5 of 51 documents have an outline and the four largest have none.
-    public const string Bookmark = "bookmark";
 
     // Document Intelligence's own nested section tree. Phase A measured its boundaries as
     // identical to the DI headings (99.4-100%, both directions), so it is kept as a

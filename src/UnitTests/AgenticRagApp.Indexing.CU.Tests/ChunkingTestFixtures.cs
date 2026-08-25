@@ -59,7 +59,6 @@ internal static class ChunkingTestFixtures
             ZenyaVersion:     null,
             ZenyaStatus:      null,
             ZenyaUrl:         null,
-            Bookmarks:        [],
             PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         [],
             Headings:         [],

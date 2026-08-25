@@ -58,8 +58,6 @@ public static class ServiceCollectionExtensions
             OpenAiGptModelName           = configuration["OPENAI_GPT_MODEL_NAME"]!,
             OpenAiExtractionDeployment   = configuration["OPENAI_EXTRACTION_DEPLOYMENT"] ?? "gpt-41-extraction",
             ContentUnderstandingEndpoint = configuration["CONTENT_UNDERSTANDING_ENDPOINT"] ?? "",
-            ContentUnderstandingAnalyzerId = configuration["CONTENT_UNDERSTANDING_ANALYZER_ID"] ?? "cap-pdf-layout",
-            ContentUnderstandingCompletionModel = configuration["CONTENT_UNDERSTANDING_COMPLETION_MODEL"] ?? "gpt-5.4",
             ContentSafetyEndpoint        = configuration["CONTENT_SAFETY_ENDPOINT"]!,
             LanguageEndpoint             = configuration["LANGUAGE_ENDPOINT"]!,
             StorageAccountUrl            = configuration["STORAGE_ACCOUNT_URL"]!,
@@ -139,22 +137,16 @@ public static class ServiceCollectionExtensions
         // Understanding became the only backend - CU handles PDFs plus images, Office documents
         // and video, and it returns figure descriptions DI had no equivalent for.
         //
-        // Options() rather than a bare client: it pins api-version 2025-11-01 and attaches the
-        // utf16 policy, and a CU client built without it produces silently drifting offsets.
+        // Two registrations, no options object: the api-version pin and the utf16 pipeline policy
+        // that used to be attached here were deleted along with the analyzer provisioning, so this
+        // takes the SDK's default api-version and the service's default (codePoint) span encoding.
+        // Nothing downstream reads span offsets any more - ExtractionService keeps only the
+        // markdown - so there is nothing left for a code-point offset to drift against.
         if (!string.IsNullOrWhiteSpace(config.ContentUnderstandingEndpoint))
         {
             services.AddSingleton(_ =>
-                new ContentUnderstandingClient(
-                    new Uri(config.ContentUnderstandingEndpoint), credential,
-                    ContentUnderstandingServiceVersion.Options()));
+                new ContentUnderstandingClient(new Uri(config.ContentUnderstandingEndpoint), credential));
             services.AddSingleton<IContentAnalysisClient, ContentAnalysisClient>();
-            // Operator tooling (ContentUnderstandingAdminFunction). Read-only against the
-            // analyzer - it reports drift in cap-pdf-layout and never repairs it.
-            services.AddSingleton<IContentUnderstandingVerifier, ContentUnderstandingVerifier>();
-            // The writer half, behind POST /api/content-understanding/provision. Owns the
-            // cap-pdf-layout definition; depends on the verifier above for both the
-            // already-correct check and the read-back.
-            services.AddSingleton<IContentUnderstandingProvisioner, ContentUnderstandingProvisioner>();
         }
 
         // Prompt Shields has no .NET SDK wrapper (see PromptShieldClient's comment), so this
