@@ -190,7 +190,7 @@ public class CorpusRegressionTests
         // label, that gate silently reopens.
         foreach (var pair in ReadTwoLinePairs())
         {
-            Assert.IsTrue(GetHeadingsHelper.BareNumberedLabelWithWord().IsMatch(pair.Label),
+            Assert.IsTrue(HeadingNumbering.BareNumberedLabelWithWord().IsMatch(pair.Label),
                 $"'{pair.Label}' is a real bare label in the corpus and no longer matches");
         }
     }

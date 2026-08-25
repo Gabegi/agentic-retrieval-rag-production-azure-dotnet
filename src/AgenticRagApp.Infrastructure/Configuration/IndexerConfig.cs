@@ -16,7 +16,7 @@ public class IndexerConfig
     [Required(ErrorMessage = "OPENAI_GPT_DEPLOYMENT is required")]         public string OpenAiGptDeployment { get; init; } = default!;
     [Required(ErrorMessage = "OPENAI_GPT_MODEL_NAME is required")]         public string OpenAiGptModelName { get; init; } = default!;
     // Required by AgenticRagQueryService's guard checks (acceptance criteria 4 & 5) -
-    // unlike DocumentIntelligenceEndpoint below, there's no code path that works without
+    // unlike ContentUnderstandingEndpoint below, there is no code path that works without
     // these, so they can't be left optional/empty.
     [Required(ErrorMessage = "CONTENT_SAFETY_ENDPOINT is required")]      public string ContentSafetyEndpoint { get; init; } = default!;
     [Required(ErrorMessage = "LANGUAGE_ENDPOINT is required")]            public string LanguageEndpoint { get; init; } = default!;
@@ -24,8 +24,27 @@ public class IndexerConfig
     // so they're never actually null/empty in practice - not [Required].
     public string StorageContainer             { get; init; } = "protocols";
     public string OpenAiExtractionDeployment    { get; init; } = "gpt-41-extraction";
-    // Optional - PDF's Document Intelligence extraction backend is only registered when set.
-    public string DocumentIntelligenceEndpoint { get; init; } = "";
+    // Optional here, but required by the indexing side - the Content Understanding client is
+    // only registered when set, and AgenticRagApp.Indexing.CU's AddPdfIndexing throws without
+    // it. Optional at this level because the query-side host does no extraction and should not
+    // need an extraction endpoint to start.
+    //
+    // Points at the shared Foundry AIServices account (infra/function_app.tf), because CU is a
+    // data-plane capability on that account rather than a resource of its own. It carried the
+    // same value as the now-removed DOCUMENT_INTELLIGENCE_ENDPOINT for exactly that reason, and
+    // keeping them as two keys is what made retiring Document Intelligence a deletion here
+    // rather than a re-plumbing.
+    public string ContentUnderstandingEndpoint { get; init; } = "";
+    // The custom analyzer this pipeline submits against. Must exist on the account before the
+    // first analyze call - POST /api/content-understanding/provision creates it. See
+    // infra/content_understanding.tf.
+    public string ContentUnderstandingAnalyzerId { get; init; } = "cap-pdf-layout";
+    // The *model* name CU resolves through its default deployment mapping, NOT a deployment name -
+    // ContentAnalyzer.Models is role -> model ({ "completion": "gpt-5.4" }) while the defaults map
+    // model -> deployment ("gpt-5.4" -> OpenAiExtractionDeployment). Putting a deployment name here
+    // fails at runtime as "Model deployment not found". Must match ai_deployments.tf's `extraction`
+    // model and stay on CU's supported list (gpt-5.5, gpt-5.4, gpt-5.2, gpt-5.1, gpt-4.1, ...).
+    public string ContentUnderstandingCompletionModel { get; init; } = "gpt-5.4";
     public string OpenAiEmbeddingModelName     { get; init; } = "text-embedding-3-large";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
 

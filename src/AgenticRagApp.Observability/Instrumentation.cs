@@ -67,25 +67,34 @@ public static class Instrumentation
     public static readonly Counter<long> MissingMetadata =
         Meter.CreateCounter<long>("indexer.missing_metadata", description: "Docs missing key metadata fields (title, version, department)");
 
-    // ── PDF Extraction (Document Intelligence) ──────────────────────────────────
+    // ── Document Extraction (Content Understanding) ─────────────────────────────
 
-    // 429 throttle retries while polling a DI analyze operation. A spike here means
-    // you're hitting Document Intelligence rate limits — see MaxExtractionParallelism
-    // in PdfExtractionOrchestrator.
+    // 429 throttle retries while polling an analyze operation. A spike here means you're
+    // hitting the service's rate limits — see MaxExtractionParallelism in ExtractionService.
     public static readonly Counter<long> DiThrottleRetries =
-        Meter.CreateCounter<long>("indexer.di_throttle_retries", description: "Document Intelligence 429 throttle retries while polling an analyze operation");
+        Meter.CreateCounter<long>("indexer.di_throttle_retries", description: "Content Understanding 429 throttle retries while polling an analyze operation");
 
-    // Wall-clock time from submitting a DI analyze call to it completing (includes any
+    // Wall-clock time from submitting an analyze call to it completing (includes any
     // throttle backoff). Watch for a rising p95 as a leading indicator of throttling.
     public static readonly Histogram<double> DiAnalyzeDuration =
-        Meter.CreateHistogram<double>("indexer.di_analyze_duration_seconds", unit: "s", description: "Wall-clock time for one Document Intelligence analyze call, submit to completion");
+        Meter.CreateHistogram<double>("indexer.di_analyze_duration_seconds", unit: "s", description: "Wall-clock time for one Content Understanding analyze call, submit to completion");
 
-    // Sum of PdfExtractionResult.EstimatedCostUsd across a run - for a pipeline whose
-    // dominant operational risk is per-page billing, "how much did this run cost" should
-    // be the easiest number to obtain; previously computed per file and then dropped
-    // entirely (finding #10).
-    public static readonly Counter<double> DiEstimatedCostUsd =
-        Meter.CreateCounter<double>("indexer.di_estimated_cost_usd", unit: "USD", description: "Estimated Document Intelligence cost for this run, summed across all analyzed files");
+    // Pages billed at Content Understanding's standard content-extraction tier this run,
+    // summed from the service's OWN usage object (AnalyzeUsageDetails.DocumentPagesStandard).
+    //
+    // This replaces a DiEstimatedCostUsd counter that multiplied a page count by a $0.01
+    // constant maintained by hand against a pricing page - Document Intelligence never
+    // returned usage, so a local guess was the only option. Deliberately NOT converted to a
+    // currency figure here: CU bills several unit types (standard pages, contextualization
+    // tokens, per-model tokens) at rates this code has no business hardcoding. Report the
+    // units the service reports, and do the arithmetic where the prices actually live.
+    public static readonly Counter<long> CuAnalyzePages =
+        Meter.CreateCounter<long>("indexer.cu_analyze_pages", unit: "pages", description: "Content Understanding standard-tier pages billed this run, summed across all analyzed documents");
+
+    // Contextualization tokens billed this run - the figure-description half of the bill,
+    // nonzero only while the analyzer has figure description enabled.
+    public static readonly Counter<long> CuContextualizationTokens =
+        Meter.CreateCounter<long>("indexer.cu_contextualization_tokens", unit: "tokens", description: "Content Understanding contextualization tokens billed this run");
 
     // ── Chunking ─────────────────────────────────────────────────────────────
     // Tags: strategy (chunking strategy name)

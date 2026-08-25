@@ -60,10 +60,13 @@ public class AgenticRagQueryService : IRagQueryService
     {
         var sw = Stopwatch.StartNew();
 
-        // The index is NFC throughout (PdfCleaner normalizes bodies; ExtractedTextRepair
-        // covers titles and headings), so the question must be too - a user typing a
-        // decomposed "ë" (common from macOS keyboards) would otherwise miss every lexical
-        // match on the very term they typed.
+        // STALE PREMISE - the indexing side no longer normalizes. This line was paired with
+        // ExtractedTextRepair, which put the whole index in NFC (bodies, titles, headings), so
+        // composing the question here matched it. That class was removed, so the index now
+        // carries whatever form Content Understanding produced, and this normalization is
+        // one-sided: a composed question against a possibly-decomposed index. Left in place
+        // deliberately - it is the query side of a decision that belongs with whatever replaces
+        // the indexing-side normalization, not something to flip on its own.
         question = question.Normalize(System.Text.NormalizationForm.FormC);
 
         // Criterion 5, question side. Must run before the retrieve call, otherwise the PII

@@ -88,36 +88,35 @@ public class PrefixBuilderTests
         Assert.IsTrue(Tokens(prefix) < ChunkingBudget.TokenCeiling);
     }
 
-    // The prefix is half of EmbeddingText, so a decomposed character here embeds and hashes
-    // against a spelling no NFC query matches. doc.Title falls back to the source id when a
-    // document yields no usable title, and a filename never passed through GetTitleHelper's
-    // repair - the 260819 artifact carried "clie" + U+0308 into metadata.Prefix this way.
+    // Both inverted when ExtractedTextRepair was removed. The prefix is half of EmbeddingText,
+    // so what these now pin is that a decomposed character DOES reach the vector: doc.Title
+    // falls back to the source id when a document yields no usable title, and nothing repairs
+    // it - the 260819 artifact carried "clie" + U+0308 into metadata.Prefix exactly this way.
     [TestMethod]
-    public void ADecomposedTitle_IsComposedBeforeItBecomesEmbeddedText()
+    public void ADecomposedTitle_ReachesEmbeddedTextAsIs()
     {
         // "clie" + COMBINING DIAERESIS, exactly as the artifact stored it.
         var decomposed = "Folder Beeldzorg - informatie clie\u0308nt -zidw";
 
         var prefix = PrefixBuilder.Build(decomposed, null, null);
 
-        Assert.IsFalse(prefix.Contains('\u0308'), "combining diaeresis must not survive into the prefix");
-        Assert.IsTrue(prefix.Contains("cliënt"), "it should compose to the precomposed form");
+        Assert.IsTrue(prefix.Contains('\u0308'), "nothing composes the prefix any more");
     }
 
     [TestMethod]
-    public void ADecomposedHeadingPath_IsComposedToo()
+    public void ADecomposedHeadingPath_ReachesEmbeddedTextAsIs()
     {
         var prefix = PrefixBuilder.Build("Hygienecode", null, "Hoofdstuk 3 > Koelen tot 7\u2103");
 
-        Assert.IsFalse(prefix.Contains('\u2103'), "the degree-celsius glyph folds to °C like every other path");
-        Assert.IsTrue(prefix.Contains("°C"));
+        Assert.IsTrue(prefix.Contains('\u2103'), "the degree-celsius glyph is no longer folded");
     }
 
     [TestMethod]
     public void AnAlreadyNormalizedPrefix_IsUnchanged_SoItsVectorIsUnaffected()
     {
-        // Repair is idempotent, which is what makes it safe to apply at this seam: text that
-        // arrived clean hashes identically before and after.
+        // Building a prefix is deterministic: feeding its own title line back in produces the
+        // same string, so a chunk's vector does not shift on a re-run. (This used to be a
+        // statement about Repair's idempotence; it holds trivially now that nothing repairs.)
         const string title = "CAO Geestelijke Gezondheidszorg 2024-2026";
         const string path  = "Hoofdstuk 3 > 3.2 Onregelmatigheidstoeslag";
 

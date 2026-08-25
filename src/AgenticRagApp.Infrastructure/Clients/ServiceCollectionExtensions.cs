@@ -1,5 +1,5 @@
 using System.ComponentModel.DataAnnotations;
-using Azure.AI.DocumentIntelligence;
+using Azure.AI.ContentUnderstanding;
 using Azure.AI.OpenAI;
 using Azure.AI.TextAnalytics;
 using Azure.Core;
@@ -15,10 +15,10 @@ using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Clients.KnowledgeRetrieval;
-using AgenticRagApp.Infrastructure.Clients.DocumentIntelligence;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Clients.ContentSafety;
+using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 
 namespace AgenticRagApp.Infrastructure;
 
@@ -57,7 +57,9 @@ public static class ServiceCollectionExtensions
             OpenAiGptDeployment          = configuration["OPENAI_GPT_DEPLOYMENT"]!,
             OpenAiGptModelName           = configuration["OPENAI_GPT_MODEL_NAME"]!,
             OpenAiExtractionDeployment   = configuration["OPENAI_EXTRACTION_DEPLOYMENT"] ?? "gpt-41-extraction",
-            DocumentIntelligenceEndpoint = configuration["DOCUMENT_INTELLIGENCE_ENDPOINT"] ?? "",
+            ContentUnderstandingEndpoint = configuration["CONTENT_UNDERSTANDING_ENDPOINT"] ?? "",
+            ContentUnderstandingAnalyzerId = configuration["CONTENT_UNDERSTANDING_ANALYZER_ID"] ?? "cap-pdf-layout",
+            ContentUnderstandingCompletionModel = configuration["CONTENT_UNDERSTANDING_COMPLETION_MODEL"] ?? "gpt-5.4",
             ContentSafetyEndpoint        = configuration["CONTENT_SAFETY_ENDPOINT"]!,
             LanguageEndpoint             = configuration["LANGUAGE_ENDPOINT"]!,
             StorageAccountUrl            = configuration["STORAGE_ACCOUNT_URL"]!,
@@ -126,14 +128,33 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(_ =>
             new KnowledgeBaseRetrievalClient(new Uri(config.SearchEndpoint), config.KnowledgeBaseName, credential, SearchServiceVersion.Options()));
 
-        // Document Intelligence is optional — only registered when configured. Consumers
-        // that need it (e.g. the PDF extraction backend) are responsible for checking
-        // config.DocumentIntelligenceEndpoint themselves before resolving it.
-        if (!string.IsNullOrWhiteSpace(config.DocumentIntelligenceEndpoint))
+        // Content Understanding - the document extraction backend. Gated on being configured
+        // rather than required here, because this assembly is shared with hosts that do no
+        // extraction at all (the query side); the indexing side fails fast on the same value in
+        // AgenticRagApp.Indexing.CU's AddPdfIndexing, which is where a missing endpoint is
+        // actually a deployment error.
+        //
+        // Document Intelligence used to sit here under an identical gate. It is gone: the DI
+        // client, its wrapper, and the whole DI extraction path were removed when Content
+        // Understanding became the only backend - CU handles PDFs plus images, Office documents
+        // and video, and it returns figure descriptions DI had no equivalent for.
+        //
+        // Options() rather than a bare client: it pins api-version 2025-11-01 and attaches the
+        // utf16 policy, and a CU client built without it produces silently drifting offsets.
+        if (!string.IsNullOrWhiteSpace(config.ContentUnderstandingEndpoint))
         {
             services.AddSingleton(_ =>
-                new DocumentIntelligenceClient(new Uri(config.DocumentIntelligenceEndpoint), credential));
-            services.AddSingleton<IDocumentAnalysisClient, DocumentAnalysisClient>();
+                new ContentUnderstandingClient(
+                    new Uri(config.ContentUnderstandingEndpoint), credential,
+                    ContentUnderstandingServiceVersion.Options()));
+            services.AddSingleton<IContentAnalysisClient, ContentAnalysisClient>();
+            // Operator tooling (ContentUnderstandingAdminFunction). Read-only against the
+            // analyzer - it reports drift in cap-pdf-layout and never repairs it.
+            services.AddSingleton<IContentUnderstandingVerifier, ContentUnderstandingVerifier>();
+            // The writer half, behind POST /api/content-understanding/provision. Owns the
+            // cap-pdf-layout definition; depends on the verifier above for both the
+            // already-correct check and the read-back.
+            services.AddSingleton<IContentUnderstandingProvisioner, ContentUnderstandingProvisioner>();
         }
 
         // Prompt Shields has no .NET SDK wrapper (see PromptShieldClient's comment), so this

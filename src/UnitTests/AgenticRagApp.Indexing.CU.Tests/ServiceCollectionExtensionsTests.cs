@@ -14,7 +14,10 @@ namespace RagApp.UnitTests.PdfExtraction;
 [TestClass]
 public class ServiceCollectionExtensionsTests
 {
-    private static IndexerConfig Config(string documentIntelligenceEndpoint = "") => new()
+    // Content Understanding is configured by default here, because AddPdfIndexing now throws
+    // without it - every test below needs a viable config, and the throw itself is asserted by
+    // its own test rather than by every other one failing.
+    private static IndexerConfig Config(string contentUnderstandingEndpoint = "https://cu.example.com") => new()
     {
         SearchEndpoint            = "https://search.example.com",
         OpenAiEndpoint            = "https://openai.example.com",
@@ -26,30 +29,32 @@ public class ServiceCollectionExtensionsTests
         SearchIndexName           = "my-index",
         KnowledgeSourceName       = "my-knowledge-source",
         KnowledgeBaseName         = "my-knowledge-base",
-        DocumentIntelligenceEndpoint = documentIntelligenceEndpoint,
+        ContentUnderstandingEndpoint = contentUnderstandingEndpoint,
     };
 
+    // The Document Intelligence path used to be registered conditionally, and an unset endpoint
+    // simply meant no extractor - which surfaced as an unrelated .Single() throw the first time
+    // anything resolved the extractor. There is no second backend now, so an unset
+    // endpoint is a deployment error and is reported as one, at registration, naming the setting.
     [TestMethod]
-    public void AddPdfIndexing_DocumentIntelligenceNotConfigured_DoesNotRegisterExtractorOrAnalyzer()
+    public void AddPdfIndexing_ContentUnderstandingNotConfigured_ThrowsNamingTheSetting()
+    {
+        var services = new ServiceCollection();
+
+        var ex = Assert.ThrowsException<InvalidOperationException>(
+            () => services.AddPdfIndexing(Config(contentUnderstandingEndpoint: "")));
+
+        StringAssert.Contains(ex.Message, "CONTENT_UNDERSTANDING_ENDPOINT");
+    }
+
+    [TestMethod]
+    public void AddPdfIndexing_ContentUnderstandingConfigured_RegistersTheAnalyzer()
     {
         var services = new ServiceCollection();
 
         services.AddPdfIndexing(Config());
 
-        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(IPdfExtractor)));
-        Assert.IsFalse(services.Any(d => d.ServiceType == typeof(PdfDocumentIntelligenceAnalyzer)));
-    }
-
-    [TestMethod]
-    public void AddPdfIndexing_DocumentIntelligenceConfigured_RegistersExtractorAndAnalyzer()
-    {
-        var services = new ServiceCollection();
-
-        services.AddPdfIndexing(Config(documentIntelligenceEndpoint: "https://di.example.com"));
-
-        var extractorDescriptor = services.Single(d => d.ServiceType == typeof(IPdfExtractor));
-        Assert.AreEqual(typeof(PdfExtractor), extractorDescriptor.ImplementationType);
-        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(PdfDocumentIntelligenceAnalyzer)));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingAnalyzer)));
     }
 
     [TestMethod]
@@ -104,16 +109,10 @@ public class ServiceCollectionExtensionsTests
         Assert.IsNotNull(provider.GetRequiredService<DocumentIdentityResolver>());
     }
 
-    [TestMethod]
-    public void AddPdfIndexing_RegistersCleaningAndValidationServices()
-    {
-        var services = new ServiceCollection();
-
-        services.AddPdfIndexing(Config());
-
-        AssertSingleton<IPdfCleaner, PdfCleaner>(services);
-        AssertSingleton<IPdfPipelineValidator, PdfPipelineValidator>(services);
-    }
+    // The cleaning and validation registrations that used to be asserted here (IPdfCleaner,
+    // IPdfPipelineValidator) are gone with their classes. Cleaning moved into the extraction
+    // mapper (CuMarkdownPager); validation is deliberately absent and will be reintroduced at
+    // the seam in ExtractionService.
 
     [TestMethod]
     public void AddPdfIndexing_RegistersDiffEmbedUploadAndRecoveryPipeline()
@@ -122,6 +121,7 @@ public class ServiceCollectionExtensionsTests
 
         services.AddPdfIndexing(Config());
 
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IIndexDiffService)));
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IExtractionService)));
         AssertSingleton<IEmbeddingService, EmbeddingService>(services);
         AssertSingleton<IUploadService, UploadService>(services);
@@ -130,13 +130,16 @@ public class ServiceCollectionExtensionsTests
     }
 
     [TestMethod]
-    public void AddPdfIndexing_RegistersExtractionOrchestratorViaFactory()
+    public void AddPdfIndexing_RegistersExtractionServiceViaFactory()
     {
         var services = new ServiceCollection();
 
         services.AddPdfIndexing(Config());
 
-        var descriptor = services.Single(d => d.ServiceType == typeof(IExtractionOrchestrator));
+        // A factory, not a type registration: ExtractionService takes two different
+        // BlobContainerClients (documents, pipeline-temp) that the container cannot pick apart
+        // on its own.
+        var descriptor = services.Single(d => d.ServiceType == typeof(IExtractionService));
         Assert.AreEqual(ServiceLifetime.Singleton, descriptor.Lifetime);
         Assert.IsNotNull(descriptor.ImplementationFactory);
     }
