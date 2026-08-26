@@ -6,8 +6,6 @@ public sealed record RetrievedChunk(
     string Id, string DocumentId, int Page, int ChunkIndex,
     string? Title, string? Summary, string Content,
     string? QuickCode = null, string? RelativePath = null,
-    string? ZenyaDocumentId = null, string? ZenyaVersion = null,
-    string? ZenyaStatus = null, string? ZenyaUrl = null,
     // Native PDF metadata (PdfNativeMetadataExtractor) - null for CSV rows and for
     // neighbor-expanded chunks (ChunkNeighborExpander doesn't select these, since only
     // the original matched chunk per document feeds a Citation - see AgenticRagQueryService).
@@ -15,7 +13,7 @@ public sealed record RetrievedChunk(
     // The two identity fields the embedded prefix was built from (PrefixBuilder): the heading
     // chain and the sector tag. Null on neighbor-expanded chunks, like the fields above.
     string? HeadingPath = null, string? DomainTag = null)
-    : DocumentReferenceBase(DocumentId, Title, QuickCode, RelativePath, ZenyaDocumentId, ZenyaVersion, ZenyaStatus, ZenyaUrl, PageCount, CreatedAt, ModDate)
+    : DocumentReferenceBase(DocumentId, Title, QuickCode, RelativePath, PageCount, CreatedAt, ModDate)
 {
     // Rebuilds the same composition the chunk was EMBEDDED with: "Title [tag]", heading path,
     // body, blank-line separated - PrefixBuilder's exact shape. The index stores the bare body

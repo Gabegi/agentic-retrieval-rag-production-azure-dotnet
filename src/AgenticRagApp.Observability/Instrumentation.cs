@@ -43,18 +43,9 @@ public static class Instrumentation
     public static readonly Counter<long> ValidationIssues =
         Meter.CreateCounter<long>("indexer.validation_issues", description: "Validation issues by severity and stage");
 
-    // Docs past their check_date — live but potentially stale guidance in the index.
-    public static readonly Counter<long> StaleDocs =
-        Meter.CreateCounter<long>("indexer.stale_docs", description: "Docs flagged check_date_exceeded — guidance may be outdated");
-
     // Docs with no markdown headings — chunked without structural guidance; may produce lower-quality chunks.
     public static readonly Counter<long> DocsWithoutHeadings =
         Meter.CreateCounter<long>("indexer.docs_without_headings", description: "Docs with no markdown headings — chunked without structural guidance");
-
-    // Pages where known mojibake patterns were auto-repaired. Non-zero is expected on
-    // Dutch text with accented characters; watch for a run-over-run jump, not the absolute count.
-    public static readonly Counter<long> MojibakeRepairedPages =
-        Meter.CreateCounter<long>("indexer.mojibake_repaired_pages", description: "Pages where known mojibake patterns were auto-repaired");
 
     // Total table-like blocks detected this run (histogram over runs, not per-doc). No ground
     // truth for "expected" count exists yet — watch for a drop vs. recent runs, same as
@@ -68,16 +59,26 @@ public static class Instrumentation
         Meter.CreateCounter<long>("indexer.missing_metadata", description: "Docs missing key metadata fields (title, version, department)");
 
     // ── Document Extraction (Content Understanding) ─────────────────────────────
+    // Three instruments were DELETED here 2026-08-26 (observability plan 3.3, user decision):
+    // indexer.stale_docs, indexer.mojibake_repaired_pages, indexer.di_throttle_retries —
+    // nothing in the CU pipeline can ever record them (no stale-doc concept, mojibake always 0
+    // on this backend, no throttle-retry hook in the SDK path). A metric that cannot fire reads
+    // as "monitored" while monitoring nothing. The report FIELDS of the same names stay.
 
-    // 429 throttle retries while polling an analyze operation. A spike here means you're
-    // hitting the service's rate limits — see MaxExtractionParallelism in ExtractionService.
-    public static readonly Counter<long> DiThrottleRetries =
-        Meter.CreateCounter<long>("indexer.di_throttle_retries", description: "Content Understanding 429 throttle retries while polling an analyze operation");
+    // Wall-clock time for one document's extraction end to end (download + analyze + map) —
+    // fed from the per-document Durations the run loop measures. Watch for a rising p95 as a
+    // leading indicator of service throttling or corpus growth. Renamed from
+    // indexer.di_analyze_duration_seconds (plan 2.2, decided 2026-08-26): the DI-era
+    // instrument never recorded a value, so there was no history to preserve.
+    public static readonly Histogram<double> CuAnalyzeDuration =
+        Meter.CreateHistogram<double>("indexer.cu_analyze_duration_seconds", unit: "s", description: "Wall-clock time for one Content Understanding document extraction, download to mapped result");
 
-    // Wall-clock time from submitting an analyze call to it completing (includes any
-    // throttle backoff). Watch for a rising p95 as a leading indicator of throttling.
-    public static readonly Histogram<double> DiAnalyzeDuration =
-        Meter.CreateHistogram<double>("indexer.di_analyze_duration_seconds", unit: "s", description: "Wall-clock time for one Content Understanding analyze call, submit to completion");
+    // Per-model token bill, keys verbatim as the service reports them (tag: usage_key, e.g.
+    // "gpt-4.1-mini-input"). The number that maps to the AI-deployment bill — the two CU-meter
+    // counters below are the page/contextualization half. Deliberately not split into
+    // model/direction tags: the key format is the service's to define (see CuUsage).
+    public static readonly Counter<long> CuModelTokens =
+        Meter.CreateCounter<long>("indexer.cu_model_tokens", unit: "tokens", description: "Per-model tokens billed by Content Understanding, tagged by the service's own usage key");
 
     // Pages billed at Content Understanding's standard content-extraction tier this run,
     // summed from the service's OWN usage object (AnalyzeUsageDetails.DocumentPagesStandard).
@@ -147,7 +148,21 @@ public static class Instrumentation
     public static readonly Counter<long> TocChunksDropped =
         Meter.CreateCounter<long>("indexer.toc_chunks_dropped", description: "Chunks dropped as table-of-contents navigation before embedding");
 
+    // ── Pipeline stages ──────────────────────────────────────────────────────
+
+    // Wall-clock per pipeline stage per run (tag: stage = extract|chunk|embed_upload), timed
+    // replay-safe in the orchestrator. Ends the "reconstruct stage timing from host-log dumps"
+    // workflow — extraction's 707s/871s on 2026-08-26 both had to be derived that way.
+    public static readonly Histogram<double> StageDuration =
+        Meter.CreateHistogram<double>("indexer.stage_duration_seconds", unit: "s", description: "Wall-clock duration of one pipeline stage in one run (tag: stage)");
+
     // ── Embedding ────────────────────────────────────────────────────────────
+
+    // Tokens billed for embedding, as reported by the embedding service's own response usage.
+    // Blank-means-blank (plan 1.6, decided 2026-08-26): when a response carries no usage,
+    // nothing is recorded — no local estimate, same principle as the CU usage counters.
+    public static readonly Counter<long> EmbeddingTokens =
+        Meter.CreateCounter<long>("indexer.embedding_tokens", unit: "tokens", description: "Embedding input tokens billed, summed from service-reported response usage");
 
     // Chunks served from the vector cache instead of a paid embedding call — the whole
     // point of Stage 3's hash-based dedup. High relative to total chunks means it's working.

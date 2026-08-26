@@ -29,10 +29,6 @@ public class DocumentIdentityResolverTests
             ModDate:          null,
             PageCount:        null,
             LastModifiedDate: null,
-            ZenyaDocumentId:  null,
-            ZenyaVersion:     null,
-            ZenyaStatus:      null,
-            ZenyaUrl:         null,
             PageSpans:        [new PageSpan(1, 0, "content".Length, null, false)],
             PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         [],
@@ -42,6 +38,8 @@ public class DocumentIdentityResolverTests
             SelectionMarks:   [],
             Figures:          [],
             Lines:            [],
+            Annotations:      [],
+            Hyperlinks:       [],
             Profile:          null,
             Language:         null);
 
@@ -55,7 +53,8 @@ public class DocumentIdentityResolverTests
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
             .Returns<IReadOnlyList<string>, CancellationToken>((texts, _) => Task.FromResult((
                 texts.Select(t => vectorByTitle.Single(kv => t.StartsWith(kv.Key)).Value).ToArray(),
-                0)));
+                0,
+                (long?)null)));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(persisted ?? []);
@@ -459,7 +458,7 @@ public class DocumentIdentityResolverTests
         var client = new Mock<IEmbeddingClient>();
         client
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new float[][] { [1f, 0f, 0f] }, 0));
+            .ReturnsAsync((new float[][] { [1f, 0f, 0f] }, 0, null));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -493,7 +492,7 @@ public class DocumentIdentityResolverTests
         var client = new Mock<IEmbeddingClient>();
         client
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new float[][] { [1f, 0f] }, 0));
+            .ReturnsAsync((new float[][] { [1f, 0f] }, 0, null));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);

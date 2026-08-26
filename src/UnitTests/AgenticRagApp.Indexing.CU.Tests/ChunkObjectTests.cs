@@ -154,9 +154,9 @@ public class ChunkObjectTests
             "heading_text", "heading_path", "heading_depth", "heading_source",
             // where the cut sits in the source, so a structural window can slice it
             "chunk_start", "chunk_length",
-            // document metadata
+            // document metadata (the zenya_* fields are gone with the Zenya mechanism,
+            // 2026-08-26)
             "last_modified_date", "created_at", "mod_date", "page_count",
-            "zenya_document_id", "zenya_version", "zenya_status", "zenya_url",
             // which route ran and how the document was sized
             "route_name", "size_class",
             // validity, parsed out of the title
@@ -169,6 +169,8 @@ public class ChunkObjectTests
             "family_id", "domain_tag", "confusable_with", "population", "language",
             "content_vector",
             "table_count", "has_table", "figure_captions",
+            // CU-typed additions (2026-08-26)
+            "hyperlinks", "annotations",
             // quality flags
             "is_overlap", "heading_located", "page_extraction_flag",
         };

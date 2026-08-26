@@ -102,21 +102,18 @@ public class RestoreService : IRestoreService
                     ModDate            = s.ModDate,
                     PageCount          = s.PageCount,
 
-                    ZenyaDocumentId    = s.ZenyaDocumentId,
-                    ZenyaVersion       = s.ZenyaVersion,
-                    ZenyaStatus        = s.ZenyaStatus,
-                    ZenyaUrl           = s.ZenyaUrl,
-
                     PageStart          = s.PageStart,
                     PageEnd            = s.PageEnd,
                     PageExtractionFlag = s.PageExtractionFlag,
                     TokenCount         = s.TokenCount,
 
-                    // Structure itself is not snapshotted, so these two are restored as the
+                    // Structure itself is not snapshotted, so these are restored as the
                     // stamped values they are. has_table needs no restoring - it recomputes off
                     // Content, which came back above.
                     TableCount         = s.TableCount,
                     FigureCaptions     = s.FigureCaptions,
+                    Hyperlinks         = s.Hyperlinks  ?? [],
+                    Annotations        = s.Annotations ?? [],
                 },
             });
         }

@@ -10,8 +10,8 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // one file disagreeing about its family_id is not a bug anything downstream can detect.
 //
 // Denormalized on purpose. Every one of these could be looked up from the document id at query
-// time, and none of them is - Search has no join, so a filter on domain_tag or a citation
-// showing zenya_url has to read it off the chunk row itself.
+// time, and none of them is - Search has no join, so a filter on domain_tag has to read it
+// off the chunk row itself.
 public sealed record DocumentStamp(
     string                DocumentId,
     string?               Title,
@@ -26,10 +26,6 @@ public sealed record DocumentStamp(
     DateTimeOffset?       CreatedAt,
     DateTimeOffset?       ModDate,
     int?                  PageCount,
-    string?               ZenyaDocumentId,
-    string?               ZenyaVersion,
-    string?               ZenyaStatus,
-    string?               ZenyaUrl,
     DateTimeOffset?       ValidFrom,
     DateTimeOffset?       ValidTo,
     string?               Version)
@@ -62,13 +58,7 @@ public sealed record DocumentStamp(
             ModDate:          doc.ModDate,
             PageCount:        doc.PageCount,
 
-            ZenyaDocumentId:  doc.ZenyaDocumentId,
-            ZenyaVersion:     doc.ZenyaVersion,
-            ZenyaStatus:      doc.ZenyaStatus,
-            ZenyaUrl:         doc.ZenyaUrl,
-
-            // From the TITLE, and unrelated to ZenyaVersion above, which is blob metadata.
-            // A document can have both, and they can disagree.
+            // From the TITLE.
             ValidFrom:        validity.From,
             ValidTo:          validity.To,
             Version:          validity.Version);
@@ -93,11 +83,6 @@ public sealed record DocumentStamp(
         metadata.CreatedAt        = CreatedAt;
         metadata.ModDate          = ModDate;
         metadata.PageCount        = PageCount;
-
-        metadata.ZenyaDocumentId  = ZenyaDocumentId;
-        metadata.ZenyaVersion     = ZenyaVersion;
-        metadata.ZenyaStatus      = ZenyaStatus;
-        metadata.ZenyaUrl         = ZenyaUrl;
 
         metadata.ValidFrom        = ValidFrom;
         metadata.ValidTo          = ValidTo;

@@ -1,6 +1,6 @@
 ﻿using System.Security.Cryptography;
-using Azure.AI.ContentUnderstanding;
 using AgenticRagApp.Common.Models;
+using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 
 namespace AgenticRagApp.Indexing.CU.Models;
 
@@ -12,11 +12,11 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // than dropped - a document that could not be extracted is a fact the run report has to carry -
 // and every reader distinguishes them on Ok alone.
 //
-// Content is the analyzer's raw markdown and nothing else. PageSpans, Structure, Title, Profile
-// and Language are always null on the success path now - the mappers that used to fill them were
-// written against prebuilt-document's layout detail and were deleted with the switch to
-// prebuilt-documentSearch. Usage is null for a mechanical reason: it comes off the LRO Operation
-// via GetUsage(), and ContentAnalysisClient returns only operation.Value.
+// Content is the analyzer's raw markdown. PageSpans, Structure (headings + boilerplate) and
+// Title are derived from that markdown by MarkdownStructureMapper - one coordinate system, the
+// string chunking cuts. Profile and Language stay null: nothing measures them on this backend.
+// Usage is the analysis's billed cost, read off the LRO Operation via GetUsage() and carried
+// through ContentAnalysis; null only when the completed operation had no readable usage payload.
 internal sealed record ExtractedFile(
     bool                         Ok,
     string                       BlobName,
@@ -26,7 +26,7 @@ internal sealed record ExtractedFile(
     string?                      Title,
     DocumentProfile?             Profile,
     string?                      Language,
-    AnalyzeUsageDetails?         Usage,
+    CuUsage?                     Usage,
     PipelineIssue?               Error,
     IReadOnlyList<PipelineIssue> Warnings)
 {
@@ -45,6 +45,13 @@ internal sealed record ExtractedFile(
     // definition of the value sits with the property that carries it.
     public static string ComputeContentHash(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes));
+
+    // Wall-clock for this file end to end (download + analyze + map), measured by the run loop -
+    // the only place that sees all three. Measurement only, same lifecycle as ContentHash:
+    // ExtractionOutputBuilder lifts it onto PdfExtractionOutput.Durations, and the reporter
+    // writes it into the per-document facts report. Null means the loop never set it, which is
+    // only the case in tests that build ExtractedFiles directly.
+    public long? DurationMs { get; init; }
 
     // A factory rather than nine positional nulls repeated at every failure site.
     public static ExtractedFile Failed(

@@ -42,7 +42,7 @@ public class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         var ex = Assert.ThrowsException<InvalidOperationException>(
-            () => services.AddPdfIndexing(Config(contentUnderstandingEndpoint: "")));
+            () => services.AddIndexing(Config(contentUnderstandingEndpoint: "")));
 
         StringAssert.Contains(ex.Message, "CONTENT_UNDERSTANDING_ENDPOINT");
     }
@@ -55,7 +55,7 @@ public class ServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
 
-        services.AddPdfIndexing(Config());
+        services.AddIndexing(Config());
 
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IExtractionService)));
     }
@@ -65,7 +65,7 @@ public class ServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
 
-        services.AddPdfIndexing(Config());
+        services.AddIndexing(Config());
 
         // The two routes, and the three collaborators ChunkingService takes. The five-strategy
         // cascade and ChunkingStrategySelector this used to assert are gone with the two-strategy
@@ -104,7 +104,7 @@ public class ServiceCollectionExtensionsTests
         services.AddSingleton(new Mock<IPipelineArtifactWriter>().Object);
         services.AddSingleton(new Mock<IDocumentIdentityStore>().Object);
 
-        services.AddPdfIndexing(Config());
+        services.AddIndexing(Config());
 
         using var provider = services.BuildServiceProvider(validateScopes: true);
 
@@ -122,7 +122,7 @@ public class ServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
 
-        services.AddPdfIndexing(Config());
+        services.AddIndexing(Config());
 
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IIndexDiffService)));
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IExtractionService)));
@@ -137,7 +137,7 @@ public class ServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
 
-        services.AddPdfIndexing(Config());
+        services.AddIndexing(Config());
 
         // A factory, not a type registration: ExtractionService takes two different
         // BlobContainerClients (documents, pipeline-temp) that the container cannot pick apart
@@ -152,7 +152,7 @@ public class ServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
 
-        var result = services.AddPdfIndexing(Config());
+        var result = services.AddIndexing(Config());
 
         Assert.AreSame(services, result);
     }

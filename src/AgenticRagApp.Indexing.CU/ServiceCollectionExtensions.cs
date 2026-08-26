@@ -24,7 +24,7 @@ public static class ServiceCollectionExtensions
     // Takes the IndexerConfig the host already built via AddAgenticRagAppInfrastructure()
     // so the Document Intelligence conditional registration below doesn't need to
     // resolve a temporary provider mid-registration.
-    public static IServiceCollection AddPdfIndexing(this IServiceCollection services, IndexerConfig config)
+    public static IServiceCollection AddIndexing(this IServiceCollection services, IndexerConfig config)
     {
         // Two-axis chunking (docs/2608/260812/chunking_flow_summary.md).
         //

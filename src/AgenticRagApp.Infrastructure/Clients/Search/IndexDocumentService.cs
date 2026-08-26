@@ -23,7 +23,7 @@ public class IndexDocumentService : IIndexDocumentService
     }
 
     // Batches internally (1000 per call — the Search push API limit).
-    public async Task<(int Succeeded, int Failed)> UpsertDocumentsAsync<T>(IEnumerable<T> documents, CancellationToken ct = default)
+    public async Task<(int Succeeded, int Failed, int Batches)> UpsertDocumentsAsync<T>(IEnumerable<T> documents, CancellationToken ct = default)
     {
         var succeeded = 0;
         var failed    = 0;
@@ -48,7 +48,7 @@ public class IndexDocumentService : IIndexDocumentService
         }
 
         _logger.LogInformation("Upsert complete — {Succeeded} succeeded, {Failed} failed ({Batches} batch(es))", succeeded, failed, batches);
-        return (succeeded, failed);
+        return (succeeded, failed, batches);
     }
 
     // Same batching as the upsert above, different action: MergeDocuments overwrites only the

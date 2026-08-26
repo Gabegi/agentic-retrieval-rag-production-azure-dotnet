@@ -77,6 +77,8 @@ public interface ISnapshotSource : IChunk
     // that could disagree with the text it describes.
     int                   TableCount     { get; }
     IReadOnlyList<string> FigureCaptions { get; }
+    IReadOnlyList<string> Hyperlinks     { get; }
+    IReadOnlyList<string> Annotations    { get; }
 
     DateTimeOffset? CreatedAt { get; }
     DateTimeOffset? ModDate   { get; }
@@ -88,9 +90,4 @@ public interface ISnapshotSource : IChunk
     DateTimeOffset? ValidFrom { get; }
     DateTimeOffset? ValidTo   { get; }
     string?         Version   { get; }
-
-    string? ZenyaDocumentId { get; }
-    string? ZenyaVersion    { get; }
-    string? ZenyaStatus     { get; }
-    string? ZenyaUrl        { get; }
 }

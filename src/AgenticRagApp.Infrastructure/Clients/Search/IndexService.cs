@@ -170,13 +170,6 @@ public class IndexService : IIndexService
                 new SimpleField("mod_date",           SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
                 // PDF-only — native page count (PdfNativeMetadataExtractor). Null for CSV rows.
                 new SimpleField("page_count",         SearchFieldDataType.Int32)         { IsFilterable = true },
-                // PDF-only — Zenya's own identity/lifecycle facts, sourced from custom blob
-                // metadata set by whoever uploads the PDF (Zenya doesn't export these into the
-                // PDF itself - see ZenyaMetadata's comment). Null until that metadata is set.
-                new SimpleField("zenya_document_id", SearchFieldDataType.String)          { IsFilterable = true },
-                new SimpleField("zenya_version",     SearchFieldDataType.String)          { IsFilterable = true },
-                new SimpleField("zenya_status",       SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
-                new SimpleField("zenya_url",          SearchFieldDataType.String)         { },
 
                 // ── Pages ──────────────────────────────────────────────────────────────
                 // A unit can span pages once sections are the grain, so one page number is
@@ -239,10 +232,16 @@ public class IndexService : IIndexService
                 // every character-derived ceiling wrong for it.
                 new SimpleField("language",           SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
 
-                // ── Document Intelligence structural signals ───────────────────────────
+                // ── Content Understanding structural signals ───────────────────────────
                 new SimpleField("table_count",        SearchFieldDataType.Int32)          { IsFilterable = true },
                 new SimpleField("has_table",          SearchFieldDataType.Boolean)        { IsFilterable = true, IsFacetable = true },
                 new SearchableField("figure_captions", collection: true)                   { AnalyzerName = "nl.microsoft" },
+                // CU-typed additions (2026-08-26): hyperlink targets on the chunk's pages
+                // (facts, not prose - simple), and annotation notes (author comments a query
+                // could genuinely match - searchable, Dutch analyzer like the other text
+                // fields).
+                new SimpleField("hyperlinks",         SearchFieldDataType.Collection(SearchFieldDataType.String)) { },
+                new SearchableField("annotations", collection: true)                       { AnalyzerName = "nl.microsoft" },
 
                 // ── Quality flags ──────────────────────────────────────────────────────
                 // This child carries overlap from a sibling - makes retrieval-time

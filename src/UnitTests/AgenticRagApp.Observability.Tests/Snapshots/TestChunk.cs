@@ -40,6 +40,8 @@ internal sealed record TestChunk(
     public int                   TokenCount     => 0;
     public int                   TableCount     => 0;
     public IReadOnlyList<string> FigureCaptions => [];
+    public IReadOnlyList<string> Hyperlinks     => [];
+    public IReadOnlyList<string> Annotations    => [];
 
     public DateTimeOffset? CreatedAt => null;
     public DateTimeOffset? ModDate   => null;
@@ -48,10 +50,6 @@ internal sealed record TestChunk(
     public DateTimeOffset? ValidTo   => null;
     public string?         Version   => null;
 
-    public string? ZenyaDocumentId => null;
-    public string? ZenyaVersion    => null;
-    public string? ZenyaStatus     => null;
-    public string? ZenyaUrl        => null;
 
     // SnapshotChunk has no optional parameters by design - the record's own comment says a
     // field added to the index schema is added here in the same change, because the nine-field

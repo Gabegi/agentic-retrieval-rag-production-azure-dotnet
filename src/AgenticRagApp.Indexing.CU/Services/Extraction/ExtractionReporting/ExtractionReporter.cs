@@ -17,6 +17,7 @@ public sealed class ExtractionReporter
     private const string DiffReportName      = "pdf-extraction-diff";
     private const string FileFactsReportName = "pdf-file-facts";
     private const string FailureReportName   = "pdf-failure";
+    private const string RawCaptureName      = "cu-raw-response";
 
     // See CsvExtractionOrchestrator.MaxLoggedIssues - same rationale (log volume/cost cap,
     // separate from the returned-issues cap, which exists for Durable's row-size limit).
@@ -82,6 +83,30 @@ public sealed class ExtractionReporter
         }
     }
 
+    // The run's one raw CU response (see ExtractionService._rawCapture): the service's own JSON
+    // for one document, verbatim - what CUHelper's typed mapping is designed and re-verified
+    // against. Parsed and re-embedded as a JsonElement so WriteReportAsync's serializer emits
+    // it as JSON rather than one escaped string. Best-effort like every other report piece:
+    // caught, logged, never fails the run.
+    public async Task WriteRawCaptureAsync(
+        string blobName, string rawJson, DateTimeOffset runAt, string? instanceId)
+    {
+        if (!_reportWriter.IsEnabled) return;
+
+        try
+        {
+            using var parsed = System.Text.Json.JsonDocument.Parse(rawJson);
+            await _reportWriter.WriteReportAsync(
+                StageReportPath.Build(RawCaptureName, runAt, instanceId),
+                new { BlobName = blobName, Response = parsed.RootElement },
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to write the cu-raw-response capture for '{Blob}'.", blobName);
+        }
+    }
+
     private void EmitMetrics(string source, IndexDiff diff, PdfExtractionOutput? output)
     {
         Instrumentation.DocsSkipped.Add(diff.Skipped);
@@ -137,6 +162,26 @@ public sealed class ExtractionReporter
                 "No Content Understanding usage was reported this run - cost telemetry is blank, not zero.");
         }
 
+        // The per-model half of the bill (plan 1.3) - the number that maps to the
+        // AI-deployment spend, keys verbatim as the service bills them. One meter add per key
+        // and one summary line per run; empty when no document reported a token map.
+        if (output.BilledTokensByModel.Count > 0)
+        {
+            foreach (var (key, count) in output.BilledTokensByModel)
+                Instrumentation.CuModelTokens.Add(count, sourceTag, new("usage_key", key));
+
+            _logger.LogInformation(
+                "Content Understanding model tokens this run: {Tokens}.",
+                string.Join(", ", output.BilledTokensByModel.Select(kv => $"{kv.Key}={kv.Value}")));
+        }
+
+        // Per-document analyze duration into the histogram (plan 2.2) - recorded here off the
+        // already-lifted Durations rather than in the run loop, so the loop stays untouched.
+        // Azure Monitor derives p50/p95/max; the per-document numbers themselves are in the
+        // file-facts report.
+        foreach (var duration in output.Durations)
+            Instrumentation.CuAnalyzeDuration.Record(duration.DurationMs / 1000.0, sourceTag);
+
         LogContentHashes(output);
     }
 
@@ -150,7 +195,7 @@ public sealed class ExtractionReporter
     // output, which is half of what killed the cache.
     //
     // Duplicates are logged AND raised as a red flag upstream. Deliberate rather than redundant:
-    // the flag gets attention in the run report and the run email, this line names every group
+    // the flag gets attention in the run report and the run analysis, this line names every group
     // uncapped for whoever then goes looking.
     private void LogContentHashes(PdfExtractionOutput output)
     {
@@ -187,7 +232,6 @@ public sealed class ExtractionReporter
             diff.NewCount,
             diff.Updated,
             diff.Skipped,
-            diff.Inactive,
             RemovedCount       = diff.RemovedSourceIds.Count,
             RemovedSourceIds   = diff.RemovedSourceIds,
             ProcessedSourceIds = output.Docs.Select(d => d.SourceId).Distinct().ToList(),
@@ -207,6 +251,16 @@ public sealed class ExtractionReporter
         var hashByBlob = output.ContentHashes.ToDictionary(
             h => h.BlobName, h => h.Hash, StringComparer.Ordinal);
 
+        // Same keying as the hashes. This is where the run's wall clock finally becomes
+        // attributable per document - the answer to "which file made extraction slow".
+        var durationByBlob = output.Durations.ToDictionary(
+            d => d.BlobName, d => d.DurationMs, StringComparer.Ordinal);
+
+        // And the money's equivalent - "which file costs the bill". Absent when the service
+        // reported no usage for that document (see BuildUsages).
+        var usageByBlob = output.Usages.ToDictionary(
+            u => u.BlobName, u => u, StringComparer.Ordinal);
+
         var fileFacts = output.Docs.Select(d => new
         {
             BlobName  = d.SourceId,
@@ -216,12 +270,20 @@ public sealed class ExtractionReporter
             // and it survives log retention. Null would mean the document extracted without ever
             // being hashed, which cannot happen today.
             ContentHash = hashByBlob.GetValueOrDefault(d.SourceId),
-            PageCount = d.PageSpans.Count,
+            // Distinct pages, not span entries - a page can carry several verbatim CU ranges.
+            PageCount = d.PageSpans.Select(s => s.PageNumber).Distinct().Count(),
             Headings  = d.Headings.Count,
             Tables    = d.Tables.Count,
             Figures   = d.Figures.Count,
             FiguresWithDescription = d.Figures.Count(f => !string.IsNullOrWhiteSpace(f.Description)),
             ContentChars = d.Content.Length,
+            // End-to-end wall clock for this document (download + analyze + map). Null only
+            // when the run loop never timed it, which real runs cannot produce.
+            DurationMs = durationByBlob.TryGetValue(d.SourceId, out var ms) ? ms : (long?)null,
+            // What this document billed, in the service's own units. Null means the analysis
+            // reported no usage for it - blank, not zero.
+            BilledPagesStandard     = usageByBlob.GetValueOrDefault(d.SourceId)?.BilledPagesStandard,
+            ContextualizationTokens = usageByBlob.GetValueOrDefault(d.SourceId)?.ContextualizationTokens,
         }).ToList();
 
         await _reportWriter.WriteReportAsync(

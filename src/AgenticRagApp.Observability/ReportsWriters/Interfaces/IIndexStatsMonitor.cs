@@ -19,7 +19,7 @@ public interface IIndexStatsMonitor
 // PreviousDocumentCount/PreviousStorageSizeBytes are returned rather than kept internal
 // because this call *overwrites* the baseline blob as its last act - so the value it
 // compared against is unrecoverable afterwards. Anything wanting a run-over-run index delta
-// (the run report, and the run email built on it) has to receive it here or not at all.
+// (the run report, and the run analysis built on it) has to receive it here or not at all.
 // Null when no baseline existed, i.e. the first run for this source.
 //
 // RedFlags stays threshold-gated (only breaches are flagged); the Previous* fields are

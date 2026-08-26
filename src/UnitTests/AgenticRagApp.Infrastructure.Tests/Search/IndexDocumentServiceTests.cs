@@ -71,10 +71,11 @@ public class IndexDocumentServiceTests
         client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(UploadResponse(("c1", true), ("c2", false)));
 
-        var (succeeded, failed) = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1"), new FakeUploadChunk("c2") });
+        var (succeeded, failed, batches) = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1"), new FakeUploadChunk("c2") });
 
         Assert.AreEqual(1, succeeded);
         Assert.AreEqual(1, failed);
+        Assert.AreEqual(1, batches);
     }
 
     [TestMethod]

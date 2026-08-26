@@ -10,7 +10,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // analyzer, no parallelism. That is what makes the whole shape of this stage's output testable
 // from hand-built ExtractedFiles, which is what ExtractionOutputBuilderTests does.
 //
-// The per-blob facts (LastModified, Zenya metadata) come in as the same
+// The per-blob facts (LastModified) come in as the same
 // IReadOnlyDictionary<string, PdfBlobInfo> the run was handed. The extraction loop used to copy
 // those two fields into two side dictionaries as it went; the copies carried nothing the input
 // did not already have.
@@ -36,7 +36,6 @@ internal static class ExtractionOutputBuilder
             .Select(f =>
             {
                 var entry     = entries.GetValueOrDefault(f.BlobName);
-                var zenya     = entry?.Zenya ?? ZenyaMetadata.Empty;
                 var structure = f.Structure;
 
                 return new PdfExtractionDocument(
@@ -52,14 +51,10 @@ internal static class ExtractionOutputBuilder
                     CreatedAt:        null,
                     ModDate:          null,
                     // The count of pages actually extracted, which is what the profile and every
-                    // report now mean by "pages" - the native page count it replaces could be
-                    // null and could disagree with what the service returned.
-                    PageCount:        f.PageSpans?.Count,
+                    // report now mean by "pages". DISTINCT page numbers, not span entries: a
+                    // PageSpan is one of CU's verbatim ranges and a page can carry several.
+                    PageCount:        f.PageSpans?.Select(s => s.PageNumber).Distinct().Count(),
                     LastModifiedDate: entry?.LastModified,
-                    ZenyaDocumentId:  zenya.DocumentId,
-                    ZenyaVersion:     zenya.Version,
-                    ZenyaStatus:      zenya.Status,
-                    ZenyaUrl:         zenya.Url,
                     PageBreadcrumbs:  new Dictionary<int, string>(),
                     Sections:         structure?.Sections       ?? [],
                     Headings:         structure?.Headings       ?? [],
@@ -68,6 +63,8 @@ internal static class ExtractionOutputBuilder
                     SelectionMarks:   structure?.SelectionMarks ?? [],
                     Figures:          structure?.Figures        ?? [],
                     Lines:            structure?.Lines          ?? [],
+                    Annotations:      structure?.Annotations    ?? [],
+                    Hyperlinks:       structure?.Hyperlinks     ?? [],
                     Profile:          f.Profile,
                     Language:         f.Language);
             })];
@@ -76,7 +73,7 @@ internal static class ExtractionOutputBuilder
     // caller.
     //
     // Several fields are null or zero here and it is worth being precise about which is which:
-    // null means "no equivalent concept" (StaleDocCount - no Zenya attention flag;
+    // null means "no equivalent concept" (StaleDocCount - no source attention flag;
     // MissingDepartmentCount - no folder concept), while zero means "the thing that counted this
     // is gone". ReconciliationProblems and MojibakeRepairedPages are the second kind: they were
     // produced by PdfPipelineValidator and PdfCleaner, both deleted, and they will report real
@@ -90,19 +87,9 @@ internal static class ExtractionOutputBuilder
         var errorIssues   = files.Where(f => f.Error is not null).Select(f => f.Error!).ToList();
         var warningIssues = files.SelectMany(f => f.Warnings).ToList();
 
-        var okBlobNames = files.Where(f => f.Ok).Select(f => f.BlobName)
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var traceabilityGapCount = okBlobNames.Count(b => ZenyaFor(entries, b).DocumentId is null);
-        var missingVersionCount  = okBlobNames.Count(b => ZenyaFor(entries, b).Version is null);
-
         var contentHashes = BuildContentHashes(files);
 
-        var redFlags = new List<string>();
-        if (traceabilityGapCount > 0)
-            redFlags.Add(
-                $"{traceabilityGapCount} document(s) have no zenya_document_id blob metadata set — " +
-                "citations built from these will show a traceability gap (Citation.TraceabilityGap).");
-        redFlags.AddRange(DuplicateContentRedFlag(contentHashes));
+        var redFlags = new List<string>(DuplicateContentRedFlag(contentHashes));
 
         return new PdfExtractionOutput(documents)
         {
@@ -114,9 +101,12 @@ internal static class ExtractionOutputBuilder
             DetectedTableCount     = documents.Sum(d => d.Tables.Count),
             DocsWithoutHeadings    = documents.Count(d => d.Headings.Count == 0),
             MissingTitleCount      = documents.Count(d => string.IsNullOrWhiteSpace(d.Title)),
-            MissingVersionCount    = missingVersionCount,
+            // Null = "no equivalent concept" since the Zenya metadata removal (2026-08-26):
+            // version, traceability and the inactive lifecycle all came from blob metadata
+            // keys nothing ever set.
+            MissingVersionCount    = null,
             MissingDepartmentCount = null,
-            TraceabilityGapCount   = traceabilityGapCount,
+            TraceabilityGapCount   = null,
             Issues                 = [.. errorIssues.Concat(warningIssues).Take(MaxReturnedIssues)],
             RedFlags               = redFlags,
             // Summed from the service's own usage, per document. Null rather than 0 when nothing
@@ -133,11 +123,44 @@ internal static class ExtractionOutputBuilder
                                         d.SourceId, d.Title,
                                         d.Content.Length > 300 ? d.Content[..300] + "…" : d.Content))],
             ContentHashes          = contentHashes,
+            Durations              = BuildDurations(files),
+            Usages                 = BuildUsages(files),
+            BilledTokensByModel    = BuildTokensByModel(files),
         };
     }
 
-    private static ZenyaMetadata ZenyaFor(IReadOnlyDictionary<string, PdfBlobInfo> entries, string blobName) =>
-        entries.GetValueOrDefault(blobName)?.Zenya ?? ZenyaMetadata.Empty;
+    // Per-document wall clock, lifted off ExtractedFile the same way BuildContentHashes lifts
+    // the hash. Files with no duration are the ones a test built directly rather than the run
+    // loop timing them; absent rather than reported as zero. Same blob-name ordering, same
+    // reason: reports that diff cleanly.
+    internal static List<DocumentExtractDuration> BuildDurations(IReadOnlyList<ExtractedFile> files) =>
+        [.. files
+            .Where(f => f.DurationMs is not null)
+            .OrderBy(f => f.BlobName, StringComparer.Ordinal)
+            .Select(f => new DocumentExtractDuration(f.BlobName, f.DurationMs!.Value, f.Ok))];
+
+    // Per-document billed usage, lifted the same way. Files whose analysis reported no usage
+    // are absent rather than present-with-nulls - "the service said nothing" is not a row.
+    internal static List<DocumentUsage> BuildUsages(IReadOnlyList<ExtractedFile> files) =>
+        [.. files
+            .Where(f => f.Usage is not null)
+            .OrderBy(f => f.BlobName, StringComparer.Ordinal)
+            .Select(f => new DocumentUsage(
+                f.BlobName, f.Usage!.DocumentPagesStandard, f.Usage.ContextualizationTokens, f.Ok))];
+
+    // The run's per-model token bill: every document's TokensByModel summed key-by-key, keys
+    // verbatim as the service bills them. Ordered for the same diff-cleanly reason as the lists.
+    internal static IReadOnlyDictionary<string, long> BuildTokensByModel(IReadOnlyList<ExtractedFile> files)
+    {
+        var totals = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            if (file.Usage is null) continue;
+            foreach (var (key, count) in file.Usage.TokensByModel)
+                totals[key] = totals.GetValueOrDefault(key) + count;
+        }
+        return totals;
+    }
 
     // --- Content hashing (measurement only) -----------------------------------
 
@@ -172,7 +195,7 @@ internal static class ExtractionOutputBuilder
     // Two blobs with the same hash are the same file uploaded twice - a corpus-hygiene finding
     // that stands on its own, independent of whether anything ever caches on it. Raised as a red
     // flag rather than only logged, because that is what puts it in front of someone: red flags
-    // reach the run report and the run email, a log line reaches whoever goes looking.
+    // reach the run report and the run analysis, a log line reaches whoever goes looking.
     //
     // Hashes are compared case-insensitively to match ComputeContentHash's hex output being
     // treated as case-insensitive everywhere else it is grouped.

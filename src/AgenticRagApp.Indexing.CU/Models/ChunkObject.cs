@@ -150,10 +150,8 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     [JsonIgnore] public DateTimeOffset? CreatedAt       => Metadata.CreatedAt;
     [JsonIgnore] public DateTimeOffset? ModDate         => Metadata.ModDate;
     [JsonIgnore] public int?            PageCount       => Metadata.PageCount;
-    [JsonIgnore] public string?         ZenyaDocumentId => Metadata.ZenyaDocumentId;
-    [JsonIgnore] public string?         ZenyaVersion    => Metadata.ZenyaVersion;
-    [JsonIgnore] public string?         ZenyaStatus     => Metadata.ZenyaStatus;
-    [JsonIgnore] public string?         ZenyaUrl        => Metadata.ZenyaUrl;
+    [JsonIgnore] public IReadOnlyList<string> Hyperlinks  => Metadata.Hyperlinks;
+    [JsonIgnore] public IReadOnlyList<string> Annotations => Metadata.Annotations;
 
     // ── Derived from Content ────────────────────────────────────────────────
 
@@ -303,8 +301,7 @@ public sealed class ChunkMetadata
     [JsonPropertyName("valid_to")]
     public DateTimeOffset? ValidTo   { get; set; }
 
-    // The document's own version string ("v2.1"). Distinct from ZenyaVersion below, which comes
-    // from blob metadata - a document can carry both, and they can disagree.
+    // The document's own version string ("v2.1"), parsed from the title.
     [JsonPropertyName("version")]
     public string? Version { get; set; }
 
@@ -346,20 +343,6 @@ public sealed class ChunkMetadata
 
     [JsonPropertyName("page_count")]
     public int?            PageCount        { get; set; }
-
-    // Zenya's own identity/lifecycle facts, from custom blob metadata. Null until whoever
-    // uploads the PDF sets it - a null zenya_document_id marks a passage as untraceable.
-    [JsonPropertyName("zenya_document_id")]
-    public string? ZenyaDocumentId { get; set; }
-
-    [JsonPropertyName("zenya_version")]
-    public string? ZenyaVersion    { get; set; }
-
-    [JsonPropertyName("zenya_status")]
-    public string? ZenyaStatus     { get; set; }
-
-    [JsonPropertyName("zenya_url")]
-    public string? ZenyaUrl        { get; set; }
 
     public string? Breadcrumb { get; set; }
 
@@ -407,10 +390,19 @@ public sealed class ChunkMetadata
     // what ChunkObject.HasTable now answers off Content.
     public int TableCount { get; set; }
 
-    // Sourced only from DI's own structured Figure.Caption - expect this empty on most current
-    // documents. PdfCleaner separately extracts a figure's caption into the page text, which is
-    // deliberately not threaded back into this structured field today.
+    // Sourced only from CU's structured Figure.Caption - the generated Description rides
+    // inline in chunk content instead, so it is deliberately not duplicated here.
     public IReadOnlyList<string> FigureCaptions { get; set; } = [];
+
+    // Hyperlink targets and annotation notes on the pages this cut covers - CU-typed additions
+    // (2026-08-26), stamped from Structure in step 4 for the same snapshot-survival reason as
+    // TableCount/FigureCaptions: both are index fields, and a value recomputed from Structure
+    // at read time restores as empty on a rebuilt index.
+    [JsonPropertyName("hyperlinks")]
+    public IReadOnlyList<string> Hyperlinks { get; set; } = [];
+
+    [JsonPropertyName("annotations")]
+    public IReadOnlyList<string> Annotations { get; set; } = [];
 
     // The page-scoped structural payload (tables, figures, boilerplate on the pages this cut
     // covers). Carried, not Search-indexed - see ChunkStructure. Sections are

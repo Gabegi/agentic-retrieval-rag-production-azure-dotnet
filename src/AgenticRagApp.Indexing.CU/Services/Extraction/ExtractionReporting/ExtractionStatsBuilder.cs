@@ -52,7 +52,7 @@ internal static class ExtractionStatsBuilder
     // recording an error at all - without this filter, either one on an updated document would
     // still reach UploadService as "stale," which deletes every existing chunk for it with nothing
     // to replace them, silently dropping that document from the index. Docs staged for deletion
-    // because they're removed from the source or Zenya-inactive were never added to
+    // because they're removed from the source were never added to
     // EntriesToProcess, so they're unaffected by this filter - there's no replacement to wait for;
     // they're actually gone from the source.
     //
@@ -103,7 +103,14 @@ internal static class ExtractionStatsBuilder
         TraceabilityGapCount:   diff.Output.TraceabilityGapCount,
         Issues:                 diff.Output.Issues,
         RedFlags:               [.. diff.Output.RedFlags, .. extraRedFlags],
-        SpotCheckSample:        diff.Output.SpotCheckSample);
+        SpotCheckSample:        diff.Output.SpotCheckSample)
+    {
+        // The run's bill rides the metrics row into the index-run report (plan 1.5) - the
+        // report totals and the CuAnalyzePages/CuContextualizationTokens meters now say the
+        // same thing from the same source.
+        BilledPagesStandard           = diff.Output.BilledPagesStandard,
+        BilledContextualizationTokens = diff.Output.BilledContextualizationTokens,
+    };
 }
 
 internal record DiffResult(

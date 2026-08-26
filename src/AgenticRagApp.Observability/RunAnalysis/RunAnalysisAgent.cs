@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace AgenticRagApp.Observability.Reports;
 
-// The evaluative section of the email: reads the assembled run summary and produces findings
+// The evaluative section of the run analysis: reads the assembled run summary and produces findings
 // plus ranked improvement suggestions.
 //
 // NOT to be confused with the answer-quality eval harness (RagApp.Evaluation.Tests), which
@@ -28,7 +28,7 @@ public sealed class RunAnalysisAgent
         _logger = logger;
     }
 
-    public async Task<RunAssessment?> AnalyseAsync(RunEmailSummary summary, CancellationToken ct)
+    public async Task<RunAssessment?> AnalyseAsync(RunSummary summary, CancellationToken ct)
     {
         try
         {
@@ -54,7 +54,7 @@ public sealed class RunAnalysisAgent
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The deterministic report is the thing that matters. A model failure degrades this
-            // one section to "assessment unavailable" and the email still sends.
+            // one section to "assessment unavailable" and the analysis blob is still written.
             _logger.LogWarning(ex, "Run analysis failed for instance {InstanceId} — sending without the assessment section",
                 summary.InstanceId);
             return null;
@@ -95,7 +95,7 @@ public sealed class RunAnalysisAgent
 
     // Deliberately a projection, not the whole summary: excludes the raw sibling-report blobs
     // and caps the samples. The model needs the shape of the run, not every field of it.
-    private static object ToModelInput(RunEmailSummary s)
+    private static object ToModelInput(RunSummary s)
     {
         var r = s.IndexReport;
 

@@ -11,6 +11,7 @@ using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Observability;
+using AgenticRagApp.Functions.RunAnalysis;
 using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Functions;
@@ -45,6 +46,7 @@ public class PdfIndexingFunction
     private readonly ISnapshotService          _snapshotService;
     private readonly IVectorCache              _vectorCache;
     private readonly IDocumentIdentityStore    _identityStore;
+    private readonly IIndexDocumentService     _indexDocumentService;
     private readonly ILogger<PdfIndexingFunction> _logger;
 
     public PdfIndexingFunction(
@@ -60,6 +62,7 @@ public class PdfIndexingFunction
         ISnapshotService          snapshotService,
         IVectorCache              vectorCache,
         IDocumentIdentityStore    identityStore,
+        IIndexDocumentService     indexDocumentService,
         ILogger<PdfIndexingFunction> logger)
     {
         _extractionService = extractionService;
@@ -74,6 +77,7 @@ public class PdfIndexingFunction
         _snapshotService   = snapshotService;
         _vectorCache       = vectorCache;
         _identityStore     = identityStore;
+        _indexDocumentService = indexDocumentService;
         _logger            = logger;
     }
 
@@ -155,6 +159,13 @@ public class PdfIndexingFunction
         bool    success = false;
         string? error   = null;
 
+        // Wall-clock per stage from CurrentUtcDateTime deltas - the replay-safe clock, so a
+        // replayed orchestration recomputes the same numbers from the same history events
+        // (observability plan 2.3). A stage that never ran has no key. The histogram recording
+        // happens in SaveIndexReportActivity, never here: orchestrator-body meter writes would
+        // re-record on every replay.
+        var stageDurations = new Dictionary<string, long>();
+
         // Stage-boundary progress, readable while the run is in flight via GET /api/index/status
         // (or the raw statusQueryGetUri's "customStatus"). SetCustomStatus is replay-safe -
         // Durable overwrites the value rather than accumulating, so a replayed orchestration
@@ -178,15 +189,21 @@ public class PdfIndexingFunction
                 context.SetCustomStatus(new IndexingProgress(IndexingProgress.Extracting, startedAt));
             }
 
+            var extractStart = context.CurrentUtcDateTime;
             extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new PdfExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
+            stageDurations["extract"] = (long)(context.CurrentUtcDateTime - extractStart).TotalMilliseconds;
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.Chunking, startedAt,
                 DocsExtracted: extractResults.DocsToProcess));
 
+            var chunkStart = context.CurrentUtcDateTime;
             chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new PdfChunkRequest(docsBlob, chunksBlob, familyMovesBlob, context.InstanceId, startedAt));
+            stageDurations["chunk"] = (long)(context.CurrentUtcDateTime - chunkStart).TotalMilliseconds;
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.EmbedAndUpload, startedAt,
                 DocsExtracted: extractResults.DocsToProcess, ChunksProduced: chunkResults.ChunksProduced));
 
+            var embedStart = context.CurrentUtcDateTime;
             embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new PdfEmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt));
+            stageDurations["embed_upload"] = (long)(context.CurrentUtcDateTime - embedStart).TotalMilliseconds;
             success      = true;
         }
         catch (Exception ex)
@@ -212,7 +229,31 @@ public class PdfIndexingFunction
                 Extraction = extractResults,
                 Chunking   = chunkResults,
                 Embedding  = embedResults,
+                StageDurationsMs = stageDurations,
             });
+
+        // After the report is saved, since this reads it back: assembles the run-analysis blob
+        // (summary + flags + model assessment) next to the report. Best-effort inside the
+        // activity - it catches everything and never fails the run - and called before the
+        // failure rethrow below on purpose: a failed run is exactly the run worth analysing.
+        // The retry options cover what the activity deliberately does NOT catch: the host
+        // recycling mid-activity.
+        try
+        {
+            await context.CallActivityAsync("SaveRunAnalysisActivity",
+                new SaveRunAnalysisRequest(RunReportKind.Index, context.InstanceId, startedAt),
+                TaskOptions.FromRetryPolicy(new RetryPolicy(
+                    maxNumberOfAttempts: 3, firstRetryInterval: TimeSpan.FromSeconds(30))));
+        }
+        catch (TaskFailedException ex)
+        {
+            // Only reachable when all three attempts died at the infrastructure level - the
+            // activity itself never throws. The run report is already saved by this point, and
+            // a missing analysis blob must never turn a good indexing run into a failed one.
+            context.CreateReplaySafeLogger<PdfIndexingFunction>().LogWarning(ex,
+                "SaveRunAnalysisActivity failed after retries for {InstanceId} — run analysis blob not written.",
+                context.InstanceId);
+        }
 
         if (!success)
             throw new InvalidOperationException(error ?? "Indexing pipeline failed");
@@ -236,6 +277,14 @@ public class PdfIndexingFunction
     [Function("ExtractActivity")]
     public async Task<ExtractionStageMetrics> ExtractActivity([ActivityTrigger] PdfExtractRequest req, FunctionContext context)
     {
+        // Scope + span pattern, repeated on each pipeline activity (plan 5.1/2.4): the scope
+        // stamps InstanceId/Source onto every log line the stage emits, so one App Insights
+        // query returns a run's full story; the span makes the stage a node in the run's
+        // transaction view (the ActivitySource was registered and exported from day one -
+        // this is the first code that ever starts an activity on it).
+        using var _    = _logger.BeginScope(new Dictionary<string, object?> { ["InstanceId"] = req.InstanceId, ["Source"] = Source });
+        using var span = Instrumentation.ActivitySource.StartActivity("indexing.extract");
+        span?.SetTag("indexing.instance_id", req.InstanceId);
         try
         {
             await _indexService.EnsureIndexAsync();
@@ -268,6 +317,10 @@ public class PdfIndexingFunction
     [Function("ChunkActivity")]
     public async Task<ChunkingStageMetrics> ChunkActivity([ActivityTrigger] PdfChunkRequest req, FunctionContext context)
     {
+        // Same scope + span pattern as ExtractActivity - see the comment there.
+        using var _    = _logger.BeginScope(new Dictionary<string, object?> { ["InstanceId"] = req.InstanceId, ["Source"] = Source });
+        using var span = Instrumentation.ActivitySource.StartActivity("indexing.chunk");
+        span?.SetTag("indexing.instance_id", req.InstanceId);
         try
         {
             var docs           = await ReadBlobAsync<List<PdfExtractionDocument>>(req.InputBlob, context.CancellationToken);
@@ -304,6 +357,10 @@ public class PdfIndexingFunction
     [Function("EmbedAndUploadActivity")]
     public async Task<EmbedUploadStageMetrics> EmbedAndUploadActivity([ActivityTrigger] PdfEmbedUploadRequest req, FunctionContext context)
     {
+        // Same scope + span pattern as ExtractActivity - see the comment there.
+        using var _    = _logger.BeginScope(new Dictionary<string, object?> { ["InstanceId"] = req.InstanceId, ["Source"] = Source });
+        using var span = Instrumentation.ActivitySource.StartActivity("indexing.embed_upload");
+        span?.SetTag("indexing.instance_id", req.InstanceId);
         try
         {
             var chunks         = await ReadBlobAsync<List<ChunkObject>>(req.ChunksBlob, context.CancellationToken);
@@ -387,7 +444,10 @@ public class PdfIndexingFunction
                 RedFlags:                      uploadResult.RedFlags,
                 ChunksEvicted:                 evictedCount,
                 PreviousIndexDocumentCount:    uploadResult.PreviousIndexDocumentCount,
-                PreviousIndexStorageSizeBytes: uploadResult.PreviousIndexStorageSizeBytes);
+                PreviousIndexStorageSizeBytes: uploadResult.PreviousIndexStorageSizeBytes)
+            {
+                TotalEmbeddingTokens = embeddingResult.TotalInputTokens,
+            };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -399,7 +459,37 @@ public class PdfIndexingFunction
     [Function("SaveIndexReportActivity")]
     public async Task SaveIndexReportActivity([ActivityTrigger] PdfIndexRunReport report, FunctionContext context)
     {
+        using var _ = _logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["InstanceId"] = report.Run.InstanceId,
+            ["Source"]     = Source,
+        });
+
         LogRunSummary(report);
+
+        // Recorded here rather than in the orchestrator body: this activity runs exactly once
+        // per run, orchestrator code replays. BlobsProcessed is the run heartbeat (plan 3.2 -
+        // defined from the start, never recorded); the stage histogram is plan 2.3's meter
+        // half, the report's StageDurationsMs is the per-run half.
+        if (report.Success)
+            Instrumentation.BlobsProcessed.Add(1);
+        foreach (var (stage, ms) in report.StageDurationsMs ?? new Dictionary<string, long>())
+            Instrumentation.StageDuration.Record(ms / 1000.0, new KeyValuePair<string, object?>("stage", stage));
+
+        // Second stats sample (plan 4.1): the post-upload snapshot regularly reads 0 because
+        // Azure Search stats lag live writes; this one lands seconds later and rides the report
+        // as verification. Get-and-verify only - the drift baseline stays owned by
+        // IndexStatsMonitor, which this deliberately does not call. Best-effort: a failed read
+        // must not lose the report.
+        try
+        {
+            var (docCount, storageBytes) = await _indexDocumentService.GetStatisticsAsync(context.CancellationToken);
+            report = report with { StatsReadback = new IndexStatsReadback(docCount, storageBytes, DateTimeOffset.UtcNow) };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Index stats readback failed — report saved without StatsReadback.");
+        }
 
         if (!_reportWriter.IsEnabled) return;
 

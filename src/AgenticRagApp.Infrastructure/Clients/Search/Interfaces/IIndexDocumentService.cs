@@ -7,8 +7,9 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 public interface IIndexDocumentService
 {
     // Doc-type-specific mapping (which fields a chunk maps to) happens before documents
-    // reach this call.
-    Task<(int Succeeded, int Failed)> UpsertDocumentsAsync<T>(IEnumerable<T> documents, CancellationToken ct = default);
+    // reach this call. Batches = the 1000-doc push-API batches actually sent, counted where
+    // the batching happens rather than re-derived by callers (observability plan 3.1).
+    Task<(int Succeeded, int Failed, int Batches)> UpsertDocumentsAsync<T>(IEnumerable<T> documents, CancellationToken ct = default);
 
     // Partial update: overwrites ONLY the fields present in each payload, leaving the rest of the
     // row alone. For patching a field on rows whose content is unchanged and whose chunks the

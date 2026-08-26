@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
+using AgenticRagApp.Observability;
 
 namespace AgenticRagApp.Indexing.CU.Services;
 
@@ -35,8 +36,14 @@ public static class IdentityEmbedder
         // One call for the whole run: identity texts are a title plus a heading list, so even
         // the full 51-document corpus is a single modest batch. If the corpus grows past what
         // one request accepts, batch here the way CsvEmbeddingService does.
-        var (embedded, retries) = await embeddingClient.EmbedWithRetryAsync(
+        var (embedded, retries, inputTokens) = await embeddingClient.EmbedWithRetryAsync(
             toEmbed.Select(d => d.IdentityText).ToList(), ct);
+
+        // Identity vectors are billed embedding tokens like any other (plan 1.6) - metered
+        // here so the run's token counter covers them; they ride no report field, since the
+        // embed stage's TotalEmbeddingTokens deliberately covers only chunk embedding.
+        if (inputTokens is { } billed)
+            Instrumentation.EmbeddingTokens.Add(billed);
 
         if (retries > 0)
             logger.LogInformation(

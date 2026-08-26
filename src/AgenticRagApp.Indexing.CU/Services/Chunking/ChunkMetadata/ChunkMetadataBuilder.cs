@@ -6,7 +6,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // Step 4 of the chunking stage: turn a cut into an indexed row.
 //
 // The split of responsibility this class exists to make explicit: a strategy decides WHERE to
-// cut and knows nothing about ids, Zenya metadata or embedding prefixes; this decides how a cut
+// cut and knows nothing about ids, document metadata or embedding prefixes; this decides how a cut
 // becomes an indexed row and knows nothing about headings or ceilings.
 //
 // An ORCHESTRATOR, the same shape as the two strategies: every step is one call into
@@ -19,7 +19,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //
 // ── Scope 1: property of the DOCUMENT (extract once, stamp onto every chunk) ──
 //   DocumentStamp: doc_id, title, language, author, family_id, domain_tag, confusable_with,
-//   route_name, size_class, the dates, the Zenya fields, and valid_from/valid_to/version parsed
+//   route_name, size_class, the dates, and valid_from/valid_to/version parsed
 //   out of the title. No source_path: DocumentId already IS the blob name.
 //
 // ── Scope 2: property of the CHUNK (derived at cut time, free) ──
@@ -142,6 +142,11 @@ public sealed class ChunkMetadataBuilder
             metadata.Structure      = structure;
             metadata.TableCount     = structure.Tables.Count;
             metadata.FigureCaptions = StructureFilter.CaptionsOf(structure);
+            // CU-typed additions (2026-08-26): hyperlink targets and annotation notes on the
+            // pages this cut covers, stamped for the same snapshot-survival reason as the two
+            // fields above - both are index fields.
+            metadata.Hyperlinks     = StructureFilter.HyperlinksOf(structure);
+            metadata.Annotations    = StructureFilter.AnnotationsOf(structure);
         }
     }
 }

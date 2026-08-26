@@ -90,6 +90,7 @@ public sealed class ContentUnderstandingDefaultsSetup : IHostedService
             if (wrong.Count == 0)
             {
                 _state.Summary = $"verified at {DateTimeOffset.UtcNow:HH:mm:ss}Z: already correct ({mappings})";
+                _state.Ok      = true;
                 _logger.LogInformation(
                     "Content Understanding default model mappings already correct: {Mappings}.", mappings);
                 return;
@@ -99,6 +100,7 @@ public sealed class ContentUnderstandingDefaultsSetup : IHostedService
 
             _state.Summary =
                 $"updated at {DateTimeOffset.UtcNow:HH:mm:ss}Z ({string.Join(", ", wrong)} were missing/wrong): {mappings}";
+            _state.Ok = true;
             _logger.LogInformation(
                 "Content Understanding default model mappings updated ({Wrong} missing/wrong): {Mappings}.",
                 string.Join(", ", wrong), mappings);

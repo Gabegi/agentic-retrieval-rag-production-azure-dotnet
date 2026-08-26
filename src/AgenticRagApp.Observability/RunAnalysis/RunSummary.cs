@@ -2,14 +2,14 @@ using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Observability.Reports;
 
-// The assembled view of one run: everything the email renders, and — serialized — the exact
-// payload attached as run-summary-{instanceId}.json so the whole run can be handed to an agent
-// without anyone re-deriving it from blobs.
+// The assembled view of one run — serialized verbatim as the run-analysis-{instanceId}.json
+// blob, so the whole run can be handed to a person or an agent without anyone re-deriving it
+// from the individual report blobs.
 //
 // This is also precisely what the analysis agent is given. Keeping "what the reader sees" and
 // "what the model saw" the same object is deliberate: it makes the agent's claims checkable
 // against the same numbers printed below them.
-public sealed record RunEmailSummary
+public sealed record RunSummary
 {
     public required RunReportKind Kind { get; init; }
     public required string        InstanceId { get; init; }
@@ -17,7 +17,7 @@ public sealed record RunEmailSummary
 
     // ── Index runs ──────────────────────────────────────────────────────────
     // Null on a restore run. The three stage records keep their own null-means-"did not run"
-    // semantics; the renderer must print "did not run", never 0.
+    // semantics; a reader must treat null as "did not run", never as 0.
     public PdfIndexRunReport?   IndexReport { get; init; }
     public PdfRestoreRunReport? RestoreReport { get; init; }
 
@@ -38,8 +38,8 @@ public sealed record RunEmailSummary
     public required IReadOnlyList<string>     SourcesFound { get; init; }
     public required IReadOnlyList<string>     SourcesMissing { get; init; }
 
-    // Populated last, by the analysis agent. Null when the model call failed - the email still
-    // sends everything above it.
+    // Populated last, by the analysis agent. Null when the model call failed - the blob still
+    // carries everything above it.
     public RunAssessment? Assessment { get; init; }
 
     public bool Success => IndexReport?.Run.Success ?? RestoreReport?.Success ?? false;
@@ -51,9 +51,9 @@ public sealed record RunEmailSummary
         : "OK";
 }
 
-// The subset of PdfQualityGateResult worth carrying into an email. Deliberately a projection,
+// The subset of PdfQualityGateResult worth carrying into the analysis. Deliberately a projection,
 // not the whole object: SpotCheckSample and Issues are unbounded and the full record would
-// dominate the attachment.
+// dominate the blob.
 public sealed record ValidationReportFacts(
     bool Passed,
     int  ControlCharsStripped,
@@ -68,14 +68,21 @@ public sealed record ValidationReportFacts(
     IReadOnlyList<string> DocumentsNeedingFallbackChunking);
 
 // Aggregated, never per-file rows: a 900-document corpus would otherwise put 900 objects in the
-// attachment. EstimatedCostUsd is the only Document Intelligence spend figure the pipeline
-// produces and appears in no run report.
+// blob.
+//
+// EstimatedCostUsd is a Document Intelligence-era field and reads 0 for every CU run: the
+// per-file facts no longer carry it. The two billed-unit totals below are what CU actually
+// reports, summed from the same rows - deliberately NOT converted to currency here, for the
+// reason spelled out at Instrumentation.CuAnalyzePages: CU bills several unit types at rates
+// this code has no business hardcoding. Report the units, price them where the prices live.
 public sealed record FileFactsSummary(
     int    FileCount,
     double EstimatedCostUsd,
     long   TotalBytes,
     int    FilesWithoutProducer,
-    IReadOnlyDictionary<string, int> SpecVersionHistogram);
+    IReadOnlyDictionary<string, int> SpecVersionHistogram,
+    long   BilledPagesStandard = 0,
+    long   ContextualizationTokens = 0);
 
 // Counts are already in ExtractionStageMetrics; the *names* are what this adds. Capped -
 // "3 documents deleted" is a number, "verzuimprotocol.pdf was deleted" is something to act on.
@@ -94,7 +101,7 @@ public sealed record FailureReportFacts(
     string Message,
     string? StackTraceExcerpt);
 
-// Written to runs/_last-run.json after each successful send and read at the start of the next.
+// Written to _last-run.json after each successfully written analysis and read at the start of the next.
 // A pointer blob rather than a folder walk: indexing runs are infrequent, so the previous run is
 // usually days or weeks back, and any "look in today's folder" approach loses the delta on the
 // first run of every day - which is most runs.
@@ -134,7 +141,7 @@ public sealed record RunAssessment(
 public sealed record ImprovementSuggestion(
     string Suggestion,
     // Mandatory. An ungrounded suggestion is worse than none - it gets acted on once and
-    // trusted thereafter, so the renderer drops any suggestion arriving without evidence.
+    // trusted thereafter, so RunAnalysisAgent drops any suggestion arriving without evidence.
     string Evidence,
     string ExpectedImpact,
     string Effort);

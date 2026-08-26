@@ -1,17 +1,18 @@
 namespace AgenticRagApp.Indexing.CU.Models;
 
-// Where one page's cleaned text sits inside its document's assembled Content
-// (action-plan.md §3.1). Same shape as SectionSpan, deliberately - both answer "which
-// range of this string is that thing".
+// Where one of a page's text ranges sits inside the document's markdown. Same shape as
+// SectionSpan, deliberately - both answer "which range of this string is that thing".
 //
-// This is what lets extraction emit whole documents while chunking can still say which
-// page a chunk started on. It is recorded during assembly by the component that does the
-// concatenating, so it is exact: reconstructing it downstream would mean guessing the
-// separator the assembler used, and every offset after a wrong guess is wrong.
+// One entry per (page, span) pair, VERBATIM from Content Understanding's DocumentPage.Spans
+// (user decision 2026-08-26: the model accepts CU's output, not the other way around). That
+// means: a page whose text is non-contiguous appears several times, a page the service
+// reported no spans for appears not at all, and the ranges need not tile the string - the
+// separators between pages belong to no page. Anything asking "which page is offset X on"
+// gets an honest 0 ("unknown") in those holes, never a nearest-page guess - see
+// CuPageHelper.PageAt and PageResolver, both containment/overlap tests.
 //
-// Offsets address the CLEANED document text, not DI's raw content. Structural offsets
-// (Heading.Offset, SectionSpan.Offset) address the raw content and are not comparable -
-// see the heading locator for how the two coordinate systems are bridged.
+// Offsets address the document's markdown - the same string every structural offset in this
+// folder addresses (utf16 spans, one coordinate system, nothing rewritten).
 public sealed record PageSpan(
     int PageNumber,
     int Offset,

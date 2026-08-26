@@ -21,11 +21,21 @@ public record ExtractionStageMetrics(
     int DetectedTableCount,
     int DocsWithoutHeadings,
     int MissingTitleCount,
-    int? MissingVersionCount,    // PDF: real count now (ZenyaVersion missing) - see PdfExtractionPipeline
+    int? MissingVersionCount,    // null = source has no equivalent concept (PDF since the Zenya removal, 2026-08-26)
     int? MissingDepartmentCount, // null = source has no equivalent concept, not "verified zero"
-    // Documents with no zenya_document_id blob metadata set - see ExtractionOutput's own comment.
+    // Null = source has no equivalent mechanism - see ExtractionOutputBase.
     int? TraceabilityGapCount,
     IReadOnlyList<PipelineIssue> Issues,
     IReadOnlyList<string>               RedFlags,
     IReadOnlyList<SpotCheckEntry>       SpotCheckSample
-);
+)
+{
+    // What this run billed, in the units the service bills in (observability plan 1.5,
+    // 2026-08-26). Init properties rather than positional parameters so the CSV pipeline and
+    // every existing constructor call stay untouched - a source with no analyze call simply
+    // never sets them. Null = no usage was readable (blank), distinct from 0 (billed nothing).
+    // Until these landed, the run totals existed only as a transient log line - the index-run
+    // report, the one artifact reviewed after every run, carried no cost at all.
+    public long? BilledPagesStandard           { get; init; }
+    public long? BilledContextualizationTokens { get; init; }
+}

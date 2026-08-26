@@ -2,14 +2,23 @@ resource "azurerm_search_service" "main" {
   name                = "con-srch-cap-${local.env}-${local.region}-${local.instance}"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.data.name
-  sku                 = "standard"
+  # S3, the top of the Basic/Standard family that supports knowledge bases.
+  # Agentic retrieval leans on the semantic ranker, whose concurrency scales
+  # with tier and search units (S1: 3 concurrent + 6 queued per SU; S2/S3: 4
+  # and 8), so the tier sets the ceiling on knowledge-base throughput before
+  # requests start being throttled. Deliberately NOT S3 HD - that variant is
+  # the same SKU with hosting_mode = "highDensity" and allows zero knowledge
+  # bases and zero knowledge sources, which would break agentic retrieval
+  # outright. Upgrades within the Basic/Standard range apply in place, so
+  # this is not a destroy-and-recreate of the service or its indexes.
+  sku                 = "standard3"
 
-  # Enables semantic ranker - required by the knowledge base / agentic
+  # Enables the semantic ranker - required by the knowledge base / agentic
   # retrieval queries in KnowledgeService.cs, which always request semantic
   # ranking regardless of the index's own semantic configuration. Without
   # this, every query fails with "Semantic Search is not enabled for this
-  # service" (FeatureNotSupportedInService). "standard" (not "free") to
-  # match the standard search service tier - free caps at 1,000 queries/month.
+  # service" (FeatureNotSupportedInService). "standard" is the top plan;
+  # "free" caps at 1,000 queries/month.
   semantic_search_sku = "standard"
 
   # Only flips to true when local.dev_direct_access_ips has entries (development

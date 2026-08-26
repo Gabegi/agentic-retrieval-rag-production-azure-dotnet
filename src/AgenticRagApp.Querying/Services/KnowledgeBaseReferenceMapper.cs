@@ -28,10 +28,6 @@ public static class KnowledgeBaseReferenceMapper
             // PDF and CSV no longer share an index (B2), so they were always null here.
             r.SourceData.TryGetValue("page_start", out var pageRaw);
             r.SourceData.TryGetValue("child_index", out var chunkIndexRaw);
-            r.SourceData.TryGetValue("zenya_document_id", out var zenyaDocIdRaw);
-            r.SourceData.TryGetValue("zenya_version", out var zenyaVersionRaw);
-            r.SourceData.TryGetValue("zenya_status", out var zenyaStatusRaw);
-            r.SourceData.TryGetValue("zenya_url", out var zenyaUrlRaw);
             r.SourceData.TryGetValue("page_count", out var pageCountRaw);
             r.SourceData.TryGetValue("created_at", out var createdAtRaw);
             r.SourceData.TryGetValue("mod_date", out var modDateRaw);
@@ -51,10 +47,6 @@ public static class KnowledgeBaseReferenceMapper
                 Content:         content,
                 QuickCode:       null,
                 RelativePath:    null,
-                ZenyaDocumentId: AsText(zenyaDocIdRaw),
-                ZenyaVersion:    AsText(zenyaVersionRaw),
-                ZenyaStatus:     AsText(zenyaStatusRaw),
-                ZenyaUrl:        AsText(zenyaUrlRaw),
                 PageCount:       AsNullableInt(pageCountRaw),
                 CreatedAt:       AsDateTimeOffset(createdAtRaw),
                 ModDate:         AsDateTimeOffset(modDateRaw),

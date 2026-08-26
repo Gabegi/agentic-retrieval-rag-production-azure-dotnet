@@ -15,7 +15,7 @@ public class ExtractionOutputBuilderTests
         new(true, blobName,
             Content:   $"Inhoud van {blobName}",
             PageSpans: [.. Enumerable.Range(1, pages).Select(p => new PageSpan(p, 0, 5, null, false))],
-            Structure: new PdfDocumentStructure([], [], [], [], [], [], [], []),
+            Structure: new PdfDocumentStructure([], [], [], [], [], [], [], [], [], []),
             Title:     blobName.Replace(".pdf", ""),
             Profile:   null,
             Language:  "nl",
@@ -87,27 +87,20 @@ public class ExtractionOutputBuilderTests
     }
 
     [TestMethod]
-    public void BuildDocuments_CarriesZenyaMetadataAndLastModified()
+    public void BuildDocuments_CarriesLastModified()
     {
-        // Both come straight off the pre-extraction listing entry - the loop no longer copies
-        // them into side dictionaries on the way through.
-        var when  = DateTimeOffset.Parse("2026-08-24T10:00:00Z");
-        var zenya = ZenyaMetadata.FromBlobMetadata(new Dictionary<string, string>
-        {
-            ["zenya_document_id"] = "D-123",
-            ["zenya_version"]     = "3",
-        });
+        // Comes straight off the pre-extraction listing entry - the loop no longer copies
+        // it into a side dictionary on the way through.
+        var when = DateTimeOffset.Parse("2026-08-24T10:00:00Z");
 
         var documents = ExtractionOutputBuilder.BuildDocuments(
             [Ok("doc.pdf")],
             new Dictionary<string, PdfBlobInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                ["doc.pdf"] = new PdfBlobInfo(when, ContentLength: 1234, zenya),
+                ["doc.pdf"] = new PdfBlobInfo(when, ContentLength: 1234),
             });
 
-        Assert.AreEqual(when,  documents[0].LastModifiedDate);
-        Assert.AreEqual("D-123", documents[0].ZenyaDocumentId);
-        Assert.AreEqual("3",     documents[0].ZenyaVersion);
+        Assert.AreEqual(when, documents[0].LastModifiedDate);
     }
 
     [TestMethod]
@@ -120,7 +113,6 @@ public class ExtractionOutputBuilderTests
 
         Assert.AreEqual(1, documents.Count);
         Assert.IsNull(documents[0].LastModifiedDate);
-        Assert.IsNull(documents[0].ZenyaDocumentId);
     }
 
     [TestMethod]
@@ -136,14 +128,15 @@ public class ExtractionOutputBuilderTests
     }
 
     [TestMethod]
-    public void BuildExtractionOutput_FlagsDocumentsWithNoZenyaDocumentId()
+    public void BuildExtractionOutput_ReportsNoTraceabilityConcept()
     {
-        // Citations built from these show a traceability gap, so the run report says so rather
-        // than leaving it to be noticed in the UI.
+        // The Zenya metadata mechanism is gone (2026-08-26): traceability and version counts
+        // report null ("no equivalent concept"), never a count, and no zenya red flag exists.
         var output = ExtractionOutputBuilder.BuildExtractionOutput([Ok("doc.pdf")], NoEntries());
 
-        Assert.AreEqual(1, output.TraceabilityGapCount);
-        Assert.IsTrue(output.RedFlags.Any(f => f.Contains("zenya_document_id")));
+        Assert.IsNull(output.TraceabilityGapCount);
+        Assert.IsNull(output.MissingVersionCount);
+        Assert.IsFalse(output.RedFlags.Any(f => f.Contains("zenya")));
     }
 
     [TestMethod]

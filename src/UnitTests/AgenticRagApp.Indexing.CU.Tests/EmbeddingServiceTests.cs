@@ -61,7 +61,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "content one"), Document("d2", "content two") };
 
@@ -79,7 +79,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 3), 0));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 3), 0, null));
         var service = BuildService(embeddingClient, Config(dims: 4)); // expects 4, generator returns 3
         var docs = new[] { Document("d1", "content") };
 
@@ -99,7 +99,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 capturedTexts = texts;
-                return (Vectors(texts.Count), 0);
+                return (Vectors(texts.Count), 0, null);
             });
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", oversized) };
@@ -129,7 +129,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 capturedTexts = texts;
-                return (Vectors(texts.Count), 0);
+                return (Vectors(texts.Count), 0, null);
             });
         var service = BuildService(embeddingClient);
 
@@ -152,7 +152,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
         var service = BuildService(embeddingClient);
 
         var result = await service.EmbedDocumentsAsync([Document("d1", dense)]);
@@ -166,7 +166,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "short content") };
 
@@ -188,7 +188,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 capturedTexts = texts;
-                return (Vectors(texts.Count), 0);
+                return (Vectors(texts.Count), 0, null);
             });
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "My Title\n\nbody") };
@@ -208,7 +208,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 lock (callSizes) callSizes.Add(texts.Count);
-                return (Vectors(texts.Count), 0);
+                return (Vectors(texts.Count), 0, null);
             });
         var service = BuildService(embeddingClient);
         var docs = Enumerable.Range(0, 150).Select(i => Document($"d{i}", $"content {i}")).ToArray();
@@ -226,7 +226,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 1));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 1, null));
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "content") };
 
@@ -262,7 +262,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
         var service = BuildService(embeddingClient, vectorCache: vectorCache);
         var docs    = new[] { Document("d1", "content one") };
 
@@ -283,7 +283,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 4), 0));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 4), 0, null));
         var service = BuildService(embeddingClient, Config(dims: 4), vectorCache);
         var docs    = new[] { Document("d1", "content one") };
 

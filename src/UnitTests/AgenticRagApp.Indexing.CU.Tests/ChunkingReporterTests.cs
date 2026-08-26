@@ -47,10 +47,6 @@ public class ChunkingReporterTests
             ModDate:          null,
             PageCount:        null,
             LastModifiedDate: null,
-            ZenyaDocumentId:  null,
-            ZenyaVersion:     null,
-            ZenyaStatus:      null,
-            ZenyaUrl:         null,
             PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         [],
             Headings:         headings ?? [],
@@ -59,6 +55,8 @@ public class ChunkingReporterTests
             SelectionMarks:   [],
             Figures:          [],
             Lines:            [],
+            Annotations:      [],
+            Hyperlinks:       [],
             Profile:          profile,
             Language:         null);
 

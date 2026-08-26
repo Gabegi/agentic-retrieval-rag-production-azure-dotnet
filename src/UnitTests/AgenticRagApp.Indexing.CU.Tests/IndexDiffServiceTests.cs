@@ -16,8 +16,8 @@ public class IndexDiffServiceTests
     private static readonly DateTimeOffset Old = DateTimeOffset.Parse("2024-01-01T00:00:00Z");
     private static readonly DateTimeOffset New = DateTimeOffset.Parse("2024-06-01T00:00:00Z");
 
-    private static PdfBlobInfo Entry(DateTimeOffset lastModified, ZenyaMetadata? zenya = null) =>
-        new(lastModified, ContentLength: null, zenya ?? ZenyaMetadata.Empty);
+    private static PdfBlobInfo Entry(DateTimeOffset lastModified) =>
+        new(lastModified, ContentLength: null);
 
     private static Dictionary<string, PdfBlobInfo> Source(params (string Id, PdfBlobInfo Entry)[] entries) =>
         entries.ToDictionary(e => e.Id, e => e.Entry, StringComparer.OrdinalIgnoreCase);
@@ -82,52 +82,6 @@ public class IndexDiffServiceTests
         CollectionAssert.AreEquivalent(new[] { "gone.pdf" }, result.RemovedSourceIds);
         CollectionAssert.AreEquivalent(new[] { "gone.pdf" }, result.ToDeleteChunks);
         Assert.AreEqual(0, result.SourceIdsToProcess.Count);
-    }
-
-    [TestMethod]
-    public void ZenyaInactive_IsNeverProcessed_EvenWhenNew()
-    {
-        var inactive = ZenyaMetadata.FromBlobMetadata(
-            new Dictionary<string, string> { ["zenya_status"] = "ingetrokken" });
-
-        var result = IndexDiffService.CompareSourceListingToIndex(
-            Source(("doc1.pdf", Entry(Old, inactive))), Indexed(), forceReindex: false);
-
-        Assert.AreEqual(1, result.Inactive);
-        Assert.AreEqual(0, result.NewCount);
-        Assert.AreEqual(0, result.SourceIdsToProcess.Count);
-        // Not currently indexed, so there is nothing to tear down either.
-        Assert.AreEqual(0, result.ToDeleteChunks.Count);
-    }
-
-    [TestMethod]
-    public void ZenyaInactive_ButCurrentlyIndexed_IsTornDownLikeARemovedDocument()
-    {
-        var inactive = ZenyaMetadata.FromBlobMetadata(
-            new Dictionary<string, string> { ["zenya_status"] = "ingetrokken" });
-
-        var result = IndexDiffService.CompareSourceListingToIndex(
-            Source(("doc1.pdf", Entry(Old, inactive))), Indexed(("doc1.pdf", Old)), forceReindex: false);
-
-        Assert.AreEqual(1, result.Inactive);
-        CollectionAssert.AreEquivalent(new[] { "doc1.pdf" }, result.RemovedSourceIds);
-        CollectionAssert.AreEquivalent(new[] { "doc1.pdf" }, result.ToDeleteChunks);
-        Assert.AreEqual(0, result.SourceIdsToProcess.Count);
-    }
-
-    [TestMethod]
-    public void InactiveAndStillPresent_IsNotAlsoCountedAsRemovedFromBlob()
-    {
-        var inactive = ZenyaMetadata.FromBlobMetadata(
-            new Dictionary<string, string> { ["zenya_status"] = "ingetrokken" });
-
-        var result = IndexDiffService.CompareSourceListingToIndex(
-            Source(("doc1.pdf", Entry(Old, inactive))), Indexed(("doc1.pdf", Old)), forceReindex: false);
-
-        // Exactly one entry each - the inactive branch already staged it, and the
-        // removed-from-blob sweep must not stage it a second time.
-        Assert.AreEqual(1, result.RemovedSourceIds.Count);
-        Assert.AreEqual(1, result.ToDeleteChunks.Count);
     }
 
     [TestMethod]

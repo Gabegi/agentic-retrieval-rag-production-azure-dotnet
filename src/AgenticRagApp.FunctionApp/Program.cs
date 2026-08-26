@@ -11,7 +11,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using AgenticRagApp.Functions.ReportEmail;
+using AgenticRagApp.Functions.RunAnalysis;
 using AgenticRagApp.Infrastructure;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Indexing.CU;
@@ -116,37 +116,28 @@ var host = new HostBuilder()
 
         // PDF indexing pipeline — extraction, chunking, embedding, upload, index. See
         // AgenticRagApp.Indexing.CU/ServiceCollectionExtensions.cs for what this wires in.
-        services.AddPdfIndexing(config);
+        services.AddIndexing(config);
 
-        // ── Per-run report email ─────────────────────────────────────────────
-        // One indexing/restore run -> one email. See ReportEmail/ and
-        // docs/2608/260807/pipeline-run-email-report.md.
-        var reportEmailOptions = new ReportEmailOptions();
+        // ── Per-run analysis ─────────────────────────────────────────────────
+        // One indexing/restore run -> one run-analysis blob (assembled summary + flags + model
+        // assessment). See RunAnalysis/ - this grew out of the run report email
+        // (docs/2608/260807/pipeline-run-email-report.md); the blob is the delivery now.
+        var runAnalysisOptions = new RunAnalysisOptions();
         Microsoft.Extensions.Configuration.ConfigurationBinder.Bind(
-            ctx.Configuration.GetSection(ReportEmailOptions.SectionName), reportEmailOptions);
-        services.AddSingleton(reportEmailOptions);
+            ctx.Configuration.GetSection(RunAnalysisOptions.SectionName), runAnalysisOptions);
+        services.AddSingleton(runAnalysisOptions);
 
-        services.AddSingleton<RunEmailRenderer>();
         services.AddSingleton<RunAnalysisAgent>();
 
         services.AddSingleton(sp => new RunReportAssembler(
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(config.StorageContainer),
-            reportEmailOptions,
+            runAnalysisOptions,
             sp.GetRequiredService<ILogger<RunReportAssembler>>()));
 
-        // The only IReportEmailSender left: the Azure Communication Services sender was removed
-        // and nothing has replaced it, so a run report is still assembled and written to blob,
-        // it is just never mailed. Still registered rather than dropped, because the Functions
-        // host resolves a function's constructor dependencies before the function body runs -
-        // an unregistered IReportEmailSender would fail the invocation instead of letting the
-        // body no-op with the informational log it is written to emit.
-        services.AddSingleton<IReportEmailSender>(sp =>
-            new NoOpReportEmailSender(sp.GetRequiredService<ILogger<NoOpReportEmailSender>>()));
-
-        // No registration for SendReportEmailActivity itself here, deliberately - a
-        // services.AddSingleton<SendReportEmailActivity>(...) was tried first and had no
+        // No registration for SaveRunAnalysisActivity itself here, deliberately - a
+        // services.AddSingleton<SaveRunAnalysisActivity>(...) was tried first and had no
         // effect in production (2026-08-07): the isolated-worker Functions host activates
         // [Function] classes via ActivatorUtilities.CreateInstance(scopedProvider, type), which
         // resolves each CONSTRUCTOR PARAMETER from the container directly and never consults a
@@ -154,7 +145,7 @@ var host = new HostBuilder()
         // constructor now takes BlobServiceClient (registered above, in
         // AddAgenticRagAppInfrastructure) and derives the "pipeline-reports" container itself,
         // instead of asking for an unkeyed BlobContainerClient that nothing here ever supplies.
-        // See SendReportEmailActivity's constructor comment for the full explanation.
+        // See SaveRunAnalysisActivity's constructor comment for the full explanation.
     })
     .Build();
 

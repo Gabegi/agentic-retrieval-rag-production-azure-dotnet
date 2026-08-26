@@ -25,4 +25,20 @@ public sealed record PdfExtractionOutput(IReadOnlyList<PdfExtractionDocument> Do
     // Empty rather than null when nothing hashed, since "no documents" and "no hashes" are the
     // same fact here - unlike the billed-usage fields above.
     public IReadOnlyList<DocumentContentHash> ContentHashes { get; init; } = [];
+
+    // Per-document extraction wall clock, in blob-name order. Report-only, same lifecycle and
+    // single consumer as ContentHashes above - see DocumentExtractDuration for why it exists.
+    public IReadOnlyList<DocumentExtractDuration> Durations { get; init; } = [];
+
+    // Per-document billed usage, in blob-name order. Report-only, same lifecycle as the two
+    // lists above - see DocumentUsage. Documents whose analysis reported no usage are absent,
+    // not present-with-nulls.
+    public IReadOnlyList<DocumentUsage> Usages { get; init; } = [];
+
+    // The service's per-model token map summed across every document that reported one, keys
+    // verbatim as billed (e.g. "gpt-4.1-mini-input") - see CuUsage.TokensByModel for why the
+    // keys are not split. This is the number that maps to the AI-deployment bill; the two
+    // scalar Billed* fields above are the CU-meter half. Empty when no document reported a map.
+    public IReadOnlyDictionary<string, long> BilledTokensByModel { get; init; } =
+        new Dictionary<string, long>();
 }

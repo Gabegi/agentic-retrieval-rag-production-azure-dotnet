@@ -85,16 +85,14 @@ public class RestoreServiceTests
             TokenCount:         0,
             TableCount:         0,
             FigureCaptions:     [],
+            Hyperlinks:         [],
+            Annotations:        [],
             CreatedAt:          null,
             ModDate:            null,
             PageCount:          null,
             ValidFrom:          null,
             ValidTo:            null,
-            Version:            null,
-            ZenyaDocumentId:    null,
-            ZenyaVersion:       null,
-            ZenyaStatus:        null,
-            ZenyaUrl:           null);
+            Version:            null);
 
     private static RestoreService BuildService(
         Mock<ISnapshotService> snapshotService, Mock<IVectorCache> vectorCache, Mock<IUploadService> uploadService) =>

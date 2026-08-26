@@ -26,7 +26,7 @@ public class UploadServiceTests
     {
         var mock = new Mock<IIndexDocumentService>();
         mock.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<SearchUploadChunk>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((succeeded, failed));
+            .ReturnsAsync((succeeded, failed, 1));
         mock.Setup(m => m.GetChunkIdsForDocumentsAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingChunkIds ?? []);
         mock.Setup(m => m.DeleteChunksByIdAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))

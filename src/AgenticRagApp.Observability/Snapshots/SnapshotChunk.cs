@@ -71,6 +71,12 @@ public record SnapshotChunk(
     int TableCount,
     IReadOnlyList<string> FigureCaptions,
 
+    // CU-typed additions (2026-08-26): index fields derived from the excluded structural
+    // payload, so - like the two above - they must travel or restore as empty. Nullable so
+    // snapshots written before the fields existed still deserialize.
+    IReadOnlyList<string>? Hyperlinks,
+    IReadOnlyList<string>? Annotations,
+
     DateTimeOffset? CreatedAt,
     DateTimeOffset? ModDate,
     int? PageCount,
@@ -79,12 +85,7 @@ public record SnapshotChunk(
     // re-derive them once the title is all that is left.
     DateTimeOffset? ValidFrom,
     DateTimeOffset? ValidTo,
-    string? Version,
-
-    string? ZenyaDocumentId,
-    string? ZenyaVersion,
-    string? ZenyaStatus,
-    string? ZenyaUrl)
+    string? Version)
 {
     public static SnapshotChunk From<T>(T doc) where T : ISnapshotSource => new(
         Id:                 doc.Id,
@@ -116,14 +117,12 @@ public record SnapshotChunk(
         TokenCount:         doc.TokenCount,
         TableCount:         doc.TableCount,
         FigureCaptions:     doc.FigureCaptions,
+        Hyperlinks:         doc.Hyperlinks,
+        Annotations:        doc.Annotations,
         CreatedAt:          doc.CreatedAt,
         ModDate:            doc.ModDate,
         PageCount:          doc.PageCount,
         ValidFrom:          doc.ValidFrom,
         ValidTo:            doc.ValidTo,
-        Version:            doc.Version,
-        ZenyaDocumentId:    doc.ZenyaDocumentId,
-        ZenyaVersion:       doc.ZenyaVersion,
-        ZenyaStatus:        doc.ZenyaStatus,
-        ZenyaUrl:           doc.ZenyaUrl);
+        Version:            doc.Version);
 }

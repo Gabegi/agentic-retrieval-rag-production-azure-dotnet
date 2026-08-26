@@ -18,13 +18,17 @@ public interface IIndexDiffService
 
 // One run's diff decision.
 //
-// EntriesToProcess carries the full PdfBlobInfo (LastModified/ContentLength/Zenya), not just
+// EntriesToProcess carries the full PdfBlobInfo (LastModified/ContentLength), not just
 // the ids, so the orchestrator never lists the container a second time - see
 // ExtractionService's extraction loop.
 //
 // SourceCount/IndexedCount are the raw sizes of the two sides, carried purely so
 // ExtractionService can run its high-new-doc-fraction tripwire without re-reading either
 // listing.
+//
+// The Inactive count is gone with the Zenya metadata (2026-08-26): "inactive" was a
+// zenya_status value on blob metadata that nothing ever set, so the count was structurally
+// zero on every run.
 public sealed record IndexDiff(
     IReadOnlyDictionary<string, PdfBlobInfo> EntriesToProcess,
     IReadOnlyList<string>                    RemovedSourceIds,
@@ -32,6 +36,5 @@ public sealed record IndexDiff(
     int                                      NewCount,
     int                                      Updated,
     int                                      Skipped,
-    int                                      Inactive,
     int                                      SourceCount,
     int                                      IndexedCount);

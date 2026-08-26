@@ -22,7 +22,7 @@ public class ExtractionServiceTests
         BlobName:  blobName,
         Content:   "content",
         PageSpans: [new PageSpan(1, 0, "content".Length, null, false)],
-        Structure: new PdfDocumentStructure([], [], [], [], [], [], [], []),
+        Structure: new PdfDocumentStructure([], [], [], [], [], [], [], [], [], []),
         Title:     "",
         Profile:   null,
         Language:  null,
@@ -44,17 +44,6 @@ public class ExtractionServiceTests
         var empty = (IReadOnlyDictionary<string, string>)new Dictionary<string, string>();
         store.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(blobs.Select(b => (b.Name, (DateTimeOffset?)b.LastModified, (long?)null, empty)).ToList());
-        return store;
-    }
-
-    // Variant that lets a test attach blob metadata (e.g. zenya_status) per blob - used for
-    // the Zenya-inactive exclusion tests.
-    private static Mock<IBlobStore> MockBlobStoreWithMetadata(
-        params (string Name, DateTimeOffset LastModified, IReadOnlyDictionary<string, string> Metadata)[] blobs)
-    {
-        var store = new Mock<IBlobStore>();
-        store.Setup(s => s.ListBlobsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(blobs.Select(b => (b.Name, (DateTimeOffset?)b.LastModified, (long?)null, b.Metadata)).ToList());
         return store;
     }
 
@@ -330,55 +319,6 @@ public class ExtractionServiceTests
     }
 
     [TestMethod]
-    public async Task ZenyaInactiveNewDocument_IsNeverProcessed()
-    {
-        // A new blob whose zenya_status metadata is already "ingetrokken" (withdrawn) must
-        // never be processed - Zenya said it's invalid before it was ever indexed.
-        var metadata  = new Dictionary<string, string> { ["zenya_status"] = "ingetrokken" };
-        var blobStore = MockBlobStoreWithMetadata(("doc1.pdf", DateTimeOffset.Parse("2024-01-01"), metadata));
-        var indexService = MockIndexService([]);
-        var service   = BuildService(blobStore, OkFile, indexService, MockReportWriter(isEnabled: false));
-
-        var (docs, stats) = await service.ExtractAsync(forceReindex: false);
-
-        Assert.AreEqual(0, docs.Count);
-        Assert.AreEqual(0, stats.DocsNew);
-        Assert.AreEqual(0, stats.DocsDeleted);
-    }
-
-    [TestMethod]
-    public async Task ZenyaInactiveIndexedDocument_IsTornDownLikeRemoved()
-    {
-        // Currently indexed, still present as a blob, but Zenya now marks it withdrawn -
-        // must be deleted from the index even though the blob itself is still there.
-        var metadata  = new Dictionary<string, string> { ["zenya_status"] = "vervangen" };
-        var blobStore = MockBlobStoreWithMetadata(("doc1.pdf", DateTimeOffset.Parse("2024-06-01"), metadata));
-        var indexService = MockIndexService(new() { ["doc1.pdf"] = DateTimeOffset.Parse("2024-01-01") });
-        var service   = BuildService(blobStore, OkFile, indexService, MockReportWriter(isEnabled: false));
-
-        var (docs, stats) = await service.ExtractAsync(forceReindex: false);
-
-        Assert.AreEqual(0, docs.Count);
-        Assert.AreEqual(1, stats.DocsDeleted);
-        CollectionAssert.Contains(stats.StaleDocumentIds.ToList(), "doc1.pdf");
-    }
-
-    [TestMethod]
-    public async Task NoZenyaMetadataSet_IsTreatedAsActive()
-    {
-        // Fail-open: a blob with no zenya_status at all (today's default, since uploads are
-        // manual) must still be indexed normally, not excluded.
-        var blobStore = MockBlobStore(("doc1.pdf", DateTimeOffset.Parse("2024-01-01")));
-        var indexService = MockIndexService([]);
-        var service   = BuildService(blobStore, OkFile, indexService, MockReportWriter(isEnabled: false));
-
-        var (docs, stats) = await service.ExtractAsync(forceReindex: false);
-
-        Assert.AreEqual(1, docs.Count);
-        Assert.AreEqual(1, stats.DocsNew);
-    }
-
-    [TestMethod]
     public async Task Stats_ReportWhatTheRunActuallyProduced()
     {
         // There is no PdfExtractionOutput to inject any more - the loop is inside
@@ -403,15 +343,15 @@ public class ExtractionServiceTests
         Assert.AreEqual(0, stats.ValidationWarnings);
         Assert.AreEqual(1, stats.Issues.Count);
 
-        // Derived from the extracted document itself: no title, no headings, no zenya id.
+        // Derived from the extracted document itself: no title, no headings.
         Assert.AreEqual(1, stats.MissingTitleCount);
         Assert.AreEqual(1, stats.DocsWithoutHeadings);
-        Assert.AreEqual(1, stats.TraceabilityGapCount);
-        Assert.IsTrue(stats.RedFlags.Any(f => f.Contains("zenya_document_id")));
 
         // Null = "this source has no such concept", and must stay distinguishable from zero.
         Assert.IsNull(stats.StaleDocCount);
         Assert.IsNull(stats.MissingDepartmentCount);
+        Assert.IsNull(stats.TraceabilityGapCount);
+        Assert.IsNull(stats.MissingVersionCount);
     }
 
     [TestMethod]

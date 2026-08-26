@@ -1,0 +1,96 @@
+using Azure.AI.ContentUnderstanding;
+using AgenticRagApp.Indexing.CU.Models;
+
+namespace AgenticRagApp.Indexing.CU.Services;
+
+// The typed-response structure mapper: one call in, the extraction stage's structure out. CU
+// classifies, the helpers map - no regex over the markdown, no "#"-counting. Replaces
+// MarkdownStructureMapper (2026-08-26); the plan and its decisions live in
+// docs/2608/260826/cuhelper-typed-structure-plan.md.
+//
+// The facade owns two things and nothing else:
+// - the ORDER of the helpers (page spans first - every other helper attributes pages off them),
+// - the JOIN of chart/mermaid payloads onto their figures (ownership rule: CuFigureHelper maps
+//   every figure's base fields, CuChartHelper/CuDiagramHelper only the subclass payload).
+//
+// The markdown is returned VERBATIM - no stripping, no rewriting (user decision 2026-08-26,
+// "no heuristics anywhere": a PageFurnitureStripper was built here and deleted the same day).
+// Every offset addresses the exact string the service returned, which is the string chunking
+// cuts - one coordinate system, no transformation between the service and the index.
+//
+// Map-what's-there-and-warn throughout (decision 2026-08-26): a response missing a typed
+// collection degrades that one output and says so in Warnings - it never fails the file and
+// never falls back to markdown parsing.
+internal static class CUHelper
+{
+    internal sealed record MappedDocument(
+        string                   Markdown,
+        IReadOnlyList<PageSpan>  PageSpans,
+        PdfDocumentStructure     Structure,
+        string?                  Title,
+        IReadOnlyList<string>    Warnings);
+
+    // stringEncoding is AnalysisResult.StringEncoding - the service's echo of what span
+    // encoding it actually applied. The SDK's typed Analyze overload hardcodes utf16 on every
+    // analyze call (verified against SDK 1.1.0); anything else coming back means offsets may
+    // drift on non-BMP characters, which is worth a warning on every document rather than a
+    // silent misalignment.
+    internal static MappedDocument Map(DocumentContent document, string? stringEncoding)
+    {
+        var warnings = new List<string>();
+        var markdown = document.Markdown ?? "";
+
+        if (!string.Equals(stringEncoding, "utf16", StringComparison.OrdinalIgnoreCase))
+            warnings.Add(
+                $"CU span encoding is '{stringEncoding ?? "(null)"}', not utf16 - typed offsets may drift " +
+                "on non-BMP characters - the SDK's typed Analyze overload should have sent utf16.");
+
+        if (markdown.Length == 0)
+        {
+            warnings.Add("CU returned empty markdown for this document.");
+            return new MappedDocument("", [], PdfDocumentStructure.Empty, null, warnings);
+        }
+
+        var unit = document.Unit?.ToString();
+
+        // 1. Page spans first: every other helper's PageNumber attribution reads them.
+        var pageSpans = CuPageHelper.BuildPageSpans(document, markdown, unit, warnings);
+
+        // 2. The outline (title, headings, depth, sections) and the furniture paragraphs.
+        var (headings, title, sections) = CuOutlineHelper.Build(document, markdown, pageSpans, warnings);
+        var boilerplate = CuPageHelper.BuildBoilerplate(document, pageSpans);
+
+        // 3. The rest of the typed structure.
+        var figures = CuFigureHelper.Build(document, pageSpans);
+
+        // Chart/mermaid payloads join their figures on Id (decision: FigureInfo.Payload, no
+        // separate ChartInfo/DiagramInfo types).
+        var chartPayloads   = CuChartHelper.PayloadsOf(document);
+        var mermaidPayloads = CuDiagramHelper.PayloadsOf(document);
+        if (chartPayloads.Count > 0 || mermaidPayloads.Count > 0)
+            figures = [.. figures.Select(f =>
+                f.Id is not null &&
+                (chartPayloads.TryGetValue(f.Id, out var payload) || mermaidPayloads.TryGetValue(f.Id, out payload))
+                    ? f with { Payload = payload }
+                    : f)];
+
+        var structure = new PdfDocumentStructure(
+            Headings:       headings,
+            Boilerplate:    boilerplate,
+            Tables:         CuTableHelper.Build(document, pageSpans),
+            PageDimensions: CuPageHelper.BuildPageDimensions(document, unit),
+            SelectionMarks: [],   // no typed surface exists - dropped by decision 2026-08-26
+            Figures:        figures,
+            Lines:          CuPageHelper.BuildLines(document),
+            Sections:       sections,
+            Annotations:    CuAnnotationHelper.Build(document, pageSpans),
+            Hyperlinks:     CuHyperlinkHelper.Build(document, pageSpans));
+
+        // No step 4. A furniture-stripping pass sat here for a few hours on 2026-08-26 and was
+        // deleted the same day (user decision, "no heuristics anywhere") - see the class
+        // comment. The 335-tiny/77-duplicate chunk baseline that motivated it was measured
+        // before this typed-mapping train anyway, so its removal costs nothing that was ever
+        // measured on this pipeline.
+        return new MappedDocument(markdown, pageSpans, structure, title, warnings);
+    }
+}

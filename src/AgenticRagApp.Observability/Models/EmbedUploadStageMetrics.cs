@@ -39,4 +39,10 @@ public record EmbedUploadStageMetrics(
     // make the delta available on every run, at any magnitude.
     long? PreviousIndexDocumentCount,
     long? PreviousIndexStorageSizeBytes
-);
+)
+{
+    // Billed embedding input tokens this run, service-reported (see EmbeddingRunResult
+    // .TotalInputTokens - this is that value riding the report). Null = blank, not zero.
+    // Identity-resolution embeddings (chunking stage) are metered but not in this field.
+    public long? TotalEmbeddingTokens { get; init; }
+}

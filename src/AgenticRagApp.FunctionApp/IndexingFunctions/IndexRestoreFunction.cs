@@ -7,6 +7,7 @@ using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Indexing.CU.Services;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Observability;
+using AgenticRagApp.Functions.RunAnalysis;
 using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Functions;
@@ -84,6 +85,23 @@ public class IndexRestoreFunction
         await context.CallActivityAsync("SaveRestoreReportActivity",
             BuildRestoreReport(context, startedAt, result, success, error));
 
+        // Same contract as PdfIndexingFunction's call: reads the report just saved, writes the
+        // run-analysis blob next to it, never fails the run - see SaveRunAnalysisActivity and
+        // the catch rationale at PdfIndexingFunction's call site.
+        try
+        {
+            await context.CallActivityAsync("SaveRunAnalysisActivity",
+                new SaveRunAnalysisRequest(RunReportKind.Restore, context.InstanceId, startedAt),
+                TaskOptions.FromRetryPolicy(new RetryPolicy(
+                    maxNumberOfAttempts: 3, firstRetryInterval: TimeSpan.FromSeconds(30))));
+        }
+        catch (TaskFailedException ex)
+        {
+            context.CreateReplaySafeLogger<IndexRestoreFunction>().LogWarning(ex,
+                "SaveRunAnalysisActivity failed after retries for {InstanceId} — run analysis blob not written.",
+                context.InstanceId);
+        }
+
         if (!success)
             throw new InvalidOperationException(error ?? "Index restore failed");
     }
@@ -127,10 +145,9 @@ public class IndexRestoreFunction
         if (!_reportWriter.IsEnabled) return;
 
         // Under runs/ for the same reason as the index run report (see
-        // PdfIndexingFunction.SaveIndexReportActivity), so one Event Grid subject filter
-        // covers both. The restore/ segment keeps the two distinguishable - the email handler
-        // branches on it to pick the renderer, since a restore has no extraction/chunking/
-        // embedding stages to report.
+        // PdfIndexingFunction.SaveIndexReportActivity). The restore/ segment keeps the two
+        // distinguishable - SaveRunAnalysisActivity branches on it, since a restore has no
+        // extraction/chunking/embedding stages to analyse.
         await _reportWriter.WriteReportAsync(
             RunReportPath.Build(RunReportKind.Restore, report.StartedAt, report.InstanceId),
             report, context.CancellationToken);

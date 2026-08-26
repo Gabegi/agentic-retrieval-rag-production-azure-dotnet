@@ -23,11 +23,22 @@ public sealed record PdfIndexRunReport
     public ChunkingStageMetrics?    Chunking   { get; init; }
     public EmbedUploadStageMetrics? Embedding  { get; init; }
 
-    // Quality signal: documents with no zenya_document_id blob metadata set. Non-zero means
-    // every citation built from them will show Citation.TraceabilityGap - this is the one
-    // metric that tells you, without waiting for a query, how much of the corpus is
-    // currently untraceable back to Zenya. Expected to be the full corpus count until
-    // whoever uploads PDFs starts setting this metadata.
+    // Wall-clock per stage (keys: extract | chunk | embed_upload), measured replay-safe in the
+    // orchestrator via CurrentUtcDateTime deltas (observability plan 2.3, 2026-08-26). A stage
+    // that never ran has no key. Before this, the only stage timing anywhere was embedding's
+    // own TotalEmbeddingDurationMs - extraction's had to be reconstructed from host-log dumps
+    // twice on 2026-08-26 alone.
+    public IReadOnlyDictionary<string, long>? StageDurationsMs { get; init; }
+
+    // A second index-statistics sample, taken at report time by SaveIndexReportActivity -
+    // seconds after Embedding's own post-upload snapshot, which Azure Search's stats lag
+    // regularly zeroes (plan 4.1). Verification only: the drift baseline stays owned by
+    // IndexStatsMonitor, this is get-and-verify. Null when the stats read failed or reporting
+    // is disabled; both samples zero is what the run-analysis snapshot_unverified flag keys on.
+    public IndexStatsReadback? StatsReadback { get; init; }
+
+    // Null since the Zenya metadata removal (2026-08-26): the mechanism this counted never
+    // existed on any blob, so PDF now reports "no equivalent concept".
     //
     // Read off the extraction stage rather than stored again, so it can't drift from it.
     public int? TraceabilityGapCount => Extraction?.TraceabilityGapCount;
@@ -41,3 +52,6 @@ public sealed record PdfIndexRunReport
     public int    ChunksProduced => Chunking?.ChunksProduced   ?? 0;
     public int    DocsUploaded   => Embedding?.DocsUploaded    ?? 0;
 }
+
+// See PdfIndexRunReport.StatsReadback.
+public sealed record IndexStatsReadback(long DocumentCount, long StorageSizeBytes, DateTimeOffset ReadAtUtc);

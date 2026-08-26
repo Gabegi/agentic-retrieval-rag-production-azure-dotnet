@@ -27,7 +27,7 @@ public class ChunkingServiceTests
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
             .Returns<IReadOnlyList<string>, CancellationToken>((texts, _) =>
-                Task.FromResult((texts.Select(_ => new float[] { 1f, 0f, 0f }).ToArray(), 0)));
+                Task.FromResult((texts.Select(_ => new float[] { 1f, 0f, 0f }).ToArray(), 0, (long?)null)));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -93,10 +93,6 @@ public class ChunkingServiceTests
         DateTimeOffset?         modDate          = null,
         int?                    pageCount        = null,
         DateTimeOffset?         lastModifiedDate = null,
-        string?                 zenyaDocumentId  = null,
-        string?                 zenyaVersion     = null,
-        string?                 zenyaStatus      = null,
-        string?                 zenyaUrl         = null,
         IReadOnlyList<SectionInfo>? sections     = null,
         IReadOnlyList<Heading>? headings         = null,
         IReadOnlyList<Heading>? boilerplate      = null,
@@ -114,10 +110,6 @@ public class ChunkingServiceTests
             ModDate:          modDate,
             PageCount:        pageCount,
             LastModifiedDate: lastModifiedDate,
-            ZenyaDocumentId:  zenyaDocumentId,
-            ZenyaVersion:     zenyaVersion,
-            ZenyaStatus:      zenyaStatus,
-            ZenyaUrl:         zenyaUrl,
             PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         sections ?? [],
             Headings:         headings ?? [],
@@ -126,6 +118,8 @@ public class ChunkingServiceTests
             SelectionMarks:   [],
             Figures:          figures ?? [],
             Lines:            [],
+            Annotations:      [],
+            Hyperlinks:       [],
             Profile:          profile,
             Language:         language);
 
@@ -392,7 +386,6 @@ public class ChunkingServiceTests
 
         var doc = Doc("doc1", "body", title: "T", author: "mherbst",
             createdAt: created, modDate: mod, pageCount: 12, lastModifiedDate: last,
-            zenyaDocumentId: "Z1", zenyaVersion: "3", zenyaStatus: "actief", zenyaUrl: "https://z",
             language: "nl",
             tables: [new TableInfo(2, 3, [], null, 1, null, [], [])]);
 
@@ -406,10 +399,6 @@ public class ChunkingServiceTests
         Assert.AreEqual(mod,     chunk.ModDate);
         Assert.AreEqual(last,    chunk.LastModifiedDate);
         Assert.AreEqual(12,      chunk.PageCount);
-        Assert.AreEqual("Z1",    chunk.ZenyaDocumentId);
-        Assert.AreEqual("3",     chunk.ZenyaVersion);
-        Assert.AreEqual("actief", chunk.ZenyaStatus);
-        Assert.AreEqual("https://z", chunk.ZenyaUrl);
         Assert.AreEqual("nl",    chunk.Language);
         Assert.AreEqual(1,       chunk.TableCount);
 
@@ -542,7 +531,7 @@ public class ChunkingServiceTests
         var client = new Mock<IEmbeddingClient>();
         client
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new float[][] { [1f, 0f] }, 0));
+            .ReturnsAsync((new float[][] { [1f, 0f] }, 0, null));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);

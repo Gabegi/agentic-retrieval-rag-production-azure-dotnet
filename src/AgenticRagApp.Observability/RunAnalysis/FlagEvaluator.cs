@@ -2,7 +2,7 @@ using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Observability.Reports;
 
-// Turns a run report into the flag list rendered in §3 of the email.
+// Turns a run report into the flag list carried in the run-analysis blob.
 //
 // Two rules govern everything here:
 //
@@ -15,7 +15,7 @@ namespace AgenticRagApp.Observability.Reports;
 //
 // Thresholds are either SOURCED (from this codebase or published guidance) or AWAITING
 // CALIBRATION. The latter are suppressed while CalibrationMode is on rather than shipped as
-// guesses - see ReportEmailOptions.CalibrationMode.
+// guesses - see RunAnalysisOptions.CalibrationMode.
 public static class FlagEvaluator
 {
     // Sourced: IndexStatsMonitor.DriftThresholdPct. Critical at double the warn threshold.
@@ -31,7 +31,18 @@ public static class FlagEvaluator
     private const double ValidationErrorCriticalRate = 0.05;
     private const double MissingTitleCriticalRate    = 0.10;
 
-    // Awaiting calibration - no defensible source. See ReportEmailOptions.CalibrationMode.
+    // Sourced: docs/2608/260825/first-run-findings.md watch item - a run past ~70 min risks
+    // Durable's 60-min activityFunctionTimeout redelivering (and re-billing) the whole
+    // ExtractActivity; 45 min is the wall-clock guard's (50 min) neighborhood, where a healthy
+    // run on this corpus (11m47s-14m30s measured 2026-08-26) should never be.
+    private static readonly TimeSpan ExtractDurationWarn     = TimeSpan.FromMinutes(45);
+    private static readonly TimeSpan ExtractDurationCritical = TimeSpan.FromMinutes(70);
+
+    // Sourced: the 2026-08-26 corpus bills 851 standard pages on a full forceReindex. More
+    // than double that in one run means the corpus roughly doubled - or something re-billed.
+    private const long CuPagesSpikeWarn = 2000;
+
+    // Awaiting calibration - no defensible source. See RunAnalysisOptions.CalibrationMode.
     private const double CoherenceWarnRatio      = 0.70;
     private const double CoherenceCriticalRatio  = 0.50;
     private const double UndersizedWarnRate      = 0.10;
@@ -51,9 +62,10 @@ public static class FlagEvaluator
 
         EvaluateExtraction(report.Extraction, flags, calibrationMode);
         EvaluateChunking(report.Chunking, flags, calibrationMode);
-        EvaluateEmbedding(report.Embedding, report.Chunking, flags);
+        EvaluateEmbedding(report.Embedding, report.Chunking, report.StatsReadback, flags);
         EvaluateValidation(validation, flags);
         EvaluateCost(fileFacts, previous, flags, calibrationMode);
+        EvaluateRunHealth(report, flags);
 
         if (calibrationMode)
             flags.RemoveAll(f => f.AwaitingCalibration);
@@ -94,14 +106,25 @@ public static class FlagEvaluator
                 "Ask content owners to set a document title, or extend the filename-derived fallback."));
         }
 
-        // Expected to be the whole corpus until uploaders start setting zenya_document_id, so
-        // this is a Watch, never a Warning - flagging the documented steady state as a problem
-        // is exactly how a flag list stops being read.
-        if (x.TraceabilityGapCount > 0)
-            flags.Add(new ReportFlag(FlagSeverity.Watch, "Extraction.TraceabilityGapCount",
-                x.TraceabilityGapCount.Value.ToString(), "trending down",
-                "Documents with no zenya_document_id — passages can't be traced back to Zenya.",
-                "No action while uploaders don't set this metadata; watch for the number failing to fall once they do."));
+        // The document-traceability flag that lived here is gone with the source-metadata
+        // mechanism it read (2026-08-26): PDF now reports TraceabilityGapCount = null ("no
+        // equivalent concept"), so there is nothing to evaluate.
+
+        // Cost telemetry blank (observability plan 4.2, usage_missing). Only meaningful when
+        // documents were actually processed - a diff-only run that analyzed nothing has
+        // nothing to bill.
+        if (x.DocsToProcess > 0 && x.BilledPagesStandard is null)
+            flags.Add(new ReportFlag(FlagSeverity.Warning, "Extraction.BilledUsage",
+                "blank", "a page count",
+                "The run paid for analyses but reported no usage — cost telemetry is blank, not zero.",
+                "Check the once-per-host GetUsage warning in the logs (ContentAnalysisClient) for why both the SDK read and the raw fallback found nothing."));
+
+        // Cost spike (plan 4.2, cu_pages_spike - absorbed from the cancelled alert rules).
+        if (x.BilledPagesStandard is { } billedPages && billedPages > CuPagesSpikeWarn)
+            flags.Add(new ReportFlag(FlagSeverity.Warning, "Extraction.BilledPagesStandard",
+                billedPages.ToString("N0"), $"≤ {CuPagesSpikeWarn:N0}",
+                "This run billed more than double the full-corpus baseline (851 pages, 2026-08-26).",
+                "Confirm the corpus actually grew; otherwise look for a redelivered activity re-billing the run."));
 
         foreach (var redFlag in x.RedFlags)
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Extraction.RedFlags", redFlag, "none",
@@ -163,7 +186,7 @@ public static class FlagEvaluator
             { AwaitingCalibration = true });
     }
 
-    private static void EvaluateEmbedding(EmbedUploadStageMetrics? e, ChunkingStageMetrics? c, List<ReportFlag> flags)
+    private static void EvaluateEmbedding(EmbedUploadStageMetrics? e, ChunkingStageMetrics? c, IndexStatsReadback? readback, List<ReportFlag> flags)
     {
         if (e is null) return;
 
@@ -199,10 +222,20 @@ public static class FlagEvaluator
 
         // Drift. Uses the baseline carried on the stage record rather than re-reading
         // _last-stats-{source}.json, which by now holds this run's own numbers.
-        if (e is { PreviousIndexDocumentCount: > 0, IndexDocumentCountSnapshot: not null })
+        //
+        // Prefers the report-time readback over the post-upload snapshot, and requires a
+        // nonzero count: the snapshot regularly reads 0 because Azure Search stats lag the
+        // writes that just happened, and comparing that zero produced a Critical
+        // "-100% from 2,000" on runs 260826/c546ab8f and /a582e6c4 whose corpus had not
+        // changed. IndexStatsMonitor already declines to compare a zero for exactly this
+        // reason - this is the same guard, in the half of the pipeline that missed it.
+        // Without the preference, run a582e6c4 flagged deletion while its OWN
+        // snapshot_unverified check stood down on a readback of 3,878.
+        var observed = readback is { DocumentCount: > 0 } r ? r.DocumentCount : e.IndexDocumentCountSnapshot;
+        if (e is { PreviousIndexDocumentCount: > 0 } && observed is > 0)
         {
             var prev  = e.PreviousIndexDocumentCount.Value;
-            var now   = e.IndexDocumentCountSnapshot.Value;
+            var now   = observed.Value;
             var delta = (now - prev) / (double)prev;
 
             if (Math.Abs(delta) > DriftWarnPct)
@@ -213,6 +246,38 @@ public static class FlagEvaluator
                     "The index size moved more than the corpus should between runs.",
                     "Confirm against DocsUploaded/ChunksRemoved — a large drop with a small run is a deletion bug."));
         }
+    }
+
+    // Run-level health signals read off the report envelope rather than one stage's record
+    // (observability plan 4.2). The duration flags carry the 260825 watch item as far as a
+    // report can: a run that never completes writes no report, so a hung run stays a manual
+    // GET /api/index/status check - stated in the plan as the accepted limit of reports-only.
+    private static void EvaluateRunHealth(PdfIndexRunReport report, List<ReportFlag> flags)
+    {
+        // extract_duration_high. Durations exist only for stages that ran to completion.
+        if (report.StageDurationsMs?.TryGetValue("extract", out var extractMs) == true)
+        {
+            var extractDuration = TimeSpan.FromMilliseconds(extractMs);
+            if (extractDuration > ExtractDurationWarn)
+                flags.Add(new ReportFlag(
+                    extractDuration > ExtractDurationCritical ? FlagSeverity.Critical : FlagSeverity.Warning,
+                    "Run.ExtractDuration",
+                    $"{extractDuration.TotalMinutes:F0} min", $"≤ {ExtractDurationWarn.TotalMinutes:F0} min",
+                    "Extraction ran into the wall-clock/activity-timeout danger zone — past ~70 min Durable redelivers and re-bills the whole activity.",
+                    "Check the file-facts DurationMs column for which documents took the time; a run near the limit should be terminated, not left to redeliver (260825 watch item)."));
+        }
+
+        // snapshot_unverified: the run uploaded, and neither stats sample confirms anything
+        // landed. Both reads lagging is common minutes-scale behavior for Azure Search stats;
+        // the flag says "unverified", not "failed".
+        var e = report.Embedding;
+        if (e is { DocsUploaded: > 0 }
+            && e.IndexDocumentCountSnapshot is null or 0
+            && report.StatsReadback is null or { DocumentCount: 0 })
+            flags.Add(new ReportFlag(FlagSeverity.Watch, "Run.SnapshotUnverified",
+                "post-upload snapshot and report-time readback both empty", "a document count",
+                "Upload success is self-reported only — nothing independently confirmed the documents landed.",
+                "Check the next run's PreviousIndexDocumentCount, or query the index's $count directly."));
     }
 
     private static void EvaluateValidation(ValidationReportFacts? v, List<ReportFlag> flags)

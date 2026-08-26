@@ -6,12 +6,12 @@ using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Observability.Reports;
 
-// Builds the RunEmailSummary for one run: the run report blob plus its sibling stage reports,
-// the previous run's pointer, and the corpus size. Called from SendReportEmailActivity, right
+// Builds the RunSummary for one run: the run report blob plus its sibling stage reports,
+// the previous run's pointer, and the corpus size. Called from SaveRunAnalysisActivity, right
 // after SaveIndexReportActivity/SaveRestoreReportActivity write the report it reads.
 //
-// Every sibling read is best-effort. A missing stage report degrades that section of the email;
-// it never fails the send. What is NOT best-effort is the run report blob itself - if that can't
+// Every sibling read is best-effort. A missing stage report degrades that section of the analysis;
+// it never fails the write. What is NOT best-effort is the run report blob itself - if that can't
 // be read there is nothing to report and the caller aborts.
 //
 // Reads no artifacts. Chunk diagnostics (zero-chunk document IDs, samples, duplicates) are
@@ -26,14 +26,14 @@ public sealed class RunReportAssembler
     private readonly IBlobStore          _blobStore;
     private readonly BlobContainerClient _reports;
     private readonly BlobContainerClient _documents;
-    private readonly ReportEmailOptions  _options;
+    private readonly RunAnalysisOptions  _options;
     private readonly ILogger<RunReportAssembler> _logger;
 
     public RunReportAssembler(
         IBlobStore blobStore,
         BlobContainerClient reports,
         BlobContainerClient documents,
-        ReportEmailOptions options,
+        RunAnalysisOptions options,
         ILogger<RunReportAssembler> logger)
     {
         _blobStore = blobStore;
@@ -43,7 +43,7 @@ public sealed class RunReportAssembler
         _logger    = logger;
     }
 
-    public async Task<RunEmailSummary?> AssembleAsync(RunReportRef path, string blobName, CancellationToken ct)
+    public async Task<RunSummary?> AssembleAsync(RunReportRef path, string blobName, CancellationToken ct)
     {
         var found   = new List<string>();
         var missing = new List<string>();
@@ -54,7 +54,7 @@ public sealed class RunReportAssembler
             if (restore is null) return null;
             found.Add(blobName);
 
-            return new RunEmailSummary
+            return new RunSummary
             {
                 Kind           = RunReportKind.Restore,
                 InstanceId     = path.InstanceId,
@@ -94,7 +94,7 @@ public sealed class RunReportAssembler
         var fileFactsSummary = ParseFileFacts(fileFacts.Value);
         var previous = await TryReadAsync<PreviousRunPointer>(LastRunPointerPath, ct);
 
-        return new RunEmailSummary
+        return new RunSummary
         {
             Kind        = RunReportKind.Index,
             InstanceId  = path.InstanceId,
@@ -166,7 +166,7 @@ public sealed class RunReportAssembler
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Listing '{Prefix}' failed while assembling the run email", prefix);
+                _logger.LogWarning(ex, "Listing '{Prefix}' failed while assembling the run analysis", prefix);
             }
         }
 
@@ -182,7 +182,7 @@ public sealed class RunReportAssembler
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Could not read '{Blob}' for the run email — that section will be omitted", blobName);
+            _logger.LogWarning(ex, "Could not read '{Blob}' for the run analysis — that section will be omitted", blobName);
             return null;
         }
     }
@@ -205,7 +205,7 @@ public sealed class RunReportAssembler
     // These read the reports as loose JSON rather than binding to their concrete types.
     // PdfQualityGateResult and the two anonymous-typed reports live in Indexing.CU, and the
     // diff/file-facts blobs have no declared type at all - a shape change there should degrade
-    // one section of an email, not break the build or throw at send time.
+    // one section of the analysis, not break the build or throw at write time.
 
     private static ValidationReportFacts? ParseValidation(Dictionary<string, JsonElement>? json)
     {
@@ -232,12 +232,19 @@ public sealed class RunReportAssembler
         var histogram = new Dictionary<string, int>(StringComparer.Ordinal);
         double cost = 0;
         long   bytes = 0;
+        long   billedPages = 0, ctxTokens = 0;
         int    withoutProducer = 0;
 
         foreach (var row in rows)
         {
             cost  += GetDouble(row, "EstimatedCostUsd");
             bytes += GetLong(row, "FileSizeBytes");
+
+            // The CU billed-unit half. Present on per-file facts since the 260826 billing
+            // fields landed; the rollup was still summing only EstimatedCostUsd, so run
+            // a582e6c4 reported cost 0 against 871 pages it had demonstrably paid for.
+            billedPages += GetLong(row, "BilledPagesStandard");
+            ctxTokens   += GetLong(row, "ContextualizationTokens");
 
             var spec = GetString(row, "PdfSpecVersion") ?? "unknown";
             histogram[spec] = histogram.GetValueOrDefault(spec) + 1;
@@ -252,7 +259,7 @@ public sealed class RunReportAssembler
                 withoutProducer++;
         }
 
-        return new FileFactsSummary(rows.Count, cost, bytes, withoutProducer, histogram);
+        return new FileFactsSummary(rows.Count, cost, bytes, withoutProducer, histogram, billedPages, ctxTokens);
     }
 
     private static ExtractionDiffFacts? ParseDiff(Dictionary<string, JsonElement>? json)
@@ -282,7 +289,7 @@ public sealed class RunReportAssembler
             RunAt:         json.TryGetValue("RunAt", out var r) && r.TryGetDateTimeOffset(out var dt) ? dt : default,
             ExceptionType: GetString(json, "ExceptionType") ?? "(unknown)",
             Message:       GetString(json, "Message") ?? "",
-            // Truncated: a full stack trace crowds out everything else in an email body.
+            // Truncated: a full stack trace crowds out everything else in the analysis.
             StackTraceExcerpt: stack is null ? null : string.Join('\n', stack.Split('\n').Take(15)));
     }
 
@@ -295,7 +302,7 @@ public sealed class RunReportAssembler
     private sealed record EvalResultsPointer(string Path, DateTimeOffset RanAt);
 
     // Deliberately tolerant of absence: if no eval has ever run, or the container is not
-    // reachable, the section is simply omitted. A run email must never depend on whether
+    // reachable, the section is simply omitted. A run analysis must never depend on whether
     // someone happened to run the eval tests.
     private async Task<EvalBaseline?> TryReadEvalBaselineAsync(CancellationToken ct)
     {

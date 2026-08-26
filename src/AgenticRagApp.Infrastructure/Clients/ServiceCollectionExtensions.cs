@@ -138,11 +138,16 @@ public static class ServiceCollectionExtensions
         // Understanding became the only backend - CU handles PDFs plus images, Office documents
         // and video, and it returns figure descriptions DI had no equivalent for.
         //
-        // Two registrations, no options object: the api-version pin and the utf16 pipeline policy
-        // that used to be attached here were deleted along with the analyzer provisioning, so this
-        // takes the SDK's default api-version and the service's default (codePoint) span encoding.
-        // Nothing downstream reads span offsets any more - ExtractionService keeps only the
-        // markdown - so there is nothing left for a code-point offset to drift against.
+        // No api-version pin (the SDK default), and no stringEncoding pipeline policy either:
+        // the typed Analyze/AnalyzeAsync convenience overloads hardcode stringEncoding=utf16
+        // themselves (verified by decompiling SDK 1.1.0: CreateAnalyzeRequest appends it while
+        // building the request, before any pipeline policy runs), so every ContentSpan.Offset
+        // is a C# string index into the markdown with no help needed from us. The
+        // Utf16StringEncodingPolicy that used to sit here was a no-op on this route - its own
+        // already-present guard fired on every call - and was removed 2026-08-26; see
+        // docs/2608/260826/utf16-policy-removal.md. The guarantee that matters is checked
+        // downstream: CUHelper warns whenever AnalysisResult.StringEncoding echoes anything
+        // but utf16.
         if (!string.IsNullOrWhiteSpace(config.ContentUnderstandingEndpoint))
         {
             services.AddSingleton(_ =>

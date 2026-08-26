@@ -33,7 +33,11 @@ public sealed record ChunkStructure(
     IReadOnlyList<TableInfo>         Tables,
     PageDimensions?                  Dimensions,
     IReadOnlyList<SelectionMarkInfo> SelectionMarks,
-    IReadOnlyList<FigureInfo>        Figures)
+    IReadOnlyList<FigureInfo>        Figures,
+    // CU-typed additions (2026-08-26), page-filtered like everything above. Trailing defaults
+    // so chunks blobs written before the fields existed still deserialize.
+    IReadOnlyList<AnnotationInfo>?   Annotations = null,
+    IReadOnlyList<HyperlinkInfo>?    Hyperlinks  = null)
 {
-    public static readonly ChunkStructure Empty = new([], [], [], null, [], []);
+    public static readonly ChunkStructure Empty = new([], [], [], null, [], [], [], []);
 }

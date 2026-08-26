@@ -26,13 +26,14 @@ resource "azurerm_windows_function_app" "indexer" {
   storage_account_name          = azurerm_storage_account.func.name
   storage_uses_managed_identity = true
   virtual_network_subnet_id     = azurerm_subnet.workload["func"].id
-  # Deny-by-default public access (no ip_restriction/scm_ip_restriction rules
-  # managed here), so the private endpoint stays the only stable path in.
-  # The app-deploy pipeline runs on a Microsoft-hosted agent with no VNet
-  # access, so it opens a scoped Allow rule on the SCM site for its own
-  # runner IP via `az functionapp config access-restriction add`
-  # immediately before the zip deploy, then removes it again immediately
-  # after - see 4-deploy-application.yml.
+  # Deny-by-default public access; in development the dev_allowed_ips list is
+  # allowed through on the main site and (since 2026-08-25) on the SCM site
+  # too, so Kudu / the log stream work from a dev machine. The app-deploy
+  # pipeline runs on a Microsoft-hosted agent with no VNet access, so it opens
+  # a scoped Allow rule on the SCM site for its own runner IP via
+  # `az functionapp config access-restriction add` immediately before the zip
+  # deploy, then removes it again immediately after - see
+  # 4-deploy-application.yml.
   public_network_access_enabled = true
   # storage_uses_managed_identity only covers AzureWebJobsStorage/Durable
   # Functions (blob/queue/table). The EP1 plan's content share still needs a
@@ -66,6 +67,25 @@ resource "azurerm_windows_function_app" "indexer" {
       content {
         name       = "dev-access-${replace(ip_restriction.value, ".", "-")}"
         ip_address = "${ip_restriction.value}/32"
+        action     = "Allow"
+        priority   = 100
+      }
+    }
+
+    # Same dev allowlist, mirrored onto the SCM site (Kudu console, log stream) - without it
+    # the Deny default above blocks Kudu from everywhere, which was deliberate until the first
+    # live CU runs made log access from a dev machine worth having. Same variable as the main
+    # site on purpose: one allowlist to maintain.
+    #
+    # With this block, terraform owns the SCM rule list - which also cleans up any temp rule
+    # the app-deploy pipeline leaves behind if it dies between its add and its remove. The one
+    # race to know about: an infra apply DURING a running app deploy strips the deploy's temp
+    # runner-IP rule mid-push and fails that deploy; just rerun it.
+    dynamic "scm_ip_restriction" {
+      for_each = var.environment == "development" ? var.dev_allowed_ips : []
+      content {
+        name       = "dev-access-${replace(scm_ip_restriction.value, ".", "-")}"
+        ip_address = "${scm_ip_restriction.value}/32"
         action     = "Allow"
         priority   = 100
       }

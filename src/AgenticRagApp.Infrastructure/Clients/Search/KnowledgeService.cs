@@ -76,15 +76,10 @@ public class KnowledgeService : IKnowledgeService
                     new SearchIndexFieldReference("page_count"),
                     new SearchIndexFieldReference("created_at"),
                     new SearchIndexFieldReference("mod_date"),
-                    // Zenya provenance (IndexService's zenya_* fields). KnowledgeBaseReference-
-                    // Mapper reads all four, but they were missing here, so every Citation came
-                    // back with null document id/version/status/url — silently, since the mapper
-                    // TryGetValue's them. That leaves a citation with no link back to Zenya and
-                    // no way for CitationMatch to resolve an expected source by document id.
-                    new SearchIndexFieldReference("zenya_document_id"),
-                    new SearchIndexFieldReference("zenya_version"),
-                    new SearchIndexFieldReference("zenya_status"),
-                    new SearchIndexFieldReference("zenya_url"),
+                    // The zenya_* provenance fields that sat here are gone with the Zenya
+                    // metadata mechanism (2026-08-26) - they were removed from the index schema
+                    // itself (IndexService), and DocumentId (the blob name) is the traceability
+                    // that actually works.
                 }
                 // note: content_vector is excluded — not needed for LLM context
             }

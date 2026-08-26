@@ -126,7 +126,9 @@ public class QueryingFunction
                     label         = c.Title is not null && c.Page is not null
                         ? $"[{c.Title}] - p.{c.Page}"
                         : c.Title,
-                    url           = c.ZenyaUrl,
+                    // url was zenya_url, removed with the Zenya metadata mechanism
+                    // (2026-08-26) - kept as a key so API consumers keep deserializing.
+                    url           = (string?)null,
                 }),
                 telemetry = new
                 {

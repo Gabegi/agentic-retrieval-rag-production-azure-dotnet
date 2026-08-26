@@ -11,4 +11,10 @@ namespace AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 public sealed class ContentUnderstandingDefaultsState
 {
     public string Summary { get; set; } = "startup check never ran (build predates it, or the host did not start it)";
+
+    // True only when the startup check completed with a verified or freshly written mapping.
+    // The extraction stage red-flags the Summary when this is false; healthy outcomes stay in
+    // the log only (they were red-flagged on every run during bring-up, demoted 2026-08-25
+    // after the first healthy run - see first-run-findings.md).
+    public bool Ok { get; set; }
 }

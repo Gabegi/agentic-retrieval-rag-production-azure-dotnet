@@ -71,7 +71,14 @@ public class EmbeddingService : IEmbeddingService
             ChunksTruncated:  freshResults.Count(r => r.Truncated),
             EmbeddingRetries: batchResults.Sum(b => b.Retries),
             VectorDimErrors:  freshResults.Count(r => r.DimError),
-            CacheHits:        cached.Count);
+            CacheHits:        cached.Count)
+        {
+            // Null when NO batch reported usage (blank), a number when any did. A mix of
+            // reporting and non-reporting batches sums the reporting ones - the meter and this
+            // field say the same thing by construction.
+            TotalInputTokens = batchResults.Any(b => b.InputTokens is not null)
+                ? batchResults.Sum(b => b.InputTokens ?? 0) : null,
+        };
     }
 
     // Splits by vector-cache hit/miss. A cached vector whose length no longer matches the
@@ -179,9 +186,13 @@ public class EmbeddingService : IEmbeddingService
                 texts[i] = text;
             }
 
-            var (vectors, retries) = await _embeddingClient.EmbedWithRetryAsync(texts, ct);
+            var (vectors, retries, inputTokens) = await _embeddingClient.EmbedWithRetryAsync(texts, ct);
             if (retries > 0)
                 Instrumentation.EmbeddingRetries.Add(retries);
+            // Service-reported billed tokens (plan 1.6). Null = the response carried no usage;
+            // nothing is recorded and the run total stays blank rather than under-counting.
+            if (inputTokens is { } billed)
+                Instrumentation.EmbeddingTokens.Add(billed);
 
             var results = new List<EmbedChunkResult>(batch.Count);
             for (int i = 0; i < batch.Count; i++)
@@ -199,7 +210,7 @@ public class EmbeddingService : IEmbeddingService
                 results.Add(new EmbedChunkResult(doc, truncated[i], dimError));
             }
 
-            return new BatchResult(results, retries);
+            return new BatchResult(results, retries, inputTokens);
         }
         finally
         {
@@ -208,5 +219,5 @@ public class EmbeddingService : IEmbeddingService
     }
 
     private record EmbedChunkResult(ChunkObject Document, bool Truncated, bool DimError);
-    private record BatchResult(List<EmbedChunkResult> Results, int Retries);
+    private record BatchResult(List<EmbedChunkResult> Results, int Retries, long? InputTokens);
 }

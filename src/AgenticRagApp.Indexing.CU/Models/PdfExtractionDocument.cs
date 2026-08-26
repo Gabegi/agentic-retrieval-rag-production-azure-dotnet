@@ -53,15 +53,6 @@ public sealed record PdfExtractionDocument(
     int?            PageCount,
     DateTimeOffset? LastModifiedDate,
 
-    // Zenya's own identity/lifecycle facts, from custom blob metadata rather than the PDF
-    // itself. All null is the expected default until whoever uploads a PDF sets it - a real
-    // traceability gap for chunks built from this document, not a bug.
-    string? ZenyaDocumentId,
-    string? ZenyaVersion,
-    string? ZenyaStatus,
-    string? ZenyaUrl,
-
-
     // Page number -> breadcrumb text, where the outline covers that page. Kept as a map
     // rather than resolved onto pages, since a chunk can now span pages.
     IReadOnlyDictionary<int, string> PageBreadcrumbs,
@@ -82,6 +73,8 @@ public sealed record PdfExtractionDocument(
     IReadOnlyList<SelectionMarkInfo> SelectionMarks,
     IReadOnlyList<FigureInfo>        Figures,
     IReadOnlyList<LineInfo>          Lines,
+    IReadOnlyList<AnnotationInfo>    Annotations,
+    IReadOnlyList<HyperlinkInfo>     Hyperlinks,
 
     // ── Profile measurements (action-plan.md C7) ────────────────────────────
 

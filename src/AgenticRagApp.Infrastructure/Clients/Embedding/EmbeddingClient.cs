@@ -19,7 +19,7 @@ public class EmbeddingClient : IEmbeddingClient
         _logger              = logger;
     }
 
-    public async Task<(float[][] Vectors, int Retries)> EmbedWithRetryAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
+    public async Task<(float[][] Vectors, int Retries, long? InputTokens)> EmbedWithRetryAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
         var retries = 0;
 
@@ -28,7 +28,9 @@ public class EmbeddingClient : IEmbeddingClient
             try
             {
                 var result = await _embeddingGenerator.GenerateAsync(texts, cancellationToken: ct);
-                return (result.Select(e => e.Vector.ToArray()).ToArray(), retries);
+                // Service-reported billed tokens, verbatim off the response usage; null when
+                // the response carried none - see the interface comment.
+                return (result.Select(e => e.Vector.ToArray()).ToArray(), retries, result.Usage?.InputTokenCount);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested && IsRetryable(ex))
             {

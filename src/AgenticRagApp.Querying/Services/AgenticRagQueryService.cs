@@ -162,7 +162,6 @@ public class AgenticRagQueryService : IRagQueryService
             .GroupBy(c => (c.DocumentId, c.Page))
             .Select(g => new Citation(
                 g.Key.DocumentId, g.First().Title, g.First().QuickCode, g.First().RelativePath,
-                g.First().ZenyaDocumentId, g.First().ZenyaVersion, g.First().ZenyaStatus, g.First().ZenyaUrl,
                 g.Key.Page, g.First().PageCount, g.First().CreatedAt, g.First().ModDate))
             .ToList();
 

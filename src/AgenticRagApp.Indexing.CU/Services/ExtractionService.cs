@@ -71,6 +71,14 @@ public class ExtractionService : IExtractionService
     // the whole activity.
     private static readonly TimeSpan CorpusWallClockLimit = TimeSpan.FromMinutes(50);
 
+    // The first analysis's raw response body this run, for the cu-raw-response report - the
+    // capture CUHelper's typed mapping is verified against. One per run (first writer wins via
+    // Interlocked), so memory never scales with the corpus; written in ExtractAsync alongside
+    // the other reports.
+    private RawCapture? _rawCapture;
+
+    internal sealed record RawCapture(string BlobName, string Json);
+
     // The previous run's magnitude baseline.
     //
     // Counts extracted PAGES now; it counted cleaned page records before, which was the same
@@ -113,8 +121,8 @@ public class ExtractionService : IExtractionService
         var diff = await _diffService.FindDocsNotInIndexAsync(forceReindex, ct);
 
         _logger.LogInformation(
-            "Extraction diff — source '{Source}': {New} new, {Updated} updated, {Removed} removed, {Skipped} skipped, {Inactive} inactive (of {Total} available)",
-            Source, diff.NewCount, diff.Updated, diff.RemovedSourceIds.Count, diff.Skipped, diff.Inactive, diff.SourceCount);
+            "Extraction diff — source '{Source}': {New} new, {Updated} updated, {Removed} removed, {Skipped} skipped (of {Total} available)",
+            Source, diff.NewCount, diff.Updated, diff.RemovedSourceIds.Count, diff.Skipped, diff.SourceCount);
 
         var runAt = DateTimeOffset.UtcNow;
 
@@ -126,7 +134,7 @@ public class ExtractionService : IExtractionService
         try
         {
             // Only pays for extraction on what's actually new/updated - and the entries carry
-            // the LastModified/ContentLength/Zenya facts the diff already gathered, so nothing
+            // the LastModified/ContentLength facts the diff already gathered, so nothing
             // below has to list the container a second time.
             //
             // The bag's order is nondeterministic; ExtractionOutputBuilder.BuildDocuments sorts
@@ -134,12 +142,34 @@ public class ExtractionService : IExtractionService
             // stable from run to run.
             var results = new ConcurrentBag<ExtractedFile>();
 
+            // Largest file first, not dictionary (i.e. blob-listing/alphabetical) order.
+            // Analysis time scales with page count, and this corpus is skewed: in run 5f5fac04
+            // the 132-page largest document sorted 43rd of 51 alphabetically, so ~670 pages of
+            // work were dispatched before it was even submitted and it then ran ~7 minutes
+            // largely alone while the small tail drained. Longest-processing-time-first is the
+            // standard greedy fix for exactly that shape. ContentLength (bytes) stands in for
+            // page count here because it is the only size signal available before paying for
+            // the analysis - it is a scheduling hint only, and a mis-ranked file costs nothing
+            // but position. Null (size unknown) sorts last. Output order is unaffected: see the
+            // BuildDocuments sort note above.
+            var entriesLargestFirst = diff.EntriesToProcess
+                .OrderByDescending(pair => pair.Value.ContentLength ?? -1)
+                .ToList();
+
             await Parallel.ForEachAsync(
-                diff.EntriesToProcess,
+                entriesLargestFirst,
                 new ParallelOptions { MaxDegreeOfParallelism = MaxExtractionParallelism, CancellationToken = ct },
                 async (pair, cancellationToken) =>
                 {
                     var name = pair.Key;
+
+                    // Wall-clock per file, measured here because only the loop sees a file end
+                    // to end (download + analyze + map). Run 5f5fac04's 707-second extraction
+                    // was reconstructed from Durable's activity duration and page counts alone -
+                    // the run left no per-document timing anywhere. This is that instrumentation:
+                    // it rides ExtractedFile the way ContentHash does (measurement only) and
+                    // lands in the per-document facts report.
+                    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
                     // A failed extraction for one blob must not abort the run - and under
                     // Parallel.ForEachAsync an uncaught exception would also cancel the other
@@ -166,7 +196,22 @@ public class ExtractionService : IExtractionService
                             return;
                         }
 
-                        results.Add(await ExtractFileAsync(name, cancellationToken));
+                        // One span per document (observability plan 2.4) - the per-file node
+                        // under the stage span ExtractActivity starts, so the App Insights
+                        // transaction view shows which documents a slow run spent its time on.
+                        // Started after the wall-clock guard on purpose: a file that was never
+                        // submitted is not a unit of work to trace.
+                        using var span = Instrumentation.ActivitySource.StartActivity("cu.extract_document");
+                        span?.SetTag("cu.blob", name);
+
+                        var extracted = (await ExtractFileAsync(name, cancellationToken))
+                            with { DurationMs = stopwatch.ElapsedMilliseconds };
+                        span?.SetTag("cu.ok", extracted.Ok);
+                        results.Add(extracted);
+
+                        _logger.LogInformation(
+                            "Extracted '{Blob}' in {ElapsedMs} ms (ok: {Ok}).",
+                            name, extracted.DurationMs, extracted.Ok);
                     }
                     // Filtered on the token, not the exception type: Azure.Core surfaces an
                     // exhausted network timeout as a TaskCanceledException too, and rethrowing
@@ -181,14 +226,15 @@ public class ExtractionService : IExtractionService
                     {
                         _logger.LogWarning(ex, "Download or extraction failed for '{Blob}'; recording as a file-level error.", name);
                         results.Add(ExtractedFile.Failed(name, PipelineIssue.Error(
-                            PipelineStage.ParsePages, name, ex.Message, reason: PdfOpenFailureReason.Unknown)));
+                            PipelineStage.ParsePages, name, ex.Message, reason: PdfOpenFailureReason.Unknown))
+                            with { DurationMs = stopwatch.ElapsedMilliseconds });
                     }
                 });
 
             var files = results.ToList();
 
             // EntriesToProcess is passed straight through: it already carries every blob's
-            // LastModified and Zenya metadata from the pre-extraction listing, keyed by the same
+            // LastModified facts from the pre-extraction listing, keyed by the same
             // names the loop just iterated.
             extractionOutput = ExtractionOutputBuilder.BuildExtractionOutput(files, diff.EntriesToProcess);
 
@@ -222,7 +268,8 @@ public class ExtractionService : IExtractionService
             // baseline stuck at whatever the last clean run saw, permanently mis-sizing every
             // subsequent comparison.
             await SaveRunStateAsync(
-                extractionOutput.Docs.Sum(d => d.PageSpans.Count), previousETag, ct);
+                extractionOutput.Docs.Sum(d => d.PageSpans.Select(s => s.PageNumber).Distinct().Count()),
+                previousETag, ct);
         }
         catch (Exception ex)
         {
@@ -235,19 +282,24 @@ public class ExtractionService : IExtractionService
             // caught independently and why it writes with CancellationToken.None.
             await _reporter.ReportAsync(
                 Source, runAt, instanceId, diff, extractionOutput, failure);
+
+            // The run's one raw-response capture (see _rawCapture) - its own call because it is
+            // diagnostics with a lifecycle of its own, not part of the run report proper.
+            if (_rawCapture is { } capture)
+                await _reporter.WriteRawCaptureAsync(capture.BlobName, capture.Json, runAt, instanceId);
         }
 
         // What the stage returns, assembled in one place - including the rule about which
         // documents may have their existing chunks torn down, which is not a formality: get it
         // wrong and a document disappears from the index. See ExtractionStatsBuilder.
         //
-        // The CU defaults state rides along as a red flag on every run - success included -
-        // because the startup check's outcome was otherwise only visible in App Insights, and
-        // the first live bring-up stalled on exactly that blind spot. Demote to failures-only
-        // once the pipeline has produced its first healthy run.
+        // The CU defaults state red-flags only when the startup check failed or never ran; a
+        // healthy verified/updated outcome stays in the log. (During bring-up it rode along on
+        // every run - that is how the DefaultsNotSet root cause was finally seen - and was
+        // demoted to failures-only after the first healthy run, 2026-08-25.)
         return ExtractionStatsBuilder.BuildResult(
             Source, diff, extractionOutput, forceReindex,
-            _cuDefaultsState is null ? null : $"cu_model_defaults: {_cuDefaultsState.Summary}");
+            _cuDefaultsState is null or { Ok: true } ? null : $"cu_model_defaults: {_cuDefaultsState.Summary}");
     }
 
     // --- One document ---------------------------------------------------------
@@ -274,23 +326,21 @@ public class ExtractionService : IExtractionService
 
     // The paid call. Takes bytes, so it never touches blob storage and is testable without one.
     //
-    // Raw markdown and nothing else. The response-to-pipeline mapping (page spans, structure,
-    // title, profile, language) is deliberately NOT wired: prebuilt-documentSearch returns
-    // service-side chunks and a summary rather than prebuilt-document's layout detail, so the old
-    // CU mappers did not apply to it and were deleted rather than left half-connected. Chunking
-    // downstream receives no structure until that is designed against a real response.
-    //
-    // Usage is null for the same reason it used to be populated: AnalyzeUsageDetails comes off the
-    // Operation via GetUsage(), and this path keeps only operation.Value. Cost reporting
-    // under-counts every run until that is threaded back through.
+    // Markdown plus billed usage, with the structure (page spans / headings / boilerplate /
+    // tables / figures / annotations / hyperlinks / title) mapped from the TYPED response by
+    // CUHelper - CU classifies, the helpers map; see CUHelper and
+    // docs/2608/260826/cuhelper-typed-structure-plan.md. The markdown is handed downstream
+    // VERBATIM - no stripping, no rewriting - and every offset in the structure addresses
+    // exactly that string. Profile and Language stay null: nothing measures them on this
+    // backend yet.
     private async Task<ExtractedFile> AnalyzeDocumentWithCUAsync(string blobName, byte[] bytes, CancellationToken ct)
     {
         _logger.LogInformation("Submitting '{Blob}' to Content Understanding.", blobName);
 
-        AnalysisResult result;
+        ContentAnalysis analysis;
         try
         {
-            result = await _analysisClient.AnalyzeAsync(bytes, ct);
+            analysis = await _analysisClient.AnalyzeAsync(bytes, ct);
         }
         catch (RequestFailedException ex)
         {
@@ -305,6 +355,14 @@ public class ExtractionService : IExtractionService
                 $"Content Understanding analysis failed: {ex.Message}",
                 reason: PdfOpenFailureReason.Unknown));
         }
+
+        var result = analysis.Result;
+
+        // One raw response per run, first analysis wins - the capture CUHelper's typed mapping
+        // is designed and re-verified against. Stored here, written by ExtractAsync's reporter
+        // call (which has the run identity this per-file method deliberately does not).
+        if (analysis.RawJson is not null)
+            Interlocked.CompareExchange(ref _rawCapture, new RawCapture(blobName, analysis.RawJson), null);
 
         var warnings = (result.Warnings ?? [])
             .Select(w => PipelineIssue.Warning(
@@ -327,10 +385,19 @@ public class ExtractionService : IExtractionService
                 reason: PdfOpenFailureReason.UnexpectedContentFormat), warnings);
         }
 
+        // Typed mapping plus the furniture strip - CUHelper's Warnings are the map-what's-there
+        // degradations (missing typed collections, span misalignment, non-utf16 encoding), and
+        // they ride the run report like any service warning.
+        var mapped = CUHelper.Map(document, result.StringEncoding);
+
+        warnings.AddRange(mapped.Warnings.Select(w =>
+            PipelineIssue.Warning(PipelineStage.ParsePages, blobName, w)));
+
         return new ExtractedFile(
-            true, blobName, document.Markdown,
-            PageSpans: null, Structure: null, Title: null, Profile: null, Language: null,
-            Usage: null, Error: null, Warnings: warnings);
+            true, blobName, mapped.Markdown,
+            PageSpans: mapped.PageSpans, Structure: mapped.Structure, Title: mapped.Title,
+            Profile: null, Language: null,
+            Usage: analysis.Usage, Error: null, Warnings: warnings);
     }
 
     // --- Run state ------------------------------------------------------------

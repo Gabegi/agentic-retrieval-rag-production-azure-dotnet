@@ -22,15 +22,37 @@ public static class StructureFilter
             // single geometry, and the first page is the one a highlight would open on.
             Dimensions:     doc.PageSpans.FirstOrDefault(s => s.PageNumber == pageStart)?.Dimensions,
             SelectionMarks: OnPages(doc.SelectionMarks, s => s.PageNumber, pageStart, pageEnd),
-            Figures:        OnPages(doc.Figures,        f => f.PageNumber, pageStart, pageEnd));
+            Figures:        OnPages(doc.Figures,        f => f.PageNumber, pageStart, pageEnd),
+            Annotations:    OnPages(doc.Annotations,    a => a.PageNumber, pageStart, pageEnd),
+            Hyperlinks:     OnPages(doc.Hyperlinks,     h => h.PageNumber, pageStart, pageEnd));
 
-    // Sourced only from DI's own structured Figure.Caption - expect this empty on most current
-    // documents. PdfCleaner separately extracts a figure's caption into the page text, which is
-    // deliberately not threaded back into this structured field today.
+    // Sourced from CU's structured Figure.Caption. The generated Description is deliberately
+    // NOT folded in here - it already rides inline in the markdown (and so in chunk content).
     public static IReadOnlyList<string> CaptionsOf(ChunkStructure structure) =>
         structure.Figures
             .Where(f => !string.IsNullOrWhiteSpace(f.Caption))
             .Select(f => f.Caption!)
+            .ToList();
+
+    // The two index-field projections (decision 2026-08-26: annotations and hyperlinks go into
+    // chunk metadata AND index fields). Hyperlink rows prefer the target (the searchable,
+    // clickable fact); a link with display text but no target still contributes its text.
+    public static IReadOnlyList<string> HyperlinksOf(ChunkStructure structure) =>
+        (structure.Hyperlinks ?? [])
+            .Select(h => h.Uri ?? h.Content)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    // One string per annotation: the comment thread when there is one (that is the content a
+    // query could match), else kind+author as the bare fact a markup existed.
+    public static IReadOnlyList<string> AnnotationsOf(ChunkStructure structure) =>
+        (structure.Annotations ?? [])
+            .Select(a => a.Comments.Count > 0
+                ? string.Join(" | ", a.Comments)
+                : string.IsNullOrWhiteSpace(a.Author) ? a.Kind : $"{a.Kind} ({a.Author})")
+            .Where(v => !string.IsNullOrWhiteSpace(v))
             .ToList();
 
     private static IReadOnlyList<T> OnPages<T>(

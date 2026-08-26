@@ -41,9 +41,16 @@ public class UploadService : IUploadService
         // the last possible moment before handing off to the generic (doc-type-agnostic)
         // upload path - see SearchUploadChunk's own comment.
         var uploadBatch = docList.Select(SearchUploadChunk.From).ToList();
-        var (succeeded, failed) = await _indexDocumentService.UpsertDocumentsAsync(uploadBatch, ct);
+        var (succeeded, failed, batches) = await _indexDocumentService.UpsertDocumentsAsync(uploadBatch, ct);
 
         _logger.LogInformation("Upload complete — {Succeeded} succeeded, {Failed} failed", succeeded, failed);
+
+        // Wired 2026-08-26 (observability plan 3.1) - these three instruments existed from the
+        // start but nothing ever recorded them, so dashboards read "no uploads" against runs
+        // that uploaded thousands.
+        Instrumentation.DocsUpserted.Add(succeeded);
+        Instrumentation.UploadFailures.Add(failed);
+        Instrumentation.UploadBatchCount.Add(batches);
 
         // Only now, with replacement content already live, clean up what's actually orphaned:
         // chunk ids that existed for a stale (updated/removed) document but aren't among the

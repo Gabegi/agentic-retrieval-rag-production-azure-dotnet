@@ -27,7 +27,7 @@ public class EmbeddingClientTests
             .Setup(g => g.GenerateAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<EmbeddingGenerationOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IEnumerable<string> values, EmbeddingGenerationOptions? _, CancellationToken _) => Embeddings(values.Count()));
 
-        var (vectors, retries) = await client.EmbedWithRetryAsync(["a", "b"]);
+        var (vectors, retries, inputTokens) = await client.EmbedWithRetryAsync(["a", "b"]);
 
         Assert.AreEqual(2, vectors.Length);
         Assert.AreEqual(0, retries);
@@ -48,7 +48,7 @@ public class EmbeddingClientTests
                 return Embeddings(values.Count());
             });
 
-        var (vectors, retries) = await client.EmbedWithRetryAsync(["a"]);
+        var (vectors, retries, _) = await client.EmbedWithRetryAsync(["a"]);
 
         Assert.AreEqual(2, attempts);
         Assert.AreEqual(1, retries);

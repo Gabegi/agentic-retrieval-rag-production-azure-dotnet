@@ -4,20 +4,20 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using AgenticRagApp.Functions.ReportEmail;
+using AgenticRagApp.Functions.RunAnalysis;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Observability.Reports;
 
 namespace RagApp.UnitTests.Functions;
 
-// Regression test for a production incident (2026-08-07): SendReportEmailActivity's
+// Regression test for a production incident (2026-08-07): SaveRunAnalysisActivity's
 // constructor originally took a plain (unkeyed) BlobContainerClient parameter, which is never
 // registered anywhere in this app - every consumer of "pipeline-reports" builds one from
 // BlobServiceClient inside its own factory closure instead. That failed on every invocation
 // with "Unable to resolve service for type 'Azure.Storage.Blobs.BlobContainerClient'".
 //
 // The first attempt at a fix registered the class itself in Program.cs
-// (services.AddSingleton<SendReportEmailActivity>(sp => new SendReportEmailActivity(...))) and
+// (services.AddSingleton<SaveRunAnalysisActivity>(sp => new SaveRunAnalysisActivity(...))) and
 // had NO effect in production - the isolated-worker Functions host activates [Function]
 // classes via ActivatorUtilities.CreateInstance(scopedProvider, functionType), which resolves
 // each CONSTRUCTOR PARAMETER directly from the container and never consults a registration
@@ -30,7 +30,7 @@ namespace RagApp.UnitTests.Functions;
 // registered, no unkeyed BlobContainerClient) - so a constructor parameter that regresses to an
 // unresolvable type fails a build here, not only in production.
 [TestClass]
-public class SendReportEmailActivityActivationTests
+public class SaveRunAnalysisActivityActivationTests
 {
     [TestMethod]
     public void ActivatorUtilities_CanActivate_TheSameWayTheFunctionsHostDoes()
@@ -38,13 +38,12 @@ public class SendReportEmailActivityActivationTests
         var services = new ServiceCollection();
 
         // Mirrors Program.cs: BlobServiceClient registered, no unkeyed BlobContainerClient -
-        // if SendReportEmailActivity's constructor ever regresses to asking for one directly,
+        // if SaveRunAnalysisActivity's constructor ever regresses to asking for one directly,
         // this call throws exactly the exception seen in production.
         services.AddSingleton(new Mock<IBlobStore>().Object);
         services.AddSingleton(new BlobServiceClient("UseDevelopmentStorage=true"));
         services.AddSingleton(new Mock<IChatClient>().Object);
-        services.AddSingleton(new Mock<IReportEmailSender>().Object);
-        services.AddSingleton(new ReportEmailOptions());
+        services.AddSingleton(new RunAnalysisOptions());
         services.AddSingleton(NullLoggerFactory.Instance);
         services.AddLogging();
 
@@ -55,19 +54,18 @@ public class SendReportEmailActivityActivationTests
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
-            sp.GetRequiredService<ReportEmailOptions>(),
+            sp.GetRequiredService<RunAnalysisOptions>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<RunReportAssembler>()));
         services.AddSingleton(sp => new RunAnalysisAgent(
             sp.GetRequiredService<IChatClient>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<RunAnalysisAgent>()));
-        services.AddSingleton<RunEmailRenderer>();
 
         using var provider = services.BuildServiceProvider();
 
         // The actual call the Functions Worker host makes to construct a [Function] class -
-        // NOT `new SendReportEmailActivity(...)`, which would trivially pass regardless of
+        // NOT `new SaveRunAnalysisActivity(...)`, which would trivially pass regardless of
         // whether the real DI graph can satisfy it.
-        var instance = ActivatorUtilities.CreateInstance<SendReportEmailActivity>(provider);
+        var instance = ActivatorUtilities.CreateInstance<SaveRunAnalysisActivity>(provider);
 
         Assert.IsNotNull(instance);
     }

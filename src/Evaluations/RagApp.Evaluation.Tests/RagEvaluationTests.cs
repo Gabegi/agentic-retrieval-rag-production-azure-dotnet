@@ -100,12 +100,18 @@ public class RagEvaluationTests
         // two preview generations project the resource differently (SearchServiceVersion).
         var searchIndexClient = new SearchIndexClient(new Uri(config.SearchEndpoint), credential, SearchServiceVersion.Options());
 
+        // Schema check BEFORE the knowledge-source push, not after. The push validates its
+        // field references against the LIVE index, so a stale index makes it throw first -
+        // "Target Index with name '...' does not have a retrievable field with name '...'",
+        // a raw 400 that names one field and no cause (index run 03437511, 2026-08-26). The
+        // drift check below names every difference and says how to fix it, so it has to run
+        // while it still can.
+        await VerifyIndexSchemaMatchesCodeAsync(config, searchIndexClient);
+
         var knowledgeService = new KnowledgeService(config, searchIndexClient,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeService>.Instance);
         await knowledgeService.EnsureKnowledgeSourceAsync();
         await knowledgeService.EnsureKnowledgeBaseAsync();
-
-        await VerifyIndexSchemaMatchesCodeAsync(config, searchIndexClient);
 
         var searchClient = new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential, SearchServiceVersion.Options());
 

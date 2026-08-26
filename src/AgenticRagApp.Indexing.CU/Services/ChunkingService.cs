@@ -13,7 +13,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //   5. report  (ChunkingReporter, one call, from the finally)
 //
 // The split of responsibility is deliberate. A strategy decides WHERE to cut and knows nothing
-// about ids, Zenya metadata or embedding prefixes; ChunkMetadataBuilder decides how a cut
+// about ids, document metadata or embedding prefixes; ChunkMetadataBuilder decides how a cut
 // becomes an indexed row and knows nothing about headings or ceilings; and this class decides
 // which of the two routes a document takes and nothing else.
 //

@@ -31,12 +31,13 @@ public class PdfIndexingFunctionTests
         public Mock<ISnapshotService>        SnapshotService   = new();
         public Mock<IVectorCache>            VectorCache       = new();
         public Mock<IDocumentIdentityStore>  IdentityStore     = new();
+        public Mock<IIndexDocumentService>   IndexDocumentService = new();
 
         public PdfIndexingFunction Build() => new(
             ExtractionService.Object, ChunkingService.Object, EmbeddingService.Object, UploadService.Object,
             IndexService.Object, new Mock<BlobContainerClient>().Object, BlobStore.Object,
             ReportWriter.Object, ArtifactWriter.Object, SnapshotService.Object, VectorCache.Object,
-            IdentityStore.Object, NullLogger<PdfIndexingFunction>.Instance);
+            IdentityStore.Object, IndexDocumentService.Object, NullLogger<PdfIndexingFunction>.Instance);
     }
 
     private static Mock<TaskOrchestrationContext> MockOrchestrationContext(string instanceId = "instance-1")
@@ -374,8 +375,12 @@ public class PdfIndexingFunctionTests
 
         await function.SaveIndexReportActivity(report, context);
 
+        // Not the exact instance any more: the activity enriches the report with the
+        // report-time stats readback (observability plan 4.1) before writing it.
         deps.ReportWriter.Verify(w => w.WriteReportAsync(
-            It.Is<string>(p => p.Contains("instance-1")), report, It.IsAny<CancellationToken>()), Times.Once);
+            It.Is<string>(p => p.Contains("instance-1")),
+            It.Is<PdfIndexRunReport>(r => r.Run.InstanceId == "instance-1" && r.StatsReadback != null),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
@@ -411,10 +416,6 @@ public class PdfIndexingFunctionTests
         ModDate:               null,
         PageCount:             null,
         LastModifiedDate:      null,
-        ZenyaDocumentId:       null,
-        ZenyaVersion:          null,
-        ZenyaStatus:           null,
-        ZenyaUrl:              null,
         PageSpans:             [new PageSpan(1, 0, "content".Length, null, false)],
         PageBreadcrumbs:       new Dictionary<int, string>(),
         Sections:              [],
@@ -424,6 +425,8 @@ public class PdfIndexingFunctionTests
         SelectionMarks:        [],
         Figures:               [],
         Lines:                 [],
+        Annotations:      [],
+        Hyperlinks:       [],
         Profile:               null,
         Language:              null);
 

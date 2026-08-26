@@ -4,8 +4,8 @@ namespace AgenticRagApp.Observability.Reports;
 // wrong in the index", not "production is down".
 //
 // The governing rule is the SRE actionability test: if the reader cannot take a specific action,
-// the flag should not exist. Anything that fails that test belongs in the metrics tables (§4 of
-// pipeline-email-report-structure.md), not here.
+// the flag should not exist. Anything that fails that test belongs in the metrics themselves
+// (the stage records on the run report), not here.
 public enum FlagSeverity
 {
     // Trend worth knowing; no action today. Only rendered when there's a delta to show.
