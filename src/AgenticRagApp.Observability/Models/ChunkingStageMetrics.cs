@@ -58,6 +58,24 @@ public sealed record ChunkingStageMetrics(
     // Same caller-computed, optional-by-default contract as the field above.
     int TocChunksDropped = 0)
 {
+    // Documents that sit in a MULTI-MEMBER family but carry no DomainTag - the sector
+    // disambiguation the near-duplicate families depend on, missing on exactly the documents that
+    // need it (2026-08-27).
+    //
+    // Why this exists as its own field rather than being derived at report time: the per-document
+    // DomainTag has always been in the chunking artifact's DocumentOutcome rows, so when 2 of 3
+    // CAO documents lost their tag under Content Understanding the evidence was sitting in run
+    // 260826/8's artifact the whole time - and it still took a manual review, prompted by an eval
+    // regression, to notice. Nothing evaluated it. This is the value FlagEvaluator evaluates.
+    //
+    // IDs, not a count, and capped like ZeroChunkDocumentIds: FlagEvaluator's own actionability
+    // rule means "3 documents lost their sector tag" is a metric while naming them is something
+    // to act on. Empty is the healthy state.
+    //
+    // Init property rather than a positional parameter, matching ExtractionStageMetrics' billed
+    // fields: a caller with no identity concept (CSV) never sets it and says nothing false.
+    public IReadOnlyList<string> UntaggedFamilyMemberIds { get; init; } = [];
+
     // Kept small deliberately - see ChunkSample's comment on the Durable row limit.
     private const int MaxSamples        = 5;
     private const int MaxZeroChunkIds   = 20;

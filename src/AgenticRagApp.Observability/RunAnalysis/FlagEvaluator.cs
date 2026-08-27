@@ -119,6 +119,17 @@ public static class FlagEvaluator
                 "The run paid for analyses but reported no usage — cost telemetry is blank, not zero.",
                 "Check the once-per-host GetUsage warning in the logs (ContentAnalysisClient) for why both the SDK read and the raw fallback found nothing."));
 
+        // Per-model cost telemetry blank (2026-08-27). Sibling of the flag above and separately
+        // reachable: the CU meters can arrive while the per-model token map does not, and only
+        // the map maps to deployment TPM - contextualization tokens bill a flat 1,000 per page,
+        // so they cannot be turned into a load figure. This is the run-analysis half of the
+        // warning ExtractionReporter now logs for the same condition.
+        if (x.DocsToProcess > 0 && x.BilledTokensByModel.Count == 0)
+            flags.Add(new ReportFlag(FlagSeverity.Warning, "Extraction.BilledTokensByModel",
+                "blank", "at least one model key",
+                "The run paid for analyses but reported no per-model token map — the number that maps to AI-deployment spend and TPM is missing.",
+                "Check the once-per-host GetUsage warning in the logs (ContentAnalysisClient); the CU meters alone cannot size extraction parallelism."));
+
         // Cost spike (plan 4.2, cu_pages_spike - absorbed from the cancelled alert rules).
         if (x.BilledPagesStandard is { } billedPages && billedPages > CuPagesSpikeWarn)
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Extraction.BilledPagesStandard",
@@ -146,6 +157,19 @@ public static class FlagEvaluator
                 "These documents produced no chunks and are absent from the index — unsearchable.",
                 "Check whether their content was empty after cleaning, or extraction failed for them."));
         }
+
+        // Sector disambiguation missing on the documents that need it (2026-08-27). Sourced, not
+        // calibrated: there is no rate to tune - a document inside a multi-member family with no
+        // DomainTag means the near-duplicate set it belongs to cannot be told apart, and one is
+        // already wrong. This is the rule that was missing when 2 of 3 CAO documents silently lost
+        // their tag under Content Understanding; the per-document DomainTag was in the chunking
+        // artifact the whole time and nothing evaluated it, so it surfaced as an eval regression
+        // instead. See docs/2608/260827/extraction-coverage-chunking-review.md Gap 2.
+        if (c.UntaggedFamilyMemberIds.Count > 0)
+            flags.Add(new ReportFlag(FlagSeverity.Warning, "Chunking.UntaggedFamilyMemberIds",
+                $"{c.UntaggedFamilyMemberIds.Count} ({string.Join(", ", c.UntaggedFamilyMemberIds.Take(5))})", "0",
+                "These documents sit in a multi-member family but carry no DomainTag — the near-duplicate set they belong to cannot be disambiguated by sector, so retrieval can answer from the wrong one.",
+                "Check what DomainTagger was given: it tags off the extracted Title, which under Content Understanding can be a cover slogan or a copyright line. The filename usually carries the sector verbatim."));
 
         if (c.ChunksProduced == 0) return; // nothing to compute ratios against
 

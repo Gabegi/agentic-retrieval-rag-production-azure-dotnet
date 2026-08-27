@@ -53,6 +53,13 @@ internal sealed record ExtractedFile(
     // only the case in tests that build ExtractedFiles directly.
     public long? DurationMs { get; init; }
 
+    // How well the service says it read this document, summarised by the mapper - see
+    // WordConfidenceSummary. Measurement only, same lifecycle as ContentHash and DurationMs:
+    // ExtractionOutputBuilder lifts it onto PdfExtractionOutput.WordConfidences and the reporter
+    // writes it into the per-document facts report. Null means the response carried no words
+    // with a confidence, which is blank rather than zero.
+    public WordConfidenceSummary? WordConfidence { get; init; }
+
     // A factory rather than nine positional nulls repeated at every failure site.
     public static ExtractedFile Failed(
         string blobName, PipelineIssue error, IReadOnlyList<PipelineIssue>? warnings = null) =>

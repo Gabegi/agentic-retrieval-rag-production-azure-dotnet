@@ -9,13 +9,20 @@ namespace AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 // One-time setup, at host startup: make sure the account-wide Content Understanding default
 // model->deployment mapping matches what this app deploys. The SDK's Sample00 documents this
 // mapping as required setup per Foundry resource before any prebuilt analyzer works;
-// prebuilt-documentSearch (ContentAnalysisClient) needs gpt-4.1-mini and text-embedding-3-large.
+// prebuilt-documentSearch (ContentAnalysisClient) needs a completion model - gpt-5.4-mini since
+// 2026-08-27, see MiniModelName - and text-embedding-3-large.
 //
 // Read first, write only when a required entry is missing or wrong - the mapping is
 // account-global state shared with every other consumer of the account, so an unconditional
 // write on every start would make this host a recurring writer of someone else's config.
 // UpdateDefaults is merge-patch semantics on the service side: entries for models this app
 // does not use are left untouched either way.
+//
+// Merge-patch also means the retired gpt-4.1-mini -> "gpt-4.1-mini" entry this app used to
+// write is NOT removed by the model change: it stays in the account-wide mapping, pointing at a
+// deployment that now serves gpt-5.4-mini. Harmless (nothing resolves that key any more) and
+// left alone deliberately - deleting entries would make this host a destructive writer of
+// account-global state, which is exactly what the read-then-write-if-needed design avoids.
 //
 // Runs under the Function App's managed identity, which already holds "Cognitive Services User"
 // on the account (infra/content_understanding.tf) - no human role assignment or manual PATCH.
@@ -30,7 +37,18 @@ public sealed class ContentUnderstandingDefaultsSetup : IHostedService
     // name comes from config because the app embeds with it elsewhere; this one exists only for
     // CU. Same constant as ContentAnalysisClient conceptually, but that client no longer carries
     // any mapping - this class is the only place the app states it.
-    private const string MiniModelName = "gpt-4.1-mini";
+    //
+    // gpt-4.1-mini -> gpt-5.4-mini (2026-08-27): CU no longer requires gpt-4.1-mini, having
+    // expanded prebuilt-analyzer support to the GPT-5 series in standard/mini/nano variants.
+    // gpt-5.4-mini is the newest mini that exists in this account/region - gpt-5.5 has no mini
+    // variant there, which a first attempt learned from a failed apply (see
+    // infra/ai_deployments.tf).
+    // This MUST stay in step with the `mini` entry's model_name in infra/ai_deployments.tf -
+    // it is the mapping's KEY (a model name), while OpenAiMiniDeployment is the VALUE (a
+    // deployment name, still literally "gpt-4.1-mini" and intentionally not renamed). A
+    // mismatch here doesn't fail at startup; it silently maps a model CU never asks for, and
+    // the first analyze call is what fails.
+    private const string MiniModelName = "gpt-5.4-mini";
 
     private readonly ContentUnderstandingClient                 _client;
     private readonly IndexerConfig                              _config;

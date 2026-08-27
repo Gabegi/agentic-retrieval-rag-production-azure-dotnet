@@ -29,7 +29,5 @@
 #   value       = one(azapi_resource.sandbox[*].identity[0].principal_id)
 # }
 #
-# output "sandbox_deployment_name" {
-#   description = "Name of the sandbox's own gpt-5.4-mini deployment (ai_sandbox.tf). Null outside development. Its capacity is a hard TPM ceiling, which is what stops sandbox use from 429ing the app's eval runs."
-#   value       = one(azurerm_cognitive_deployment.sandbox[*].name)
-# }
+# (A fourth output, sandbox_deployment_name, was deleted outright 2026-08-27
+# along with the sandbox model deployment itself - see ai_sandbox.tf's banner.)

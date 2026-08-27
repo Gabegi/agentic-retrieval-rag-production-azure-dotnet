@@ -110,6 +110,9 @@ internal static class ExtractionStatsBuilder
         // same thing from the same source.
         BilledPagesStandard           = diff.Output.BilledPagesStandard,
         BilledContextualizationTokens = diff.Output.BilledContextualizationTokens,
+        // The per-model half rides along (2026-08-27) - same source, same row, so the report
+        // totals, the CuModelTokens meter and the log line all say the same thing.
+        BilledTokensByModel           = diff.Output.BilledTokensByModel,
     };
 }
 

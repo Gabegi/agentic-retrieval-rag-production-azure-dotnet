@@ -397,7 +397,13 @@ public class ExtractionService : IExtractionService
             true, blobName, mapped.Markdown,
             PageSpans: mapped.PageSpans, Structure: mapped.Structure, Title: mapped.Title,
             Profile: null, Language: null,
-            Usage: analysis.Usage, Error: null, Warnings: warnings);
+            Usage: analysis.Usage, Error: null, Warnings: warnings)
+        {
+            // Rides here rather than in the run loop (unlike DurationMs, which only the loop can
+            // see): the mapper is what computed it, and this is the first record that outlives
+            // the mapper's return value.
+            WordConfidence = mapped.WordConfidence,
+        };
     }
 
     // --- Run state ------------------------------------------------------------

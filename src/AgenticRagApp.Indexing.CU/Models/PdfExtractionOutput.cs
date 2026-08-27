@@ -35,6 +35,12 @@ public sealed record PdfExtractionOutput(IReadOnlyList<PdfExtractionDocument> Do
     // not present-with-nulls.
     public IReadOnlyList<DocumentUsage> Usages { get; init; } = [];
 
+    // Per-document read quality, in blob-name order. Report-only, same lifecycle as the three
+    // lists above - see WordConfidenceSummary for why this is a summary and not the words, and
+    // why it carries no threshold. Documents whose response reported no word confidences are
+    // absent, not present-with-nulls.
+    public IReadOnlyList<DocumentWordConfidence> WordConfidences { get; init; } = [];
+
     // The service's per-model token map summed across every document that reported one, keys
     // verbatim as billed (e.g. "gpt-4.1-mini-input") - see CuUsage.TokensByModel for why the
     // keys are not split. This is the number that maps to the AI-deployment bill; the two

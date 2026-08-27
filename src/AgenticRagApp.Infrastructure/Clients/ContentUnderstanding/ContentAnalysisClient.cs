@@ -19,8 +19,9 @@ namespace AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 public sealed class ContentAnalysisClient : IContentAnalysisClient
 {
     // The prebuilt analyzer, not a custom one. One prerequisite on the account, which this app
-    // does not create: the gpt-4.1-mini and text-embedding-3-large deployments themselves
-    // (infra/ai_deployments.tf).
+    // does not create: the completion and text-embedding-3-large deployments themselves
+    // (infra/ai_deployments.tf; the completion model is gpt-5.4-mini since 2026-08-27, named in
+    // ContentUnderstandingDefaultsSetup rather than here).
     private const string AnalyzerId = "prebuilt-documentSearch";
 
     private readonly ContentUnderstandingClient      _client;
@@ -124,8 +125,10 @@ public sealed class ContentAnalysisClient : IContentAnalysisClient
             using var doc = JsonDocument.Parse(rawJson);
             if (!doc.RootElement.TryGetProperty("usage", out var usage)) return null;
 
-            int? pages  = usage.TryGetProperty("documentPagesStandard", out var p) && p.TryGetInt32(out var pv) ? pv : null;
-            int? ctx    = usage.TryGetProperty("contextualizationTokens", out var c) && c.TryGetInt32(out var cv) ? cv : null;
+            int? pages   = usage.TryGetProperty("documentPagesStandard", out var p) && p.TryGetInt32(out var pv) ? pv : null;
+            int? minimal = usage.TryGetProperty("documentPagesMinimal", out var m) && m.TryGetInt32(out var mv) ? mv : null;
+            int? basic   = usage.TryGetProperty("documentPagesBasic", out var b) && b.TryGetInt32(out var bv) ? bv : null;
+            int? ctx     = usage.TryGetProperty("contextualizationTokens", out var c) && c.TryGetInt32(out var cv) ? cv : null;
 
             var tokens = new Dictionary<string, int>();
             if (usage.TryGetProperty("tokens", out var map) && map.ValueKind == JsonValueKind.Object)
@@ -134,9 +137,9 @@ public sealed class ContentAnalysisClient : IContentAnalysisClient
                         tokens[entry.Name] = count;
 
             // A usage node with nothing readable in it is "no usage", not an all-zero bill.
-            return pages is null && ctx is null && tokens.Count == 0
+            return pages is null && minimal is null && basic is null && ctx is null && tokens.Count == 0
                 ? null
-                : new CuUsage(pages, ctx, tokens);
+                : new CuUsage(pages, ctx, tokens) { DocumentPagesMinimal = minimal, DocumentPagesBasic = basic };
         }
         catch { return null; }
     }

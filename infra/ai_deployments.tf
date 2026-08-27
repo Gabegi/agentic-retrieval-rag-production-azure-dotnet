@@ -5,6 +5,10 @@
 # docs/ai-foundry-models.md. gpt-4.1 is blocked for new deployments
 # (ServiceModelDeprecating); gpt-5.4 is the newest GA flagship with quota
 # actually available (gpt-5.5 exists but has 0 quota in this sub/region).
+#
+# The `mini` entry (Content Understanding) moved to gpt-5.4-mini on 2026-08-27; its
+# model/version were verified that day against a fresh list-models run (see the entry itself
+# and docs/ai-foundry-models.md's 2026-08-27 addendum).
 # ---------------------------------------------------------------------------
 
 # Looped via for_each rather than one resource block each - only the model
@@ -31,19 +35,28 @@ locals {
     # the judge fan-out at 5 workers, querying shouldn't be sized any lower
     # for the same 5-worker concurrency. Quota confirmed available: gpt-5.4
     # GlobalStandard usage was ~0/1000 K TPM before this bump
-    # (docs/ai-foundry-models.md), so 200 leaves ~800 K TPM free (shared with
-    # the `extraction` deployment below, same model).
+    # (docs/ai-foundry-models.md), so 200 left ~800 K TPM free (shared with
+    # the `extraction` deployment below, same model; extraction's 2026-08-27
+    # raise to 500 brings the pool to 700/1000 - ~300 K TPM free).
     querying = {
       name          = var.openai_gpt_deployment
       model_name    = "gpt-5.4"
       model_version = "2026-03-05"
       capacity      = 200
     }
+    # Capacity 40 -> 500 (2026-08-27): the 40 predated Content Understanding and had no
+    # recorded sizing rationale. CU's figure analysis now bills its per-figure LLM tokens
+    # through this deployment (docs/2608/260819/content-understanding-when-and-how.md:
+    # ~1,200 tokens per figure), at the same 8-document parallelism
+    # (ExtractionService.MaxExtractionParallelism) that TPM-bound the `mini` deployment on
+    # 2026-08-25 - so 40 K TPM had the same crawl risk on figure-heavy corpora. 500 leaves
+    # 300 K TPM free in the shared gpt-5.4 pool (1000 total, `querying` holds 200 - a value
+    # earned from real 429s, don't shrink it to feed this one).
     extraction = {
       name          = var.openai_extraction_deployment
       model_name    = "gpt-5.4"
       model_version = "2026-03-05"
-      capacity      = 40
+      capacity      = 500
     }
     # Deliberately a different model/version from "querying"/"extraction"
     # (gpt-5.4) to avoid self-preference bias in eval scores.
@@ -67,37 +80,53 @@ locals {
       model_version = "2025-11-13"
       capacity      = 200
     }
-    # Content Understanding's prebuilt analyzers - prebuilt-documentSearch included - are
-    # documented as requiring gpt-4.1-mini and text-embedding-3-large deployments, and
-    # ContentAnalysisClient submits against prebuilt-documentSearch. The app never calls this
-    # deployment itself: CU resolves it through the account's default model->deployment mapping,
-    # which ContentUnderstandingDefaultsSetup verifies (and fixes if wrong) at host startup -
-    # see content_understanding.tf. The mapping can only point at a deployment that exists, so
-    # this apply is the hard prerequisite.
+    # The completion model Content Understanding's prebuilt analyzers resolve against -
+    # prebuilt-documentSearch included, which is what ContentAnalysisClient submits. The app
+    # never calls this deployment itself: CU resolves it through the account's default
+    # model->deployment mapping, which ContentUnderstandingDefaultsSetup verifies (and fixes if
+    # wrong) at host startup - see content_understanding.tf. The mapping can only point at a
+    # deployment that exists, so this apply is the hard prerequisite.
     #
-    # model_version is the GA gpt-4.1-mini version; confirm it against the region's model list
-    # before the first apply (az cognitiveservices account list-models), since a wrong version
-    # fails the apply rather than degrading quietly. Note the header above: gpt-4.1 was already
-    # ServiceModelDeprecating for NEW deployments in this sub/region on 2026-07-02 - if that
-    # extends to gpt-4.1-mini, this entry fails to apply and prebuilt-documentSearch has no
-    # completion model (the exact ResourceError seen live on 2026-08-25).
-    # Capacity 50 -> 5000 (2026-08-25): the first working extraction run was TPM-bound on this
-    # deployment - prebuilt-documentSearch contextualizes every page of every document through
-    # it, 8 documents in parallel (ExtractionService.MaxExtractionParallelism), and at 50 K TPM
-    # the 51-doc corpus crawled for the better part of an hour. 5000 is the whole
-    # gpt-4.1-mini GlobalStandard pool in this sub/region (docs/ai-foundry-models.md: 0/5000 in
-    # use), and this deployment is that pool's only consumer, so taking all of it starves
-    # nothing. If the apply is rejected (the model is Deprecating for NEW deployments; scaling
-    # an EXISTING one is normally still allowed), step down until it passes.
+    # gpt-4.1-mini -> gpt-5.4-mini (2026-08-27). CU used to *require* gpt-4.1-mini; Microsoft
+    # has since expanded analyzer support to the GPT-5 series (gpt-5 through gpt-5.5, in
+    # standard/mini/nano variants), so the model is now a choice rather than a constraint. Taken
+    # at the mini tier, like-for-like with what it replaces: prebuilt-documentSearch
+    # contextualizes EVERY page of every document, so this is a high-volume path where the mini
+    # economics matter more than flagship accuracy. This also clears the shelf-life problem the
+    # previous comment flagged - gpt-4.1-mini retires 2026-10-14 (docs/ai-foundry-models.md).
     #
-    # Shelf life: the same survey lists gpt-4.1-mini retiring 2026-10-14. CU's prebuilt
-    # analyzers resolve onto it by name, so before that date Microsoft's prebuilts must have
-    # moved on - revisit the defaults mapping (ContentUnderstandingDefaultsSetup) when they do.
+    # Why gpt-5.4-mini and not gpt-5.5-mini: gpt-5.5-mini DOES NOT EXIST in this account/region.
+    # A first attempt targeted it with a guessed version ("2026-04-24", the gpt-5.5 flagship's)
+    # and the 2026-08-27 apply failed with DeploymentModelNotSupported - after the destroy had
+    # already completed, which took CU down until this corrected entry applied (see
+    # docs/2608/260827/cu-completion-model-gpt-5-5-mini.md). A fresh list-models run that day
+    # showed the newest minis in westeurope are gpt-5.4-mini/gpt-5.4-nano ("2026-03-17" - note
+    # NOT the gpt-5.4 flagship's "2026-03-05"; versions differ per variant, never carry one
+    # across). Both values below are verified against that run.
+    #
+    # The DEPLOYMENT name is deliberately still var.openai_mini_deployment ("gpt-4.1-mini") and
+    # not renamed: renaming forces a destroy+create of the deployment, and this repo already
+    # runs gpt-5.4 on deployments named "gpt-4.1-query"/"gpt-4.1-extraction" for the same
+    # reason. Deployment names are stable here; models move under them. (A model change is
+    # ForceNew and recreates the deployment anyway - that is how the failed apply orphaned it -
+    # but keeping the name stable at least avoids a second rename-only recreate.)
+    #
+    # Capacity 5000 -> 1000: the old value was the whole gpt-4.1-mini pool, which this
+    # deployment consumed alone. The gpt-5.4-mini GlobalStandard pool is 1000 K TPM total, and
+    # 1000 takes ALL of it - the hard ceiling; anything higher needs an Azure quota request
+    # (portal), not a bigger number here. Consequences, accepted deliberately on 2026-08-27:
+    #   - Extraction throughput drops vs 5000. Context: the 51-doc corpus crawled at 50 K TPM
+    #     (the 2026-08-25 finding); 1000 is still 20x that tuning point, so this bounds
+    #     worst-case full-corpus runs, not normal operation.
+    #   - This entry is the pool's only consumer: the sandbox model deployment that also
+    #     targeted gpt-5.4-mini was deleted outright the same day, partly because this entry
+    #     left it no quota to enable into (ai_sandbox.tf's banner). Anything new deployed onto
+    #     gpt-5.4-mini in this sub/region has to take capacity from here first.
     mini = {
       name          = var.openai_mini_deployment
-      model_name    = "gpt-4.1-mini"
-      model_version = "2025-04-14"
-      capacity      = 5000
+      model_name    = "gpt-5.4-mini"
+      model_version = "2026-03-17"
+      capacity      = 1000
     }
   }
 }

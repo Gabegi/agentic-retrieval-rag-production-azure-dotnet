@@ -125,6 +125,7 @@ internal static class ExtractionOutputBuilder
             ContentHashes          = contentHashes,
             Durations              = BuildDurations(files),
             Usages                 = BuildUsages(files),
+            WordConfidences        = BuildWordConfidences(files),
             BilledTokensByModel    = BuildTokensByModel(files),
         };
     }
@@ -146,7 +147,17 @@ internal static class ExtractionOutputBuilder
             .Where(f => f.Usage is not null)
             .OrderBy(f => f.BlobName, StringComparer.Ordinal)
             .Select(f => new DocumentUsage(
-                f.BlobName, f.Usage!.DocumentPagesStandard, f.Usage.ContextualizationTokens, f.Ok))];
+                f.BlobName, f.Usage!.DocumentPagesStandard, f.Usage.ContextualizationTokens,
+                f.Usage.TokensByModel, f.Ok))];
+
+    // Per-document read quality, lifted the same way. Files whose response reported no word
+    // confidences are absent rather than present-with-nulls - "the service measured nothing" is
+    // not a row, exactly as with usage.
+    internal static List<DocumentWordConfidence> BuildWordConfidences(IReadOnlyList<ExtractedFile> files) =>
+        [.. files
+            .Where(f => f.WordConfidence is not null)
+            .OrderBy(f => f.BlobName, StringComparer.Ordinal)
+            .Select(f => new DocumentWordConfidence(f.BlobName, f.WordConfidence!, f.Ok))];
 
     // The run's per-model token bill: every document's TokensByModel summed key-by-key, keys
     // verbatim as the service bills them. Ordered for the same diff-cleanly reason as the lists.

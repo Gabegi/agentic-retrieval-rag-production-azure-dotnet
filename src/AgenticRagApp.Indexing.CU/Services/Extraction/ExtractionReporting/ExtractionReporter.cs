@@ -164,7 +164,7 @@ public sealed class ExtractionReporter
 
         // The per-model half of the bill (plan 1.3) - the number that maps to the
         // AI-deployment spend, keys verbatim as the service bills them. One meter add per key
-        // and one summary line per run; empty when no document reported a token map.
+        // and one summary line per run; a warning instead when no document reported a token map.
         if (output.BilledTokensByModel.Count > 0)
         {
             foreach (var (key, count) in output.BilledTokensByModel)
@@ -173,6 +173,20 @@ public sealed class ExtractionReporter
             _logger.LogInformation(
                 "Content Understanding model tokens this run: {Tokens}.",
                 string.Join(", ", output.BilledTokensByModel.Select(kv => $"{kv.Key}={kv.Value}")));
+        }
+        else if (output.Docs.Count > 0)
+        {
+            // Says so out loud rather than logging nothing (2026-08-27). The silent-empty path
+            // is the same failure shape TryGetUsage's swallowed exception was - a blank number
+            // that reads as "not interesting" for as long as nobody goes looking. This is the
+            // only per-model cost signal the run emits, and it is now also the input to the
+            // extraction-parallelism sizing (docs/2608/260827/extraction-coverage-chunking-review.md,
+            // Q4 Step 0), so its absence is a finding, not a non-event.
+            _logger.LogWarning(
+                "No per-model Content Understanding token map was reported this run ({Docs} document(s) extracted) - " +
+                "per-model cost telemetry is blank, not zero. The CU meters (pages/contextualization tokens) " +
+                "cannot substitute: contextualization tokens bill a flat 1,000 per page.",
+                output.Docs.Count);
         }
 
         // Per-document analyze duration into the histogram (plan 2.2) - recorded here off the
@@ -261,10 +275,23 @@ public sealed class ExtractionReporter
         var usageByBlob = output.Usages.ToDictionary(
             u => u.BlobName, u => u, StringComparer.Ordinal);
 
+        // And the quality equivalent - "how well was this file actually read". Absent when the
+        // response reported no word confidences (see BuildWordConfidences).
+        var confidenceByBlob = output.WordConfidences.ToDictionary(
+            c => c.BlobName, c => c.Summary, StringComparer.Ordinal);
+
         var fileFacts = output.Docs.Select(d => new
         {
             BlobName  = d.SourceId,
             d.Title,
+            // The document's first declared heading, next to the extracted Title on purpose
+            // (2026-08-27). MissingTitleCount only counts EMPTY titles; the CAO failure was a
+            // title that was present and wrong - a copyright line on one document, a cover
+            // slogan on another (see the 260827 review, Gap 3). Title-not-equal-to-first-heading
+            // is the cheap signal for that, and it needs both values side by side. No rule reads
+            // this yet: a heading-mismatch threshold would be a guess until the corpus says
+            // what normal looks like.
+            FirstHeading = d.Headings.Count > 0 ? d.Headings[0].Content : null,
             // SHA-256 over the raw bytes. This report is where the content-hash evidence actually
             // lands - the run log says how many were distinct, this says which document was which,
             // and it survives log retention. Null would mean the document extracted without ever
@@ -277,6 +304,35 @@ public sealed class ExtractionReporter
             Figures   = d.Figures.Count,
             FiguresWithDescription = d.Figures.Count(f => !string.IsNullOrWhiteSpace(f.Description)),
             ContentChars = d.Content.Length,
+
+            // ── The rest of the mapped structure (2026-08-27) ────────────────────────────
+            // All of this was mapped and counted NOWHERE - no report, no meter, no log line -
+            // so every corpus figure quoted in the 260827 review ("483 hyperlinks", "57 rowspan
+            // / 151 colspan", "130 of 152 PageHeaders", "0 chart blocks") had to be counted by
+            // hand out of the one raw-response capture. These are .Count calls on data the
+            // mapper already produced; the point is that the next such question is answered by
+            // reading a report instead of re-deriving it.
+            Sections    = d.Sections.Count,
+            Boilerplate = d.Boilerplate.Count,
+            Hyperlinks  = d.Hyperlinks.Count,
+            Annotations = d.Annotations.Count,
+            Lines       = d.Lines.Count,
+
+            // The direct before/after measure for the HTML-table work (review Gap 1): merged
+            // cells are why GFM conversion was rejected as lossy, and TableDetector currently
+            // routes none of these tables. Counted off the mapped spans rather than the markdown.
+            MergedTableCells = d.Tables.Sum(t =>
+                t.Cells.Count(c => c.RowSpan is not null || c.ColumnSpan is not null)),
+
+            // "chart" / "mermaid" / "unknown", the service's own DocumentFigureKind. Q1 checked
+            // by hand that this corpus has zero chart-like figures and concluded "nothing to
+            // build until one appears" - this is what makes that a monitored condition rather
+            // than a one-off manual check.
+            FiguresByKind = d.Figures
+                .GroupBy(f => f.Kind ?? "unknown", StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal),
+
             // End-to-end wall clock for this document (download + analyze + map). Null only
             // when the run loop never timed it, which real runs cannot produce.
             DurationMs = durationByBlob.TryGetValue(d.SourceId, out var ms) ? ms : (long?)null,
@@ -284,6 +340,19 @@ public sealed class ExtractionReporter
             // reported no usage for it - blank, not zero.
             BilledPagesStandard     = usageByBlob.GetValueOrDefault(d.SourceId)?.BilledPagesStandard,
             ContextualizationTokens = usageByBlob.GetValueOrDefault(d.SourceId)?.ContextualizationTokens,
+            // The real per-model token bill for this document, keys verbatim as billed (added
+            // 2026-08-27). The two fields above are CU METERS - ContextualizationTokens reads a
+            // flat 1,000 per page on every document, so dividing it by wall clock says nothing
+            // about load. THIS is the number that maps to the deployment's TPM ceiling, and per
+            // document it also yields real-tokens-per-page. Null when the analysis reported no
+            // usage at all; empty when it reported usage carrying no token map.
+            TokensByModel = usageByBlob.GetValueOrDefault(d.SourceId)?.TokensByModel,
+
+            // How well the service says it READ this document - the quality axis the pipeline
+            // had none of (2026-08-27). Distribution only, no threshold and no flag: see
+            // WordConfidenceSummary for why an invented "low confidence" line is not shipped
+            // here. Null means the response carried no word confidences.
+            WordConfidence = confidenceByBlob.GetValueOrDefault(d.SourceId),
         }).ToList();
 
         await _reportWriter.WriteReportAsync(

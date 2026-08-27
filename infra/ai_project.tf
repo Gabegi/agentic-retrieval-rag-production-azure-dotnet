@@ -7,15 +7,19 @@
 # Terraform and is not recoverable from this repo). Production is unaffected;
 # count was already 0 there.
 #
-# Its deployment, content filter and role grants are commented out in
-# ai_sandbox.tf, and its four outputs in outputs.tf - all of them referenced
-# this resource, so they could not stay behind: a reference to a commented-out
-# resource is a terraform validate error, not a silent no-op.
+# Its role grants are commented out in ai_sandbox.tf, and its outputs in
+# outputs.tf - all of them referenced this resource, so they could not stay
+# behind: a reference to a commented-out resource is a terraform validate
+# error, not a silent no-op.
 #
-# To restore: uncomment here, in ai_sandbox.tf and in outputs.tf together.
-# var.openai_sandbox_deployment, var.sandbox_deployment_capacity and
-# var.sandbox_user_object_ids are left declared in variables.tf (an unused
-# variable is legal) so a restore is uncomment-only.
+# UPDATE 2026-08-27: the sandbox's model deployment and content filter (and
+# their variables and output) were deleted outright, not just commented -
+# see ai_sandbox.tf's banner for why and what a restore now involves.
+#
+# To restore the project + access: uncomment here, in ai_sandbox.tf and in
+# outputs.tf together. var.sandbox_user_object_ids is left declared in
+# variables.tf (an unused variable is legal) so that part is uncomment-only;
+# a USABLE sandbox additionally needs a model deployment re-authored.
 # ===========================================================================
 
 # ---------------------------------------------------------------------------

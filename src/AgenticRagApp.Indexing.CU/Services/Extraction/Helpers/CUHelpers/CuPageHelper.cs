@@ -132,4 +132,27 @@ internal static class CuPageHelper
 
         return 0;
     }
+
+    // How well the service says it read the document, summarised across every word on every
+    // page (DocumentPage.Words[].Confidence). This helper owns it because it already owns
+    // DocumentContent.Pages - see the class comment's ownership rule.
+    //
+    // Deliberately reduced to a summary HERE, not carried up as words: this walks tens of
+    // thousands of DocumentWord entries on a 134-page document and keeps five doubles. Nothing
+    // is added to PdfDocumentStructure.
+    //
+    // Words with no reported Confidence are skipped rather than counted as 0 - the same
+    // absent-is-not-zero rule the rest of this mapper follows. A document where NO word carries
+    // one yields null, which the report shows as blank.
+    internal static WordConfidenceSummary? SummariseWordConfidence(DocumentContent document)
+    {
+        var confidences = new List<double>();
+
+        foreach (var page in document.Pages ?? Enumerable.Empty<DocumentPage>())
+            foreach (var word in page.Words ?? Enumerable.Empty<DocumentWord>())
+                if (word.Confidence is { } confidence)
+                    confidences.Add(confidence);
+
+        return WordConfidenceSummary.From(confidences);
+    }
 }

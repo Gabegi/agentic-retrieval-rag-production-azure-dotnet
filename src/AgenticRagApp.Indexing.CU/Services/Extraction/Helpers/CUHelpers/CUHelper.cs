@@ -28,7 +28,13 @@ internal static class CUHelper
         IReadOnlyList<PageSpan>  PageSpans,
         PdfDocumentStructure     Structure,
         string?                  Title,
-        IReadOnlyList<string>    Warnings);
+        IReadOnlyList<string>    Warnings,
+        // How well the service says it read this document - see WordConfidenceSummary. A
+        // trailing default because it is a measurement about the mapping, not part of it:
+        // nothing downstream of the report reads it, and every existing construction of this
+        // record (empty-markdown early return, tests) stays valid without it. Null = the
+        // response carried no words, which is not the same as zero confidence.
+        WordConfidenceSummary?   WordConfidence = null);
 
     // stringEncoding is AnalysisResult.StringEncoding - the service's echo of what span
     // encoding it actually applied. The SDK's typed Analyze overload hardcodes utf16 on every
@@ -91,6 +97,8 @@ internal static class CUHelper
         // comment. The 335-tiny/77-duplicate chunk baseline that motivated it was measured
         // before this typed-mapping train anyway, so its removal costs nothing that was ever
         // measured on this pipeline.
-        return new MappedDocument(markdown, pageSpans, structure, title, warnings);
+        return new MappedDocument(
+            markdown, pageSpans, structure, title, warnings,
+            WordConfidence: CuPageHelper.SummariseWordConfidence(document));
     }
 }

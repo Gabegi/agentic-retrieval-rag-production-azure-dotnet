@@ -38,4 +38,14 @@ public record ExtractionStageMetrics(
     // report, the one artifact reviewed after every run, carried no cost at all.
     public long? BilledPagesStandard           { get; init; }
     public long? BilledContextualizationTokens { get; init; }
+
+    // The per-model half of the same bill, keys verbatim as the service bills them (e.g.
+    // "gpt-5.4-mini-input"), added 2026-08-27. Until this landed the run total existed only as
+    // a transient log line (ExtractionReporter) and a meter - the index-run report, the artifact
+    // actually reviewed after every run, carried only the two CU meters above, and those cannot
+    // be turned into a TPM figure: BilledContextualizationTokens is a flat 1,000 per page.
+    // Empty rather than null when no document reported a token map - unlike the nullable
+    // scalars above, "no map" and "no tokens" are the same fact here.
+    public IReadOnlyDictionary<string, long> BilledTokensByModel { get; init; } =
+        new Dictionary<string, long>();
 }

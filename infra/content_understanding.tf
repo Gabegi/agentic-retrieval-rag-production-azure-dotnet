@@ -51,8 +51,10 @@ resource "azurerm_role_assignment" "func_content_understanding_user" {
 # app's managed identity, whose "Cognitive Services User" assignment above is
 # exactly what authorizes it - no human role grant, no PATCH by hand.
 #
-# Keys are MODEL names, values are DEPLOYMENT names: gpt-4.1-mini ->
-# var.openai_mini_deployment ("gpt-4.1-mini"), text-embedding-3-large ->
+# Keys are MODEL names, values are DEPLOYMENT names: gpt-5.4-mini ->
+# var.openai_mini_deployment (whose value is still the string "gpt-4.1-mini" -
+# a deployment name deliberately left unrenamed when the model moved off
+# gpt-4.1-mini on 2026-08-27, see ai_deployments.tf), text-embedding-3-large ->
 # var.openai_embedding_deployment ("embedding-3-large" - note the deployment
 # name is NOT the model name here; an earlier version of this comment showed
 # the wrong value). Not driven from Terraform for the original reason: data

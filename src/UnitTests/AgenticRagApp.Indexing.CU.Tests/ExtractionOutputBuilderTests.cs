@@ -1,6 +1,7 @@
 using AgenticRagApp.Common.Models;
 using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Indexing.CU.Services;
+using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 
 namespace RagApp.UnitTests.PdfExtraction;
 
@@ -148,6 +149,74 @@ public class ExtractionOutputBuilderTests
 
         Assert.IsNull(output.BilledPagesStandard);
         Assert.IsNull(output.BilledContextualizationTokens);
+    }
+
+    [TestMethod]
+    public void BuildUsages_CarriesThePerModelTokenMapPerDocument()
+    {
+        // The per-document grain is the point (2026-08-27): the run total already existed, but
+        // only a per-document map divided by that document's pages answers "real tokens per
+        // page" - the figure that sizes MaxExtractionParallelism against the deployment's TPM
+        // ceiling. The CU meter next to it cannot: ContextualizationTokens bills a flat 1,000
+        // per page, so it is the same number for every corpus.
+        var file = Ok("doc.pdf") with
+        {
+            Usage = new CuUsage(2, 2000, new Dictionary<string, int>
+            {
+                ["gpt-5.4-mini-input"]  = 7940,
+                ["gpt-5.4-mini-output"] = 464,
+            }),
+        };
+
+        var usages = ExtractionOutputBuilder.BuildUsages([file]);
+
+        Assert.AreEqual(1, usages.Count);
+        Assert.AreEqual(7940, usages[0].TokensByModel["gpt-5.4-mini-input"]);
+        Assert.AreEqual(464,  usages[0].TokensByModel["gpt-5.4-mini-output"]);
+        // The meter and the real tokens are different numbers and must both survive the lift.
+        Assert.AreEqual(2000, usages[0].ContextualizationTokens);
+    }
+
+    [TestMethod]
+    public void BuildWordConfidences_SkipsFilesWithNoMeasurementAndKeepsBlobOrder()
+    {
+        // Same absent-is-not-a-row contract as BuildUsages: a document the service reported no
+        // word confidences for must not appear as a row of zeros, because zero confidence is a
+        // real and far worse outcome than no measurement.
+        var files = new[]
+        {
+            Ok("b.pdf") with { WordConfidence = new WordConfidenceSummary(10, 0.4, 0.4, 0.8, 0.75) },
+            Ok("a.pdf") with { WordConfidence = new WordConfidenceSummary(5,  0.9, 0.9, 0.95, 0.94) },
+            Ok("c.pdf"),
+        };
+
+        var confidences = ExtractionOutputBuilder.BuildWordConfidences(files);
+
+        // Blob-name order, for the same diff-cleanly reason as the other lifts.
+        CollectionAssert.AreEqual(
+            new[] { "a.pdf", "b.pdf" },
+            confidences.Select(c => c.BlobName).ToArray());
+        Assert.AreEqual(0.4, confidences[1].Summary.Min, 1e-9);
+    }
+
+    [TestMethod]
+    public void BuildTokensByModel_SumsKeyByKeyAndSkipsDocumentsWithoutUsage()
+    {
+        // Keys are the service's to define, so they are summed verbatim and never parsed. A
+        // document whose analysis reported no usage contributes nothing rather than zeroing a
+        // key - the run total has to stay attributable to the documents that actually billed.
+        var files = new[]
+        {
+            Ok("a.pdf") with { Usage = new CuUsage(1, 1000, new Dictionary<string, int> { ["m-input"] = 100, ["m-output"] = 10 }) },
+            Ok("b.pdf") with { Usage = new CuUsage(1, 1000, new Dictionary<string, int> { ["m-input"] = 250 }) },
+            Ok("c.pdf"),
+        };
+
+        var totals = ExtractionOutputBuilder.BuildTokensByModel(files);
+
+        Assert.AreEqual(350, totals["m-input"]);
+        Assert.AreEqual(10,  totals["m-output"]);
+        Assert.AreEqual(2,   totals.Count);
     }
 
     [TestMethod]

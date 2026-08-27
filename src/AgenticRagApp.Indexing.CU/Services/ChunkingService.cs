@@ -31,6 +31,11 @@ public class ChunkingService : IChunkingService
 
     public string Name => "TwoAxisChunking";
 
+    // Cap on the untagged-family-member IDs carried in the metrics row - the same 20 the metrics
+    // type uses for ZeroChunkDocumentIds, for the same Durable row-size reason. A corpus with
+    // more than 20 of these has a systemic tagging problem, which the first 20 already say.
+    private const int MaxUntaggedFamilyIdsReported = 20;
+
     public ChunkingService(
         DeclaredBoundaryStrategy declaredBoundary,
         RecursiveStrategy        recursive,
@@ -231,11 +236,26 @@ public class ChunkingService : IChunkingService
 
             var sourceDocumentIds = docs.Select(d => d.SourceId).Distinct(StringComparer.Ordinal).ToList();
 
+            // Stamped here for the same reason as the two dropped-chunk counts: Compute sees a
+            // chunk list, and this is a fact about the DOCUMENTS - resolved in step 1, held on
+            // the state, and gone from anything downstream. Capped for the same Durable row-size
+            // reason as the metrics type's other ID lists; the count is not carried separately
+            // because a truncated list already means "more than the cap".
+            var untaggedFamilyMembers = docs
+                .Where(d => state.IsInMultiMemberFamily(d.SourceId)
+                         && string.IsNullOrWhiteSpace(state.FamilyOf(d.SourceId)?.DomainTag))
+                .Select(d => d.SourceId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .Take(MaxUntaggedFamilyIdsReported)
+                .ToList();
+
             // ResidueChunksDropped is stamped here rather than inside Compute: the dropped chunks
             // are not in allChunks by this point, so the count only exists on the state.
             var stats             = ChunkingStageMetrics.Compute(allChunks, Name, sourceDocumentIds)
                                     with { ResidueChunksDropped = state.ResidueDropped,
-                                           TocChunksDropped     = state.TocDropped };
+                                           TocChunksDropped     = state.TocDropped,
+                                           UntaggedFamilyMemberIds = untaggedFamilyMembers };
 
             state.Stats = stats;
 

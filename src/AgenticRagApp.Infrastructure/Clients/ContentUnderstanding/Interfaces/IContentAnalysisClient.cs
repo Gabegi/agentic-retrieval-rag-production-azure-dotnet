@@ -31,13 +31,27 @@ public sealed record ContentAnalysis(AnalysisResult Result, CuUsage? Usage, stri
 // "gpt-4.1-mini-input": 6178) - deliberately NOT split into model/direction parts here, since
 // the key format is the service's to define, not this record's to guess. Empty when the
 // response carried no token map.
+//
+// DocumentPagesMinimal/Basic are the two cheaper page meters of the documented usage node
+// (minimal/basic/standard). prebuilt-documentSearch bills everything Standard, so both read
+// null on every response today - they are captured so that an analyzer switch to a cheaper
+// tier cannot silently zero the page bill, the exact failure mode this record exists to
+// prevent (2026-08-27, cu-payload-usage-review.md). The audio/video hour meters stay out:
+// this pipeline analyzes PDFs only.
 public sealed record CuUsage(
     int? DocumentPagesStandard,
     int? ContextualizationTokens,
     IReadOnlyDictionary<string, int> TokensByModel)
 {
+    public int? DocumentPagesMinimal { get; init; }
+    public int? DocumentPagesBasic   { get; init; }
+
     public static CuUsage From(AnalyzeUsageDetails details) => new(
         details.DocumentPagesStandard,
         details.ContextualizationTokens,
-        details.Tokens ?? new Dictionary<string, int>());
+        details.Tokens ?? new Dictionary<string, int>())
+    {
+        DocumentPagesMinimal = details.DocumentPagesMinimal,
+        DocumentPagesBasic   = details.DocumentPagesBasic,
+    };
 }

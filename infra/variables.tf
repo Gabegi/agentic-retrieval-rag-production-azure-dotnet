@@ -43,23 +43,6 @@ variable "openai_eval_deployment" {
   default     = "gpt-4o-eval"
 }
 
-variable "openai_sandbox_deployment" {
-  type        = string
-  description = "Deployment name for the sandbox project's own gpt-5.4-mini deployment (ai_sandbox.tf). Separate from the application's deployments, and on a model the app does not use, so neither can consume the other's quota."
-  default     = "gpt-5.4-mini-sandbox"
-}
-
-variable "sandbox_deployment_capacity" {
-  type        = number
-  description = "Provisioned capacity in K TPM for the sandbox deployment (ai_sandbox.tf). This is the sandbox's hard throughput ceiling, so raise it deliberately, not reflexively. 50 is a small slice of the 1000 K TPM gpt-5.4-mini pool, which is otherwise unused - and since this is the only deployment on that model, it is also the effective cap on the pool's total consumption."
-  default     = 50
-
-  validation {
-    condition     = var.sandbox_deployment_capacity > 0 && var.sandbox_deployment_capacity <= 100
-    error_message = "sandbox_deployment_capacity must be between 1 and 100 K TPM. Above that the sandbox stops being a bounded slice of the account's gpt-5.4-mini quota; if the sandbox genuinely needs more, change this ceiling in a reviewed commit rather than in a .tfvars file."
-  }
-}
-
 variable "sandbox_user_object_ids" {
   type        = list(string)
   description = "AAD object IDs granted Azure AI Developer and Cognitive Services OpenAI User on the sandbox Foundry project - and on nothing else. Accepts an Entra group's object ID as readily as a user's; a group is preferable, since membership changes then need no terraform apply. Gated on var.environment == \"development\" like dev_developer_object_ids. MUST NOT be reused for grants on the search service or data storage account - see ai_sandbox.tf for why that omission is the actual data boundary."
@@ -111,6 +94,6 @@ variable "dev_eval_service_principal_object_id" {
 
 variable "openai_mini_deployment" {
   type        = string
-  description = "Deployment name for the gpt-4.1-mini model that Content Understanding's prebuilt analyzers require (see ai_deployments.tf). Not used by the application's own OpenAI calls - ContentAnalysisClient passes it per analyze request via modelDeployments (app setting OPENAI_MINI_DEPLOYMENT, function_app.tf)."
+  description = "Deployment name for the completion model Content Understanding's prebuilt analyzers resolve against - gpt-5.4-mini since 2026-08-27, see ai_deployments.tf. The default value is still the string \"gpt-4.1-mini\" on purpose: it is the DEPLOYMENT name, kept stable across the model change so terraform doesn't destroy and recreate the deployment (same convention as openai_gpt_deployment/openai_extraction_deployment, which name gpt-4.1 but run gpt-5.4). Not used by the application's own OpenAI calls - ContentAnalysisClient passes it per analyze request via modelDeployments (app setting OPENAI_MINI_DEPLOYMENT, function_app.tf)."
   default     = "gpt-4.1-mini"
 }

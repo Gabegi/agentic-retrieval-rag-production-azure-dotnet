@@ -41,10 +41,13 @@ public class IndexerConfig
     // ContentUnderstandingDefaultsSetup verifies at host startup (from this value, the two
     // below and OpenAiEmbeddingDeployment) and writes only when missing or wrong.
     public string OpenAiEmbeddingModelName     { get; init; } = "text-embedding-3-large";
-    // The gpt-4.1-mini deployment Content Understanding's prebuilt analyzers resolve against
-    // (infra/ai_deployments.tf "mini"). Consumed only by ContentUnderstandingDefaultsSetup -
-    // the app's own OpenAI calls never touch it. Default matches infra/variables.tf
-    // openai_mini_deployment.
+    // The DEPLOYMENT Content Understanding's prebuilt analyzers resolve against
+    // (infra/ai_deployments.tf "mini", serving gpt-5.4-mini since 2026-08-27). Consumed only by
+    // ContentUnderstandingDefaultsSetup - the app's own OpenAI calls never touch it. Default
+    // matches infra/variables.tf openai_mini_deployment, whose value is still the string
+    // "gpt-4.1-mini" because it is a deployment name kept stable across the model change - do
+    // not read it as the model name. That lives in
+    // ContentUnderstandingDefaultsSetup.MiniModelName.
     public string OpenAiMiniDeployment         { get; init; } = "gpt-4.1-mini";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
 
