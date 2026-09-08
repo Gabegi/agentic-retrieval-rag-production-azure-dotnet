@@ -86,8 +86,12 @@ internal static class CuPageHelper
             ? null
             : new PageDimensions(page.PageNumber, page.Width, page.Height, unit ?? "");
 
-    // No polygons: CU encodes geometry as an opaque Source string, not typed points - the
-    // empty Polygon is honest, and LineInfo's highlight-on-source consumer does not exist yet.
+    // No polygons - BY COST, not by capability. Line geometry is readable: l.Source decodes
+    // through CuGeometryHelper exactly as the tables' and figures' does (2026-09-08). It stays
+    // dropped because a polygon per text line was 178 KB per document and 57% of the whole
+    // extraction payload (see ChunkStructure), and LineInfo's highlight-on-source consumer
+    // still does not exist. Tables and figures are one quad per element, which is why they
+    // were worth taking and this is not.
     internal static List<LineInfo> BuildLines(DocumentContent document) =>
         [.. (document.Pages ?? Enumerable.Empty<DocumentPage>())
             .SelectMany(p => (p.Lines ?? Enumerable.Empty<DocumentLine>())

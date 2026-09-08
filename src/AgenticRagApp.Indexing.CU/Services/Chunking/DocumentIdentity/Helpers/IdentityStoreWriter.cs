@@ -42,7 +42,10 @@ public static class IdentityStoreWriter
             if (!familyIdOf.TryGetValue(d.SourceId, out var familyId)) continue;
 
             var record = new DocumentIdentityRecord(
-                d.SourceId, d.Title, d.DomainTag, w.Vector, familyId, d.Hash, embeddingModelId);
+                d.SourceId, d.Title, d.DomainTag, w.Vector, familyId, d.Hash, embeddingModelId)
+            {
+                TaggedAtHash = d.TaggedAtHash,
+            };
 
             if (IsUnchanged(record, persisted.GetValueOrDefault(d.SourceId), freshVectors.ContainsKey(d.SourceId)))
             {
@@ -91,6 +94,7 @@ public static class IdentityStoreWriter
         && stored.FamilyId         == candidate.FamilyId
         && stored.Title            == candidate.Title
         && stored.DomainTag        == candidate.DomainTag
+        && stored.TaggedAtHash     == candidate.TaggedAtHash
         && stored.EmbeddingModelId == candidate.EmbeddingModelId
         && stored.Vector.Length    == candidate.Vector.Length;
 }

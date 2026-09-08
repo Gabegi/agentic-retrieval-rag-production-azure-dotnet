@@ -7,6 +7,7 @@ using AgenticRagApp.Indexing.CU;
 using AgenticRagApp.Indexing.CU.Services;
 using AgenticRagApp.Indexing.CU.Utils;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
+using AgenticRagApp.Infrastructure.Clients.DomainClassification;
 using AgenticRagApp.Observability.Reports;
 
 namespace RagApp.UnitTests.PdfExtraction;
@@ -103,6 +104,7 @@ public class ServiceCollectionExtensionsTests
         services.AddSingleton(new Mock<IEmbeddingClient>().Object);
         services.AddSingleton(new Mock<IPipelineArtifactWriter>().Object);
         services.AddSingleton(new Mock<IDocumentIdentityStore>().Object);
+        services.AddSingleton(new Mock<IDomainClassifier>().Object);
 
         services.AddIndexing(Config());
 

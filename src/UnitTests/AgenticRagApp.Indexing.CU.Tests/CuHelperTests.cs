@@ -195,6 +195,61 @@ public class CuHelperTests
         Assert.IsNotNull(mapped.PageSpans[0].Dimensions);
     }
 
+    // The A3 check from docs/2609/260908/cu-payload-additions-action-plan.md, at the one hop
+    // this can be tested at: run C's capture contained no WordConfidence node, and the three
+    // candidate causes were the summariser, the mapper->ExtractedFile hop and the report's
+    // blob-key match. This closes the first: typed words with a confidence DO reach
+    // MappedDocument.WordConfidence, summarised across every page.
+    [TestMethod]
+    public void WordConfidenceIsSummarisedAcrossEveryPage()
+    {
+        var mapped = Map(FixtureWithWords(0.9f, 0.5f, 0.7f));
+
+        var confidence = mapped.WordConfidence;
+        Assert.IsNotNull(confidence);
+        Assert.AreEqual(3,   confidence.WordCount);
+        Assert.AreEqual(0.5, confidence.Min,  0.0001);
+        Assert.AreEqual(0.7, confidence.P50,  0.0001);
+        Assert.AreEqual(0.7, confidence.Mean, 0.0001);
+    }
+
+    [TestMethod]
+    public void WordsWithNoReportedConfidence_YieldNoMeasurement_NotZero()
+    {
+        // Absent, not 0 - the same rule the rest of the mapper follows, and what the report
+        // shows as a blank cell rather than a perfectly-bad document.
+        Assert.IsNull(Map(FixtureWithWords(null, null)).WordConfidence);
+    }
+
+    // The standard fixture's two pages, with words spread over them: the first word on page 1,
+    // the rest on page 2, so a summariser that only walked one page would be visible.
+    private static DocumentContent FixtureWithWords(params float?[] confidences)
+    {
+        var pageTwoStart = Md.IndexOf("## Sectie Twee", StringComparison.Ordinal);
+
+        DocumentWord Word(float? confidence) =>
+            ContentUnderstandingModelFactory.DocumentWord(
+                "woord", null, ContentUnderstandingModelFactory.ContentSpan(0, 5), confidence);
+
+        return ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            pages:
+            [
+                ContentUnderstandingModelFactory.DocumentPage(
+                    pageNumber: 1, width: null, height: null,
+                    spans: [ContentUnderstandingModelFactory.ContentSpan(0, pageTwoStart)],
+                    angle: null,
+                    words: [Word(confidences[0])],
+                    lines: null, barcodes: null, formulas: null),
+                ContentUnderstandingModelFactory.DocumentPage(
+                    pageNumber: 2, width: null, height: null,
+                    spans: [ContentUnderstandingModelFactory.ContentSpan(pageTwoStart, Md.Length - pageTwoStart)],
+                    angle: null,
+                    words: [.. confidences.Skip(1).Select(Word)],
+                    lines: null, barcodes: null, formulas: null),
+            ]);
+    }
+
     // --- Furniture --------------------------------------------------------------
 
     [TestMethod]
@@ -309,6 +364,102 @@ public class CuHelperTests
         Assert.AreEqual(1, mapped.PageNumber);
     }
 
+    // --- Geometry (A1) ---------------------------------------------------------------
+    //
+    // The Source string decoded into TableInfo.Regions / FigureInfo.Regions, via the SDK's own
+    // DocumentSource.Parse. Coordinate VALUES are round-tripped; nothing asserts on formatting.
+
+    [TestMethod]
+    public void TableRegionsComeFromTheSourceString()
+    {
+        var table = TableWithSource("D(1,1.0,2.0,3.0,2.0,3.0,4.0,1.0,4.0)");
+
+        var regions = Map(Fixture(tables: [table])).Structure.Tables.Single().Regions;
+
+        Assert.AreEqual(1, regions.Count);
+        Assert.AreEqual(1, regions[0].PageNumber);
+        Assert.AreEqual(4, regions[0].Polygon.Count);
+        Assert.AreEqual(1.0f, regions[0].Polygon[0].X, 0.0001);
+        Assert.AreEqual(2.0f, regions[0].Polygon[0].Y, 0.0001);
+        Assert.AreEqual(1.0f, regions[0].Polygon[3].X, 0.0001);
+        Assert.AreEqual(4.0f, regions[0].Polygon[3].Y, 0.0001);
+    }
+
+    [TestMethod]
+    public void ATableSpanningTwoPagesYieldsOneRegionPerPage()
+    {
+        // The whole reason Regions is a list: the anchor PageNumber reports the FIRST page
+        // only, so a two-page table's second page exists nowhere else.
+        var table = TableWithSource(
+            "D(1,1.0,2.0,3.0,2.0,3.0,4.0,1.0,4.0);D(2,1.0,0.5,3.0,0.5,3.0,2.0,1.0,2.0)");
+
+        var mapped = Map(Fixture(tables: [table])).Structure.Tables.Single();
+
+        Assert.AreEqual(2, mapped.Regions.Count);
+        Assert.AreEqual(1, mapped.Regions[0].PageNumber);
+        Assert.AreEqual(2, mapped.Regions[1].PageNumber);
+        Assert.AreEqual(1, mapped.PageNumber);   // the anchor is still page 1
+    }
+
+    [TestMethod]
+    public void NoSourceMeansNoRegions_AndNoWarning()
+    {
+        var mapped = Map(Fixture(tables: [TableWithSource(null)]));
+
+        Assert.AreEqual(0, mapped.Structure.Tables.Single().Regions.Count);
+        Assert.IsFalse(mapped.Warnings.Any(w => w.Contains("geometry Source", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public void AMalformedSourceLosesTheRegionAndWarns_NeverTheDocument()
+    {
+        var mapped = Map(Fixture(tables: [TableWithSource("D(oops")]));
+
+        Assert.AreEqual(0, mapped.Structure.Tables.Single().Regions.Count);
+        Assert.AreEqual(1, mapped.Warnings.Count(w => w.Contains("1 of 1 table(s)", StringComparison.Ordinal)));
+        // The rest of the mapping is untouched - map-what's-there, not fail-the-file.
+        Assert.AreEqual("Titel Document", mapped.Title);
+    }
+
+    [TestMethod]
+    public void APageOnlySourceKeepsThePageWithAnEmptyPolygon_NotAFabricatedOne()
+    {
+        var regions = Map(Fixture(tables: [TableWithSource("D(2)")])).Structure.Tables.Single().Regions;
+
+        Assert.AreEqual(1, regions.Count);
+        Assert.AreEqual(2, regions[0].PageNumber);
+        Assert.AreEqual(0, regions[0].Polygon.Count);
+    }
+
+    [TestMethod]
+    public void FigureRegionsComeFromTheSameParser()
+    {
+        var figure = ContentUnderstandingModelFactory.DocumentFigure(
+            kind: "unknown", id: "1.1",
+            source: "D(2,0.5,0.5,2.5,0.5,2.5,3.5,0.5,3.5)",
+            span: SpanOf("Meer inhoud hier."), elements: null,
+            caption: null, footnotes: null, description: "Een schema.", role: null);
+
+        var regions = Map(Fixture(figures: [figure])).Structure.Figures.Single().Regions;
+
+        Assert.IsNotNull(regions);
+        Assert.AreEqual(2, regions.Single().PageNumber);
+        Assert.AreEqual(4, regions.Single().Polygon.Count);
+        Assert.AreEqual(0.5f, regions.Single().Polygon[0].X, 0.0001);
+    }
+
+    private static DocumentTable TableWithSource(string? source) =>
+        ContentUnderstandingModelFactory.DocumentTable(
+            rowCount: 1, columnCount: 1,
+            cells:
+            [
+                ContentUnderstandingModelFactory.DocumentTableCell(
+                    kind: null, rowIndex: 0, columnIndex: 0, rowSpan: null, columnSpan: null,
+                    content: "2203", source: null, span: null, elements: null),
+            ],
+            source: source, span: SpanOf("Inhoud van sectie een."),
+            caption: null, footnotes: null, role: null);
+
     // --- Annotations / hyperlinks ----------------------------------------------------
 
     [TestMethod]
@@ -345,6 +496,68 @@ public class CuHelperTests
         Assert.AreEqual("https://www.microsoft.com", mapped.Uri);
         Assert.AreEqual(1, mapped.PageNumber);
     }
+
+    // --- Fields / summary (A2) --------------------------------------------------------
+    //
+    // fields.Summary is the ONE field prebuilt-documentSearch returns, and the pipeline paid
+    // for it on every document of every run while reading it nowhere. Report-only: nothing
+    // here or downstream indexes it.
+
+    [TestMethod]
+    public void SummaryFieldIsMappedWithItsConfidenceAndGroundingCount()
+    {
+        var summary = Map(WithSummaryField("Een samenvatting van het document.")).Summary;
+
+        Assert.IsNotNull(summary);
+        Assert.AreEqual("Een samenvatting van het document.", summary.Text);
+        Assert.AreEqual(0.774, summary.Confidence!.Value, 0.0001);
+        // The COUNT, not the spans (user decision 2026-09-08) - two grounding spans in.
+        Assert.AreEqual(2, summary.GroundingSpanCount);
+    }
+
+    [TestMethod]
+    public void NoFieldsMeansNoSummary()
+    {
+        Assert.IsNull(Map(Fixture()).Summary);
+    }
+
+    [TestMethod]
+    public void ASummaryFieldCarryingNoText_IsAbsentRatherThanAnEmptyString()
+    {
+        Assert.IsNull(Map(WithSummaryField("   ")).Summary);
+    }
+
+    [TestMethod]
+    public void SummaryTextIsCappedForTheReport_AndTheTruncationIsReportedWithIt()
+    {
+        // The cap is a report concern, so the full text survives on the model and only the
+        // report projection is trimmed - otherwise "the summary ended there" and "the report
+        // cut it" would be indistinguishable.
+        var long_ = new string('a', DocumentSummary.ReportTextCap + 50);
+        var summary = Map(WithSummaryField(long_)).Summary!;
+
+        Assert.AreEqual(DocumentSummary.ReportTextCap + 50, summary.Text.Length);
+        Assert.AreEqual(DocumentSummary.ReportTextCap + 1, summary.TextForReport.Length); // + the ellipsis
+        Assert.IsTrue(summary.TruncatedInReport);
+
+        var short_ = Map(WithSummaryField("Kort.")).Summary!;
+        Assert.AreEqual("Kort.", short_.TextForReport);
+        Assert.IsFalse(short_.TruncatedInReport);
+    }
+
+    // A response carrying nothing but markdown and one Summary field - the field is what is
+    // under test, so no pages, paragraphs or sections are needed.
+    private static DocumentContent WithSummaryField(string text) =>
+        ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            fields: new Dictionary<string, ContentField>(StringComparer.Ordinal)
+            {
+                ["Summary"] = ContentUnderstandingModelFactory.ContentStringField(
+                    text,
+                    [SpanOf("Intro tekst."), SpanOf("Meer inhoud hier.")],
+                    0.774f,
+                    null),
+            });
 
     // --- Map-what's-there-and-warn ------------------------------------------------
 

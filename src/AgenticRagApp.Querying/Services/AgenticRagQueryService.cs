@@ -213,7 +213,8 @@ public class AgenticRagQueryService : IRagQueryService
             Temperature:        null, MaxOutputTokens: null, TopP: null, TopK: null,
             FrequencyPenalty:   null, PresencePenalty: null, Seed: null,
             ResponseFormat:     null, StopSequences: null,
-            Citations:          citations);
+            Citations:          citations,
+            SubQueries:         KnowledgeBaseActivitySummary.CollectSubQueries(result.Activity));
     }
 
     // Called only once a guard has already fired. Always logs; returns whether the caller

@@ -1,18 +1,13 @@
-# ---------------------------------------------------------------------------
-# Windows Function App (dotnet-isolated, EP1 Premium) - durable indexing
-# pipeline. Reuses the storage account, App Insights, Search, and Foundry
-# resources already defined elsewhere rather than provisioning its own.
-# VNet-integrated into the shared app subnet (outbound) with a private
-# endpoint (inbound), matching the hub-firewall-routed architecture.
-# ---------------------------------------------------------------------------
+# Windows Function App (dotnet-isolated, EP1) running the durable indexing pipeline. Reuses the
+# storage, App Insights, Search and Foundry resources defined elsewhere; VNet-integrated for
+# outbound, private endpoint for inbound, egress via the hub firewall like everything else.
 
 resource "azurerm_service_plan" "func" {
   name                = "con-plan-func-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = data.azurerm_resource_group.data.name
   location            = var.location
   os_type             = "Windows"
-  # Elastic Premium, not P1v3 - matches the earlier decision to run the
-  # durable indexing pipeline on a Premium (Elastic) plan.
+  # Elastic Premium, not P1v3 - the durable pipeline runs on an Elastic plan by earlier decision.
   sku_name = "EP1"
 
   tags = local.common_tags
@@ -26,21 +21,15 @@ resource "azurerm_windows_function_app" "indexer" {
   storage_account_name          = azurerm_storage_account.func.name
   storage_uses_managed_identity = true
   virtual_network_subnet_id     = azurerm_subnet.workload["func"].id
-  # Deny-by-default public access; in development the dev_allowed_ips list is
-  # allowed through on the main site and (since 2026-08-25) on the SCM site
-  # too, so Kudu / the log stream work from a dev machine. The app-deploy
-  # pipeline runs on a Microsoft-hosted agent with no VNet access, so it opens
-  # a scoped Allow rule on the SCM site for its own runner IP via
-  # `az functionapp config access-restriction add` immediately before the zip
-  # deploy, then removes it again immediately after - see
-  # 4-deploy-application.yml.
+  # Deny-by-default. In development dev_allowed_ips is allowed on the main site and (since
+  # 2026-08-25) the SCM site. The app-deploy pipeline (base/deploy-function-app.yml) runs on a
+  # hosted agent with no VNet access, so it adds a temporary SCM allow rule for its runner IP right
+  # before the zip deploy and removes it right after.
   public_network_access_enabled = true
-  # storage_uses_managed_identity only covers AzureWebJobsStorage/Durable
-  # Functions (blob/queue/table). The EP1 plan's content share still needs a
-  # key-based connection string - Azure Files/SMB has no managed-identity
-  # auth path - plus WEBSITE_CONTENTOVERVNET so the platform reaches it via
-  # the private endpoint (azurerm_private_endpoint.stfunc_file in storage.tf)
-  # instead of the public endpoint.
+  # storage_uses_managed_identity covers AzureWebJobsStorage/Durable (blob/queue/table) only. The
+  # EP1 content share stays key-based (Azure Files has no managed-identity auth) and is reached over
+  # its private endpoint (azurerm_private_endpoint.storage["stfunc-file"], storage.tf) via
+  # WEBSITE_CONTENTOVERVNET - see app_settings.
 
   identity {
     type = "SystemAssigned"
@@ -56,12 +45,9 @@ resource "azurerm_windows_function_app" "indexer" {
     ip_restriction_default_action     = "Deny"
     scm_ip_restriction_default_action = "Deny"
 
-    # Azure caps IpSecurityRestriction.Name at 32 characters, and a dotted IPv4 address is
-    # up to 15 once dots become dashes ("255-255-255-255"), so the prefix has at most 17 to
-    # play with. "dev-direct-access-" was 18: it fit every IP allowlisted until 2026-08-12
-    # and then failed the apply outright on the first one with three 3-digit octets after
-    # the first ("192-168-100-151" = 15, total 33). "dev-access-" is 11, leaving room for
-    # any valid address.
+    # Azure caps IpSecurityRestriction.Name at 32 chars and a dashed IPv4 is up to 15, so the
+    # prefix gets 17. "dev-direct-access-" (18) failed the apply on 192.168.100.151 on 2026-08-12;
+    # "dev-access-" (11) fits any address.
     dynamic "ip_restriction" {
       for_each = var.environment == "development" ? var.dev_allowed_ips : []
       content {
@@ -72,15 +58,10 @@ resource "azurerm_windows_function_app" "indexer" {
       }
     }
 
-    # Same dev allowlist, mirrored onto the SCM site (Kudu console, log stream) - without it
-    # the Deny default above blocks Kudu from everywhere, which was deliberate until the first
-    # live CU runs made log access from a dev machine worth having. Same variable as the main
-    # site on purpose: one allowlist to maintain.
-    #
-    # With this block, terraform owns the SCM rule list - which also cleans up any temp rule
-    # the app-deploy pipeline leaves behind if it dies between its add and its remove. The one
-    # race to know about: an infra apply DURING a running app deploy strips the deploy's temp
-    # runner-IP rule mid-push and fails that deploy; just rerun it.
+    # Same allowlist on the SCM site (Kudu, log stream) - one list to maintain. Terraform owns the
+    # SCM rule list, so it also removes any temp rule the deploy pipeline leaves behind if it dies
+    # between add and remove. Known race: an infra apply during an app deploy strips the deploy's
+    # runner-IP rule and fails that deploy - rerun it.
     dynamic "scm_ip_restriction" {
       for_each = var.environment == "development" ? var.dev_allowed_ips : []
       content {
@@ -99,82 +80,52 @@ resource "azurerm_windows_function_app" "indexer" {
   app_settings = {
     "FUNCTIONS_WORKER_RUNTIME"              = "dotnet-isolated"
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = data.azurerm_application_insights.main.connection_string
-    # Drives IHostEnvironment.IsDevelopment() in Program.cs - gates dev-only diagnostics
-    # (console exporters) and IRunReportWriter's pipeline-reports writes. Derived from
-    # var.environment so it flips to "Production" automatically on a prod deploy rather
-    # than needing a separate var kept in sync.
-    #
-    # Both variables set deliberately: the isolated-worker Functions host determines
-    # IHostEnvironment.EnvironmentName from AZURE_FUNCTIONS_ENVIRONMENT specifically (its
-    # own host-configuration step calls .UseEnvironment() off that value, which takes
-    # precedence over the generic host's DOTNET_ENVIRONMENT handling once deployed) -
-    # DOTNET_ENVIRONMENT alone was set first and confirmed NOT sufficient (pipeline-reports
-    # stayed empty even after it was live and the app restarted).
+    # Drives IHostEnvironment.IsDevelopment() (dev-only diagnostics, IRunReportWriter). Both set on
+    # purpose: the isolated-worker host takes its environment from AZURE_FUNCTIONS_ENVIRONMENT, and
+    # DOTNET_ENVIRONMENT alone was confirmed insufficient (pipeline-reports stayed empty).
     "DOTNET_ENVIRONMENT"          = var.environment == "development" ? "Development" : "Production"
     "AZURE_FUNCTIONS_ENVIRONMENT" = var.environment == "development" ? "Development" : "Production"
-    # Durable Functions managed-identity auth - no connection string needed
+    # Durable Functions over managed identity - no connection string.
     "AzureWebJobsStorage__accountName" = azurerm_storage_account.func.name
     "AzureWebJobsStorage__credential"  = "managedidentity"
-    # Content share: key-based (see note above azurerm_windows_function_app.indexer)
+    # Content share: key-based, over the private endpoint (see the resource comment above).
     "WEBSITE_CONTENTOVERVNET"                  = "1"
     "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING" = azurerm_storage_account.func.primary_connection_string
     "WEBSITE_CONTENTSHARE"                     = azurerm_storage_share.func_content.name
-    # WEBSITE_CONTENTOVERVNET alone doesn't make the site's own DNS resolution
-    # (used by Kudu to resolve the content share's *.file.core.windows.net)
-    # honor the VNet-linked private DNS zone - that needs this resolver
-    # explicitly, or it falls back to public DNS and hits the storage
-    # account's public endpoint, which public_network_access_enabled = false
-    # on azurerm_storage_account.func then rejects.
-    "ProtocolsStorage__blobServiceUri" = azurerm_storage_account.data.primary_blob_endpoint
-    "STORAGE_ACCOUNT_URL"              = azurerm_storage_account.data.primary_blob_endpoint
-    "SEARCH_ENDPOINT"                  = "https://${azurerm_search_service.main.name}.search.windows.net"
-    "OPENAI_ENDPOINT"                  = data.azurerm_cognitive_account.foundry.endpoint
-    "OPENAI_EMBEDDING_DEPLOYMENT"      = var.openai_embedding_deployment
-    "OPENAI_GPT_DEPLOYMENT"            = var.openai_gpt_deployment
-    "OPENAI_GPT_MODEL_NAME"            = var.openai_gpt_model_name
-    "OPENAI_EXTRACTION_DEPLOYMENT"     = var.openai_extraction_deployment
-    # Consumed only by ContentUnderstandingDefaultsSetup: at host startup it verifies the
-    # account-wide default model->deployment mapping that prebuilt-documentSearch resolves
-    # against (this value plus OPENAI_EMBEDDING_DEPLOYMENT above) and writes it only when
-    # missing or wrong - replacing the manual defaults PATCH (content_understanding.tf).
+    "ProtocolsStorage__blobServiceUri"         = azurerm_storage_account.data.primary_blob_endpoint
+    "STORAGE_ACCOUNT_URL"                      = azurerm_storage_account.data.primary_blob_endpoint
+    "SEARCH_ENDPOINT"                          = "https://${azurerm_search_service.main.name}.search.windows.net"
+    "OPENAI_ENDPOINT"                          = data.azurerm_cognitive_account.foundry.endpoint
+    "OPENAI_EMBEDDING_DEPLOYMENT"              = var.openai_embedding_deployment
+    "OPENAI_GPT_DEPLOYMENT"                    = var.openai_gpt_deployment
+    "OPENAI_GPT_MODEL_NAME"                    = var.openai_gpt_model_name
+    "OPENAI_EXTRACTION_DEPLOYMENT"             = var.openai_extraction_deployment
+    # Read only by ContentUnderstandingDefaultsSetup, which writes the account-wide default
+    # model->deployment mapping at host startup (see the cognitive_services_user grant below).
     "OPENAI_MINI_DEPLOYMENT" = var.openai_mini_deployment
-    # Same account/endpoint as OPENAI_ENDPOINT above (content_understanding.tf): Content
-    # Understanding is a different data-plane path on the same multi-service account, not a
-    # different resource. This is now the ONLY extraction-backend setting - the Document
-    # Intelligence path it used to sit beside was removed from the application, so
-    # DOCUMENT_INTELLIGENCE_ENDPOINT is gone from here too. Nothing reads it any more; leaving
-    # it set would just be a stale app setting on the Function App.
-    #
-    # Required, not optional, on the indexing side: AddPdfIndexing throws at startup without it
-    # rather than discovering mid-run that it cannot extract anything.
+    # Same account as OPENAI_ENDPOINT - Content Understanding is a data-plane path on it, not a
+    # separate resource (see the cognitive_services_user grant below). The only extraction-backend
+    # setting since the Document Intelligence path was removed. Required: AddPdfIndexing throws at
+    # startup without it.
     "CONTENT_UNDERSTANDING_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
-    # Same account/endpoint again - Content Safety (Prompt Shields) and AI Language
-    # (PII detection) are both exposed on this one AIServices-kind multi-service
-    # account, confirmed live via direct REST calls (2026-08-06): both
-    # text:shieldPrompt and language/:analyze-text return "PermissionDenied" (RBAC),
-    # not 404, so no separate Content Safety/Language resource is needed. RBAC is
-    # already covered too - func_content_understanding_user in
-    # content_understanding.tf grants "Cognitive Services User" on this same
-    # account, whose dataActions is the wildcard Microsoft.CognitiveServices/*.
+    # Same account again: Content Safety (Prompt Shields) and AI Language (PII) both answer on it
+    # (confirmed 2026-08-06 - PermissionDenied, not 404), so no separate resources. Authorized by
+    # azurerm_role_assignment.func["cognitive_services_user"] below.
     "CONTENT_SAFETY_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
     "LANGUAGE_ENDPOINT"       = data.azurerm_cognitive_account.foundry.endpoint
     "SEARCH_INDEX_NAME"       = var.search_index_name
     "KNOWLEDGE_SOURCE_NAME"   = var.knowledge_source_name
     "KNOWLEDGE_BASE_NAME"     = var.knowledge_base_name
 
-    # Windows-only app setting: makes TimerTrigger cron expressions (e.g. ScheduledIndexing's
-    # daily 17:00 run) evaluate against Dutch wall-clock time instead of UTC, so the trigger
-    # stays at 17:00 local time across the DST transition rather than drifting by an hour.
+    # Windows-only: TimerTrigger crons (ScheduledIndexing's daily 17:00) follow Dutch wall-clock
+    # across DST instead of drifting with UTC.
     "WEBSITE_TIME_ZONE" = "W. Europe Standard Time"
   }
 
   tags = local.common_tags
 
-  # Azure auto-links App Insights whenever it sees APPLICATIONINSIGHTS_CONNECTION_STRING
-  # in app_settings above - it injects the "hidden-link: /app-insights-resource-id" tag and
-  # site_config.application_insights_connection_string on the live resource itself, neither
-  # of which is declared here. Without this, every plan sees Azure's own auto-linking as
-  # drift and proposes removing it, only for Azure to re-add it right after apply.
+  # Azure auto-links App Insights from APPLICATIONINSIGHTS_CONNECTION_STRING (hidden-link tag +
+  # site_config connection string). Without this, every plan shows the auto-link as drift.
   lifecycle {
     ignore_changes = [
       tags["hidden-link: /app-insights-resource-id"],
@@ -183,16 +134,15 @@ resource "azurerm_windows_function_app" "indexer" {
   }
 }
 
-#  need this on any EP1 Function App
+# Content share every EP1 Function App needs.
 resource "azurerm_storage_share" "func_content" {
   name               = "con-func-idx-cap-${local.env}-${local.region}-${local.instance}"
   storage_account_id = azurerm_storage_account.func.id
   quota              = 100
 }
 
-# Temporary blob storage for large Durable payloads (extracted docs + chunks
-# between activities) - lives on the function's own storage, not the shared
-# data storage account.
+# Large Durable payloads between activities (extracted docs, chunks) - on the func account, not the
+# shared data account.
 resource "azurerm_storage_container" "indexing_pipeline" {
   name                  = "indexing-pipeline"
   storage_account_id    = azurerm_storage_account.func.id
@@ -221,8 +171,8 @@ resource "azurerm_private_endpoint" "func" {
   tags = local.common_tags
 }
 
-# Payloads here are intermediate/disposable - expire them rather than let
-# them accumulate indefinitely on an account with no other cleanup.
+# Intermediate payloads: expire after 7 days rather than accumulate on an account with no other
+# cleanup.
 resource "azurerm_storage_management_policy" "func" {
   storage_account_id = azurerm_storage_account.func.id
 
@@ -246,20 +196,14 @@ resource "azurerm_storage_management_policy" "func" {
   }
 }
 
-# --- Role assignments -------------------------------------------------------
-# All scoped to the same principal (the indexer's identity) and looped via
-# for_each rather than one resource block each - only scope/role vary.
-
+# Role assignments for the indexer's identity, looped - only scope/role vary. Foundry grants are
+# account-scoped, not project-scoped: the app calls the account endpoint with no project routing,
+# and RBAC only inherits downward.
 locals {
   func_role_assignments = {
-    # Account-wide (not container-scoped): required for AzureWebJobsStorage /
-    # Durable Functions task hub state (storage_uses_managed_identity = true
-    # above) - the Functions host creates and manages its own internal
-    # containers at runtime, and Microsoft's identity-based-connection docs
-    # specify Storage Blob Data Owner at the account level for this, not a
-    # narrower scope. indexing_pipeline_contributor below is already covered
-    # by this grant; it's additive, not a reduction, and only meaningful if
-    # this one is ever narrowed.
+    # Account-level Owner is what Microsoft's identity-based-connection docs require for
+    # AzureWebJobsStorage/Durable (the host creates its own containers at runtime).
+    # indexing_pipeline_contributor is already covered by it; kept additive in case this narrows.
     storage_owner = {
       scope = azurerm_storage_account.func.id
       role  = "Storage Blob Data Owner"
@@ -268,7 +212,7 @@ locals {
       scope = azurerm_storage_container.indexing_pipeline.id
       role  = "Storage Blob Data Contributor"
     }
-    # Durable Functions store orchestration state in queues and tables
+    # Durable orchestration state lives in queues and tables.
     storage_queue_contributor = {
       scope = azurerm_storage_account.func.id
       role  = "Storage Queue Data Contributor"
@@ -277,8 +221,7 @@ locals {
       scope = azurerm_storage_account.func.id
       role  = "Storage Table Data Contributor"
     }
-    # Reads source documents, writes chunks/reports/state back to the data
-    # storage account.
+    # Reads source documents, writes chunks/reports/state.
     data_storage_contributor = {
       scope = azurerm_storage_account.data.id
       role  = "Storage Blob Data Contributor"
@@ -291,14 +234,35 @@ locals {
       scope = azurerm_search_service.main.id
       role  = "Search Service Contributor"
     }
-    # Scoped to the account, not the project: AzureOpenAIClient calls the
-    # account's own endpoint directly (config.OpenAiEndpoint =
-    # data.azurerm_cognitive_account.foundry.endpoint), with no project
-    # routing in the request, so a role granted only on the project
-    # sub-resource wouldn't authorize it (RBAC only inherits downward).
     openai_user = {
       scope = data.azurerm_cognitive_account.foundry.id
       role  = "Cognitive Services OpenAI User"
+    }
+    # Content Understanding, Content Safety (Prompt Shields) and AI Language all run as data-plane
+    # capabilities of this one account - there is no CU resource type and no separate Content
+    # Safety/Language resource (confirmed 2026-08-06: both return PermissionDenied, not 404).
+    # "Cognitive Services User" has the wildcard dataActions Microsoft.CognitiveServices/*, so this
+    # single grant authorizes all three; none has a dedicated built-in role (only
+    # OpenAI/Language/Speech do). Do NOT add a second grant for a new capability here - an identical
+    # (scope, principal, role) tuple is rejected with RoleAssignmentExists.
+    #
+    # CU specifics, since this grant is what makes it work:
+    #   - Analyzer: the prebuilt "prebuilt-documentSearch" (hardcoded in ContentAnalysisClient). No
+    #     custom analyzer - cap-pdf-layout, its provisioner and verifier were deleted 2026-08-25.
+    #   - The prebuilt needs the account-wide default model->deployment mapping (SDK Sample00:
+    #     "required one-time setup per Foundry resource"), written by
+    #     ContentUnderstandingDefaultsSetup (IHostedService) at host startup: GetDefaults, compare,
+    #     UpdateDefaults only when an entry is missing or wrong. Merge-patch, so other consumers'
+    #     entries on this shared account are never touched. Runs under this identity - no human
+    #     grant, no manual PATCH.
+    #   - Mapping keys are MODEL names, values are DEPLOYMENT names:
+    #       gpt-5.4-mini           -> var.openai_mini_deployment      ("gpt-4.1-mini", name frozen)
+    #       text-embedding-3-large -> var.openai_embedding_deployment ("embedding-3-large")
+    #   - Not driven from Terraform: a data-plane write from a hosted pipeline agent would need the
+    #     landing-zone-owned account's firewall opened on every run.
+    cognitive_services_user = {
+      scope = data.azurerm_cognitive_account.foundry.id
+      role  = "Cognitive Services User"
     }
   }
 }

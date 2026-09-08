@@ -2,38 +2,28 @@ resource "azurerm_search_service" "main" {
   name                = "con-srch-cap-${local.env}-${local.region}-${local.instance}"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.data.name
-  # S3, the top of the Basic/Standard family that supports knowledge bases.
-  # Agentic retrieval leans on the semantic ranker, whose concurrency scales
-  # with tier and search units (S1: 3 concurrent + 6 queued per SU; S2/S3: 4
-  # and 8), so the tier sets the ceiling on knowledge-base throughput before
-  # requests start being throttled. Deliberately NOT S3 HD - that variant is
-  # the same SKU with hosting_mode = "highDensity" and allows zero knowledge
-  # bases and zero knowledge sources, which would break agentic retrieval
-  # outright. Upgrades within the Basic/Standard range apply in place, so
-  # this is not a destroy-and-recreate of the service or its indexes.
-  sku                 = "standard3"
+  # S3 - top of the Basic/Standard family that supports knowledge bases. Agentic retrieval leans on
+  # the semantic ranker, whose concurrency scales with tier (S1: 3 concurrent + 6 queued per SU;
+  # S2/S3: 4 + 8), so the tier caps knowledge-base throughput.
+  #   - NOT S3 HD: same SKU with hosting_mode = "highDensity", which allows zero knowledge bases and
+  #     zero knowledge sources - it would break agentic retrieval outright.
+  #   - Upgrades within Basic/Standard apply in place; no destroy/recreate of the service or its
+  #     indexes.
+  sku = "standard3"
 
-  # Enables the semantic ranker - required by the knowledge base / agentic
-  # retrieval queries in KnowledgeService.cs, which always request semantic
-  # ranking regardless of the index's own semantic configuration. Without
-  # this, every query fails with "Semantic Search is not enabled for this
-  # service" (FeatureNotSupportedInService). "standard" is the top plan;
-  # "free" caps at 1,000 queries/month.
+  # Semantic ranker - KnowledgeService.cs always requests semantic ranking; without it every query
+  # fails with FeatureNotSupportedInService. "standard" is the top plan ("free" caps at
+  # 1,000 queries/month).
   semantic_search_sku = "standard"
 
-  # Only flips to true when local.dev_direct_access_ips has entries (development
-  # only) - allowed_ips below still restricts inbound to just those IPs.
+  # Public access only while dev_direct_access_ips has entries (development); allowed_ips still
+  # restricts inbound to exactly those.
   public_network_access_enabled = length(local.dev_direct_access_ips) > 0 ? true : false
-  # NOTE: argument name not verified against provider docs (offline at edit time) -
-  # confirm this is correct via `terraform plan` before applying; if it errors,
-  # check the azurerm_search_service docs for the actual IP-allowlist argument.
-  allowed_ips = local.dev_direct_access_ips
+  allowed_ips                   = local.dev_direct_access_ips
 
-  # Defaults to apiKeyOnly on the data-plane REST endpoint - the indexer's
-  # managed identity authenticates with an AAD bearer token (DefaultAzureCredential),
-  # so without this the service rejects every data-plane call with 403 regardless
-  # of the RBAC roles granted below (search_index_contributor / search_service_contributor
-  # in function_app.tf), since it isn't even considering AAD tokens as a credential type.
+  # The data plane defaults to apiKeyOnly. The indexer authenticates with an AAD bearer token, so
+  # without this every call 403s regardless of the RBAC grants in function_app.tf - AAD isn't even
+  # considered as a credential type.
   local_authentication_enabled = true
   authentication_failure_mode  = "http401WithBearerChallenge"
 
@@ -44,16 +34,11 @@ resource "azurerm_search_service" "main" {
   tags = local.common_tags
 }
 
-# Outbound private connection so the search service itself can reach the
-# Foundry/OpenAI account (public network access disabled there) - needed for
-# the index's AzureOpenAIVectorizer (IndexService.cs) and the knowledge
-# base's AzureOpenAIModel (KnowledgeService.cs), both of which call the
-# account directly from the search service, not from our func/api apps.
-# This is a *shared private link*, a different mechanism from the
-# azurerm_private_endpoint below - it's how Search reaches other network-
-# restricted PaaS resources, not how clients reach Search.
-# Created in "Pending" status - see the azapi block below for how it gets
-# approved.
+# Outbound shared private link so the search service itself can reach the Foundry account (public
+# access disabled there) - the index's AzureOpenAIVectorizer (IndexService.cs) and the knowledge
+# base's AzureOpenAIModel (KnowledgeService.cs) call it from Search, not from our apps. This is how
+# Search reaches other PaaS, not how clients reach Search (that is the private endpoint below).
+# Created "Pending"; approved by the azapi block below.
 resource "azurerm_search_shared_private_link_service" "openai" {
   name               = "con-spl-srch-openai-cap-${local.env}-${local.region}-${local.instance}"
   search_service_id  = azurerm_search_service.main.id
@@ -62,19 +47,16 @@ resource "azurerm_search_shared_private_link_service" "openai" {
   request_message    = "Approve for search knowledge base / vectorizer access to Azure OpenAI"
 }
 
-# --- Auto-approve the shared private link's connection ----------------------
-# azurerm has no resource for Cognitive Services private endpoint
-# connections (unlike Storage/Key Vault, where a private endpoint's
-# is_manual_connection = false gets auto-approved by azurerm itself) - so
-# approving the connection Azure creates on the Foundry account has to go
-# through azapi, an ARM REST passthrough provider, instead.
-
-# Azure creates the privateEndpointConnections child resource on the
-# Foundry account asynchronously after the shared private link request
-# lands, with an auto-generated name that isn't known in advance - this
-# waits before looking it up rather than racing Azure's side effect.
-# Best-effort: if Azure hasn't materialized the connection within 90s, the
-# apply below will fail to find a Pending entry and needs a re-run.
+# --- Auto-approve the shared private link -----------------------------------
+# azurerm has no resource for Cognitive Services private endpoint connections (unlike Storage/Key
+# Vault, where is_manual_connection = false auto-approves), so the approval goes through azapi.
+#   - Azure creates the connection on the Foundry account asynchronously, with an auto-generated
+#     name, so we wait rather than race it. Best-effort: if it isn't there within 90s the apply
+#     fails to find a Pending entry and needs a re-run.
+#   - The connection is matched by exclusion (Pending) on the first apply - Azure exposes no
+#     back-reference to the requesting search service - and on every later run by the exact
+#     description this resource wrote, since a Pending-only filter would then match nothing and
+#     one(...) would return null. one(...) still errors if more than one matches.
 resource "time_sleep" "wait_for_openai_shared_link_connection" {
   depends_on      = [azurerm_search_shared_private_link_service.openai]
   create_duration = "90s"
@@ -91,15 +73,6 @@ data "azapi_resource_list" "foundry_private_endpoint_connections" {
 resource "azapi_update_resource" "approve_openai_shared_link" {
   type = "Microsoft.CognitiveServices/accounts/privateEndpointConnections@2025-06-01"
 
-  # Picks out our shared private link's connection - identified by
-  # exclusion (still Pending) on the first apply, since Azure doesn't
-  # expose a back-reference to the requesting search resource on this
-  # object. On every later plan/apply that connection is already
-  # Approved, so it's re-matched by the exact description this resource
-  # itself wrote below - otherwise the Pending-only filter finds zero
-  # matches once approved and `one(...)` returns null instead of an id.
-  # `one(...)` still deliberately errors if more than one connection
-  # matches at apply time.
   resource_id = one([
     for conn in data.azapi_resource_list.foundry_private_endpoint_connections.output.value :
     conn.id
@@ -117,12 +90,8 @@ resource "azapi_update_resource" "approve_openai_shared_link" {
   }
 }
 
-# Search's own system-assigned identity needs this to call the vectorizer/
-# knowledge-base model - the AzureOpenAIVectorizerParameters built in
-# IndexService.cs and KnowledgeService.cs set no API key, so Search
-# authenticates with its managed identity. Scoped to the account (not the
-# project) for the same reason as func/api's openai_user role assignments -
-# RBAC doesn't inherit upward from a project sub-resource.
+# Search's own identity calls the vectorizer/knowledge-base model with no API key
+# (IndexService.cs, KnowledgeService.cs). Account scope, not project - RBAC only inherits downward.
 resource "azurerm_role_assignment" "search_openai_user" {
   scope                = data.azurerm_cognitive_account.foundry.id
   role_definition_name = "Cognitive Services OpenAI User"

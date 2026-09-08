@@ -329,6 +329,11 @@ public class RagEvaluationTests
         var summary =
             $"[{row.ScenarioName}] ({row.Type}) G={row.Groundedness:F1} R={row.Relevance:F1} C={row.Coherence:F1} Eq={row.Equivalence:F1} " +
             $"Ret={row.Retrieval:F1} F1={row.F1:F2} Cite={row.CitationMatch:F2} Refusal={row.RefusalScore:F1}  " +
+            // The agentic signal, on the live line rather than only in the JSONL: cap/subq
+            // says whether this question was even given the chance to benefit from planning
+            // (subq < need means it was not), and docs says how many documents the answer
+            // ended up standing on.
+            $"cap={row.Capability} subq={row.SubQueryCount}/{row.MinSubQueries} docs={row.DistinctDocumentsCited}  " +
             $"{row.LatencyMs}ms  ${row.CostUsd:F4}  in={row.InputTokens} out={row.OutputTokens} ctx={row.ContextTokens}  ok={row.Succeeded}";
         Console.WriteLine(summary);
         AppendProgress(summary);

@@ -163,6 +163,11 @@ public sealed class RagEvaluator
             Difficulty:      testQuery.Difficulty,
             Type:            testQuery.Type,
             Category:        testQuery.Category,
+            Capability:      testQuery.Capability,
+            MinSubQueries:   testQuery.MinSubQueries,
+            SubQueryCount:   result.SubQueries?.Count ?? -1,
+            SubQueries:      string.Join(" | ", result.SubQueries ?? []),
+            DistinctDocumentsCited: CountDistinctDocuments(result.Citations),
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
             Response:        result.Answer,
@@ -220,6 +225,11 @@ public sealed class RagEvaluator
             Difficulty:      testQuery.Difficulty,
             Type:            testQuery.Type,
             Category:        testQuery.Category,
+            Capability:      testQuery.Capability,
+            MinSubQueries:   testQuery.MinSubQueries,
+            SubQueryCount:   result.SubQueries?.Count ?? -1,
+            SubQueries:      string.Join(" | ", result.SubQueries ?? []),
+            DistinctDocumentsCited: CountDistinctDocuments(result.Citations),
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
             Response:        result.Answer,
@@ -274,6 +284,14 @@ public sealed class RagEvaluator
     }
 
     private static string Normalize(string value) => value.Normalize(NormalizationForm.FormC);
+
+    // How many distinct source documents the answer is standing on. CitationMatch already
+    // measures whether the EXPECTED documents were cited; this measures breadth regardless of
+    // what was expected, which is what separates a cross-document answer from a single-document
+    // one that happened to sound complete. A CrossDocCompare row that scores well on 1 document
+    // has been answered from one sector's cao and presented as general.
+    private static int CountDistinctDocuments(IReadOnlyList<AgenticRagApp.Querying.Models.Citation> citations) =>
+        citations.Select(c => Normalize(c.DocumentId)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
 
     // Retries a judge LLM call on 429 or a stuck-call timeout, honouring the retry-after-ms
     // header when present, falling back to exponential back-off (4 → 8 → 16 → 32 s).

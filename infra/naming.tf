@@ -1,27 +1,15 @@
 locals {
-  # ---------------------------------------------------------------------------
-  # Naming convention, deduced from existing landing zone resources. Each
-  # resource builds its own name from these primitives, inline, where it's
-  # defined - this file only holds the shared convention, not concrete names.
-  #
-  #   Resource groups : con-cap-<workload>-<env>-<region>-<instance>
-  #   Most resources  : con-<type>-cap-<env>-<region>-<instance>
-  #   Multi-target       con-<type>-<target>-cap-<env>-<region>-<instance>
-  #     resources (eg      (private endpoints: con-pep-ais-cap-dev-we-001)
-  #     private            NIC = "<private endpoint name>_nic"
-  #     endpoints)
-  #   Subnets         : con-snet-cap-<purpose>-<instance>   (no env/region)
-  #   Storage accounts: cor + st + <purpose> + cap + <env> + <region>
-  #                     (no dashes/instance - alphanumeric, <=24 chars)
-  #
-  # env_short: var.environment ("development"/"production", matching
-  # 1-infra-deploy.yml's envName so the ADO Environment gate name and the
-  # Terraform variable use the same spelling) maps to the compact "dev"/"prd"
-  # already baked into every deployed resource name (see
-  # .pipelines/1-infra-deploy.yml backendRgName: con-cap-cicd-prd-we-001) -
-  # that shorthand can't change without renaming live resources, so it stays
-  # as its own, third, deliberately different spelling.
-  # ---------------------------------------------------------------------------
+  # Naming convention, deduced from existing landing-zone resources. Each resource composes its own
+  # name inline from these primitives; this file holds only the shared parts.
+  #   - Resource groups : con-cap-<workload>-<env>-<region>-<instance>
+  #   - Most resources  : con-<type>-cap-<env>-<region>-<instance>
+  #   - Multi-target    : con-<type>-<target>-cap-<env>-<region>-<instance>
+  #                       (private endpoints, e.g. con-pep-ais-cap-dev-we-001; NIC = "<name>_nic")
+  #   - Subnets         : con-snet-cap-<purpose>-<instance>   (no env/region)
+  #   - Storage accounts: cor + st + <purpose> + cap + <env> + <region>  (alphanumeric, <=24 chars)
+  #   - env_short maps var.environment ("development"/"production", matching the pipeline's envName)
+  #     to the "dev"/"prd" baked into every live resource name - a third spelling that cannot change
+  #     without renaming live resources.
 
   region_short = {
     westeurope = "we"
@@ -36,7 +24,6 @@ locals {
   env      = local.env_short[var.environment]
   instance = "001"
 
-  # Gates var.dev_allowed_ips to development regardless of what's in a given
-  # .tfvars file - see variables.tf's dev_allowed_ips for the full rationale.
+  # Gates var.dev_allowed_ips to development regardless of the .tfvars contents - see variables.tf.
   dev_direct_access_ips = var.environment == "development" ? var.dev_allowed_ips : []
 }

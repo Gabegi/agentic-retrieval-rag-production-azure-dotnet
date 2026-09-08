@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
+using AgenticRagApp.Infrastructure.Clients.DomainClassification;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.CU.Models;
@@ -62,10 +63,24 @@ public class DocumentIdentityResolverTests
         return (client, store);
     }
 
-    private static DocumentIdentityResolver Build(Mock<IEmbeddingClient> client, Mock<IDocumentIdentityStore> store) =>
-        new(client.Object, store.Object,
+    private static DocumentIdentityResolver Build(
+        Mock<IEmbeddingClient> client, Mock<IDocumentIdentityStore> store, Mock<IDomainClassifier>? classifier = null) =>
+        new(client.Object, store.Object, (classifier ?? EmptyClassifier()).Object,
             new IndexerConfig { OpenAiEmbeddingDimensions = Dimensions },
             NullLogger<DocumentIdentityResolver>.Instance);
+
+    // Answers nothing, so every document reads as "classification failed" and keeps a null tag
+    // without any unrelated test having to care - the tag tests pass an explicit classifier.
+    private static Mock<IDomainClassifier> EmptyClassifier() => ClassifierReturning();
+
+    private static Mock<IDomainClassifier> ClassifierReturning(params (string SourceId, string? Tag)[] tags)
+    {
+        var classifier = new Mock<IDomainClassifier>();
+        classifier
+            .Setup(c => c.ClassifyAsync(It.IsAny<IReadOnlyList<DocumentToClassify>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(tags.ToDictionary(t => t.SourceId, t => t.Tag, StringComparer.Ordinal));
+        return classifier;
+    }
 
     [TestMethod]
     public async Task ResolveAsync_TwoDocumentsWithIdenticalVectors_GetSameFamilyId()
@@ -237,7 +252,8 @@ public class DocumentIdentityResolverTests
         var client = new Mock<IEmbeddingClient>();
         var doc    = Doc("cao-ggz.pdf", "CAO GGZ");
 
-        var identityText = $"{ModelId}\nCAO GGZ\nGGZ";
+        // Title only: DomainTag left the identity text when tagging moved to the classifier.
+        var identityText = $"{ModelId}\nCAO GGZ";
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identityText)));
 
         var store = new Mock<IDocumentIdentityStore>();
@@ -263,7 +279,7 @@ public class DocumentIdentityResolverTests
         // family, which keeps its own id, so this document's FamilyId changes. Skipping the
         // write on an unchanged hash would leave the store disagreeing with what its chunks
         // carry.
-        var identityText = $"{ModelId}\nCAO GGZ\nGGZ";
+        var identityText = $"{ModelId}\nCAO GGZ";
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identityText)));
 
         var persisted = new[]
@@ -293,13 +309,69 @@ public class DocumentIdentityResolverTests
     }
 
     [TestMethod]
-    public async Task ResolveAsync_SetsDomainTagFromTitle()
+    public async Task ResolveAsync_SetsDomainTagFromClassifier()
     {
         var vectors = new Dictionary<string, float[]> { ["CAO GGZ"] = [1f, 0f, 0f] };
         var (client, store) = BuildMocks(vectors);
         var docs = new[] { Doc("cao-ggz.pdf", "CAO GGZ") };
+        var classifier = ClassifierReturning(("cao-ggz.pdf", "GGZ"));
 
-        var result = await Build(client, store).ResolveDocumentIdentityAsync(docs);
+        var result = await Build(client, store, classifier).ResolveDocumentIdentityAsync(docs);
+
+        Assert.AreEqual("GGZ", result.Families["cao-ggz.pdf"].DomainTag);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_TagClassifiedAtCurrentHash_IsReusedWithoutAskingTheClassifier()
+    {
+        var vectors = new Dictionary<string, float[]> { ["CAO GGZ"] = [1f, 0f, 0f] };
+        var docs = new[] { Doc("cao-ggz.pdf", "CAO GGZ") };
+
+        // First run: the classifier answers, and the record lands in the store with the tag
+        // stamped at the identity hash it was classified against.
+        var (client1, store1) = BuildMocks(vectors);
+        DocumentIdentityRecord? written = null;
+        store1.Setup(s => s.SetAsync(It.IsAny<DocumentIdentityRecord>(), It.IsAny<CancellationToken>()))
+              .Callback<DocumentIdentityRecord, CancellationToken>((r, _) => written = r)
+              .Returns(Task.CompletedTask);
+        await Build(client1, store1, ClassifierReturning(("cao-ggz.pdf", "GGZ")))
+            .ResolveDocumentIdentityAsync(docs);
+        Assert.IsNotNull(written);
+        Assert.AreEqual(written!.IdentityTextHash, written.TaggedAtHash);
+
+        // Second run over the unchanged document: the persisted tag is reused verbatim and the
+        // classifier is never invoked - the "pay once per document version" contract.
+        var (client2, store2) = BuildMocks(vectors, [written]);
+        var classifier2 = EmptyClassifier();
+        var result = await Build(client2, store2, classifier2).ResolveDocumentIdentityAsync(docs);
+
+        Assert.AreEqual("GGZ", result.Families["cao-ggz.pdf"].DomainTag);
+        classifier2.Verify(
+            c => c.ClassifyAsync(It.IsAny<IReadOnlyList<DocumentToClassify>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_ClassificationFails_KeepsTheStalePersistedTag()
+    {
+        // A persisted tag classified at an OLD hash: the document changed, so the tag must be
+        // re-derived - but this run's classification returns nothing for it (model failure).
+        // The stale tag is kept (plausible beats untagged), and TaggedAtHash stays old so the
+        // next run retries.
+        var vectors = new Dictionary<string, float[]> { ["CAO GGZ"] = [1f, 0f, 0f] };
+        var docs = new[] { Doc("cao-ggz.pdf", "CAO GGZ") };
+
+        var (client1, store1) = BuildMocks(vectors);
+        DocumentIdentityRecord? written = null;
+        store1.Setup(s => s.SetAsync(It.IsAny<DocumentIdentityRecord>(), It.IsAny<CancellationToken>()))
+              .Callback<DocumentIdentityRecord, CancellationToken>((r, _) => written = r)
+              .Returns(Task.CompletedTask);
+        await Build(client1, store1, ClassifierReturning(("cao-ggz.pdf", "GGZ")))
+            .ResolveDocumentIdentityAsync(docs);
+
+        var stale = written! with { TaggedAtHash = "OLD-HASH" };
+        var (client2, store2) = BuildMocks(vectors, [stale]);
+        var result = await Build(client2, store2, EmptyClassifier()).ResolveDocumentIdentityAsync(docs);
 
         Assert.AreEqual("GGZ", result.Families["cao-ggz.pdf"].DomainTag);
     }
@@ -341,8 +413,9 @@ public class DocumentIdentityResolverTests
         var doc    = Doc("cao-ggz.pdf", "CAO GGZ");
 
         // Persisted record's hash must match exactly what BuildIdentities would compute for
-        // this document - model id + title + domain tag, no headings - for the skip to kick in.
-        var identityText = $"{ModelId}\nCAO GGZ\nGGZ";
+        // this document - model id + title, no headings, and no domain tag (the tag left the
+        // identity text when tagging moved to the classifier) - for the skip to kick in.
+        var identityText = $"{ModelId}\nCAO GGZ";
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identityText)));
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>()))

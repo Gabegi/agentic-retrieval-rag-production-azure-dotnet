@@ -5,6 +5,7 @@ using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
+using AgenticRagApp.Infrastructure.Clients.Language;
 using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Common.Models;
 using AgenticRagApp.Observability;
@@ -53,6 +54,11 @@ public class ExtractionService : IExtractionService
     private readonly TimeSpan                     _corpusWallClockLimit;
     // Nullable for tests only; the DI registration always passes it. See the red flag below.
     private readonly ContentUnderstandingDefaultsState? _cuDefaultsState;
+    // The index's `language` producer - CU reports no language at all (see
+    // IDocumentLanguageDetector). Nullable on the same tests-only basis as the state above; a
+    // run without it simply leaves every document's language unset, which is what every run
+    // before 2026-09-08 did.
+    private readonly IDocumentLanguageDetector?   _languageDetector;
 
     // Which extractor ran, as reported in the log line, the metric tags and the stats row. A
     // constant rather than a property read off an injected pipeline: there is one source, and the
@@ -64,6 +70,14 @@ public class ExtractionService : IExtractionService
     // Each blob triggers a paid, rate-limited Content Understanding call; tune this against the
     // service's actual throttling limits before raising it.
     private const int MaxExtractionParallelism = 8;
+
+    // How much of a document's markdown is sent for language detection. Deliberately the same
+    // number as IdentityTagger.TextSampleMaxChars: two features sampling the same corpus for
+    // two model calls should not disagree about what "a sample of this document" means, and a
+    // reader comparing a language to a domain tag should know both saw the same amount of text.
+    // Keep them equal if either changes. Well under the service's own 5,120-char document
+    // limit, which DocumentLanguageDetector enforces independently.
+    private const int LanguageSampleMaxChars = 1_200;
 
     // Below host.json's durableTask.activityFunctionTimeout (60 minutes) - a fixed margin under
     // it so a file that is already mid-download/mid-analyze when the corpus wall clock is
@@ -97,7 +111,8 @@ public class ExtractionService : IExtractionService
         ExtractionReporter           reporter,
         ILogger<ExtractionService>   logger,
         TimeSpan?                    corpusWallClockLimit = null,
-        ContentUnderstandingDefaultsState? cuDefaultsState = null)
+        ContentUnderstandingDefaultsState? cuDefaultsState = null,
+        IDocumentLanguageDetector?   languageDetector = null)
     {
         _diffService          = diffService;
         _documentsContainer   = documentsContainer;
@@ -108,6 +123,7 @@ public class ExtractionService : IExtractionService
         _logger               = logger;
         _corpusWallClockLimit = corpusWallClockLimit ?? CorpusWallClockLimit;
         _cuDefaultsState      = cuDefaultsState;
+        _languageDetector     = languageDetector;
     }
 
     // Orchestrates the whole step: cheaply diff what's available against the current index
@@ -321,7 +337,35 @@ public class ExtractionService : IExtractionService
         // that follows.
         var contentHash = ExtractedFile.ComputeContentHash(bytes);
 
-        return (await AnalyzeDocumentWithCUAsync(blobName, bytes, ct)) with { ContentHash = contentHash };
+        var extracted = (await AnalyzeDocumentWithCUAsync(blobName, bytes, ct))
+            with { ContentHash = contentHash };
+
+        return await WithDetectedLanguageAsync(extracted, ct);
+    }
+
+    // The fourth step, and the only one that does not touch Content Understanding: CU reports
+    // no detected language on the document response at all, so the index's `language` field
+    // needs a producer of its own (see IDocumentLanguageDetector for why the field is populated
+    // rather than dropped).
+    //
+    // ONE CALL PER DOCUMENT, on a bounded sample - never per page and never per chunk. Skipped
+    // entirely for a failed extraction: there is no text to detect from, and a document that
+    // never extracted has nothing to stamp a language onto.
+    private async Task<ExtractedFile> WithDetectedLanguageAsync(ExtractedFile extracted, CancellationToken ct)
+    {
+        if (_languageDetector is null || !extracted.Ok) return extracted;
+
+        var sample = extracted.Content is { Length: > 0 } content
+            ? content[..Math.Min(content.Length, LanguageSampleMaxChars)]
+            : "";
+
+        var detected = await _languageDetector.DetectAsync(sample, ct);
+
+        return extracted with
+        {
+            Language           = detected?.Iso6391Name,
+            LanguageConfidence = detected?.Confidence,
+        };
     }
 
     // The paid call. Takes bytes, so it never touches blob storage and is testable without one.
@@ -331,8 +375,9 @@ public class ExtractionService : IExtractionService
     // CUHelper - CU classifies, the helpers map; see CUHelper and
     // docs/2608/260826/cuhelper-typed-structure-plan.md. The markdown is handed downstream
     // VERBATIM - no stripping, no rewriting - and every offset in the structure addresses
-    // exactly that string. Profile and Language stay null: nothing measures them on this
-    // backend yet.
+    // exactly that string. Profile stays null: nothing measures it on this backend yet.
+    // Language is null HERE and filled one level up by WithDetectedLanguageAsync - the CU
+    // response carries no detected language at all, so it is not this method's to report.
     private async Task<ExtractedFile> AnalyzeDocumentWithCUAsync(string blobName, byte[] bytes, CancellationToken ct)
     {
         _logger.LogInformation("Submitting '{Blob}' to Content Understanding.", blobName);
@@ -403,6 +448,9 @@ public class ExtractionService : IExtractionService
             // see): the mapper is what computed it, and this is the first record that outlives
             // the mapper's return value.
             WordConfidence = mapped.WordConfidence,
+            // Same reason, same hop: the mapper read it off the response's one field, and this
+            // is the first record that outlives the mapper's return value.
+            Summary        = mapped.Summary,
         };
     }
 

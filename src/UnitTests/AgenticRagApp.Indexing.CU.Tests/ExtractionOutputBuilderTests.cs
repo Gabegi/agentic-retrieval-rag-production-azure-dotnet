@@ -200,6 +200,30 @@ public class ExtractionOutputBuilderTests
     }
 
     [TestMethod]
+    public void BuildSummaries_SkipsFilesWithNoSummaryAndKeepsBlobOrder()
+    {
+        // Same absent-is-not-a-row contract as the other lifts: a document whose response
+        // carried no Summary field must not appear as an empty-string row, since the report
+        // reader would take that for "the analyzer summarised it as nothing".
+        var files = new[]
+        {
+            Ok("b.pdf") with { Summary = new DocumentSummary("Samenvatting B.", 0.7, 3) },
+            Ok("a.pdf") with { Summary = new DocumentSummary("Samenvatting A.", null, 0) },
+            Ok("c.pdf"),
+        };
+
+        var summaries = ExtractionOutputBuilder.BuildSummaries(files);
+
+        CollectionAssert.AreEqual(
+            new[] { "a.pdf", "b.pdf" },
+            summaries.Select(s => s.BlobName).ToArray());
+        Assert.AreEqual("Samenvatting B.", summaries[1].Summary.Text);
+        // A summary with no reported confidence stays a row - the text is the payload, the
+        // confidence is the optional part.
+        Assert.IsNull(summaries[0].Summary.Confidence);
+    }
+
+    [TestMethod]
     public void BuildTokensByModel_SumsKeyByKeyAndSkipsDocumentsWithoutUsage()
     {
         // Keys are the service's to define, so they are summed verbatim and never parsed. A

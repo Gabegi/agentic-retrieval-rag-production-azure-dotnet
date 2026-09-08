@@ -9,6 +9,20 @@ public record EvalRow(
     ScenarioType    Type,               // Answer or Refusal — which metrics below are actually scored
     string          Category,           // protocol / buiten_scope / medisch_advies / promptinjectie / ...
 
+    // --- The agentic-retrieval question -------------------------------------------------
+    // Capability/MinSubQueries come from the dataset (what this question NEEDS);
+    // SubQueryCount/SubQueries/DistinctDocumentsCited are measured (what the run DID).
+    // Reading a run per Capability is what separates "agentic retrieval helps" from "the
+    // synthesis model is good": a SingleLookup row can only get slower and dearer from
+    // planning, so if the means only move there, nothing was gained. A Decomposition or
+    // MultiHop row answered with SubQueryCount == 1 was never given the chance to benefit,
+    // whatever it scored — that row is measuring the model's memory, not retrieval.
+    AgenticCapability Capability,
+    int             MinSubQueries,      // dataset-side lower bound on distinct searches needed
+    int             SubQueryCount,      // measured: searches the knowledge base actually ran (-1 = not reported)
+    string          SubQueries,         // measured: those search texts, ' | '-joined, so a decomposition can be read
+    int             DistinctDocumentsCited, // measured: distinct documents behind the citations — a cross-document answer that cites one document did not join anything
+
     // Golden truth (what we expected)
     string          ExpectedAnswer,     // Antwoord
     string          ExpectedSources,    // Bronnen
@@ -61,6 +75,11 @@ public record EvalRow(
         Difficulty: q.Difficulty,
         Type: q.Type,
         Category: q.Category,
+        Capability: q.Capability,
+        MinSubQueries: q.MinSubQueries,
+        SubQueryCount: -1,
+        SubQueries: "",
+        DistinctDocumentsCited: 0,
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
         Response: "",
@@ -97,6 +116,11 @@ public record EvalRow(
         Difficulty: q.Difficulty,
         Type: q.Type,
         Category: q.Category,
+        Capability: q.Capability,
+        MinSubQueries: q.MinSubQueries,
+        SubQueryCount: -1,
+        SubQueries: "",
+        DistinctDocumentsCited: 0,
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
         Response: "",

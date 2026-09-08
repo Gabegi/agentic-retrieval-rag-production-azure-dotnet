@@ -1,6 +1,6 @@
 variable "environment" {
   type        = string
-  description = "Environment name (development, production) - matches 1-infra-deploy.yml's envName. See naming.tf's env_short for the separate dev/prd shorthand baked into resource names."
+  description = "Environment name (development, production) - matches base/deploy-azure-infrastructure.yml's envName. See naming.tf's env_short for the separate dev/prd shorthand baked into resource names."
 }
 
 variable "location" {
@@ -21,32 +21,26 @@ variable "tags" {
 
 variable "openai_embedding_deployment" {
   type        = string
-  description = "Deployment name for the text-embedding-3-large model on the Foundry AI Services account"
+  description = "Deployment name for the text-embedding-3-large model on the Foundry AI Services account. Also the value Content Understanding's default model->deployment mapping points text-embedding-3-large at (function_app.tf)."
   default     = "embedding-3-large"
 }
 
 variable "openai_gpt_deployment" {
   type        = string
-  description = "Deployment name for the gpt-4.1 model used by the query API"
+  description = "Deployment name for the query API's GPT model - runs gpt-5.4 (ai_deployments.tf). The name still says gpt-4.1 on purpose: renaming a deployment forces destroy+recreate, so names are frozen and models move under them."
   default     = "gpt-4.1-query"
 }
 
 variable "openai_extraction_deployment" {
   type        = string
-  description = "Deployment name for the gpt-4.1 model used by the indexing/extraction pipeline"
+  description = "Deployment name for the indexing/extraction pipeline's GPT model - runs gpt-5.4 (ai_deployments.tf). Name frozen at gpt-4.1 for the same reason as openai_gpt_deployment."
   default     = "gpt-4.1-extraction"
 }
 
 variable "openai_eval_deployment" {
   type        = string
-  description = "Deployment name for the gpt-4o model used for evaluation"
+  description = "Deployment name for the eval judge model - runs gpt-5.1, deliberately a different model from querying/extraction (ai_deployments.tf). Name frozen from the gpt-4o era for the same reason as openai_gpt_deployment."
   default     = "gpt-4o-eval"
-}
-
-variable "sandbox_user_object_ids" {
-  type        = list(string)
-  description = "AAD object IDs granted Azure AI Developer and Cognitive Services OpenAI User on the sandbox Foundry project - and on nothing else. Accepts an Entra group's object ID as readily as a user's; a group is preferable, since membership changes then need no terraform apply. Gated on var.environment == \"development\" like dev_developer_object_ids. MUST NOT be reused for grants on the search service or data storage account - see ai_sandbox.tf for why that omission is the actual data boundary."
-  default     = []
 }
 
 variable "openai_gpt_model_name" {
@@ -91,9 +85,8 @@ variable "dev_eval_service_principal_object_id" {
   default     = ""
 }
 
-
 variable "openai_mini_deployment" {
   type        = string
-  description = "Deployment name for the completion model Content Understanding's prebuilt analyzers resolve against - gpt-5.4-mini since 2026-08-27, see ai_deployments.tf. The default value is still the string \"gpt-4.1-mini\" on purpose: it is the DEPLOYMENT name, kept stable across the model change so terraform doesn't destroy and recreate the deployment (same convention as openai_gpt_deployment/openai_extraction_deployment, which name gpt-4.1 but run gpt-5.4). Not used by the application's own OpenAI calls - ContentAnalysisClient passes it per analyze request via modelDeployments (app setting OPENAI_MINI_DEPLOYMENT, function_app.tf)."
+  description = "Deployment name for the completion model Content Understanding's prebuilt analyzers resolve against - runs gpt-5.4-mini since 2026-08-27 (ai_deployments.tf). Name frozen at \"gpt-4.1-mini\" for the same reason as openai_gpt_deployment. Never called by the app's own OpenAI code: ContentUnderstandingDefaultsSetup writes it into the account-wide default model->deployment mapping at host startup (app setting OPENAI_MINI_DEPLOYMENT, function_app.tf)."
   default     = "gpt-4.1-mini"
 }

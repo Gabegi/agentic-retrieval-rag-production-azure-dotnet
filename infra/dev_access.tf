@@ -1,23 +1,13 @@
-# ---------------------------------------------------------------------------
-# Development-only data-plane access, distinct from eval_access.tf's grants
-# to data.azurerm_client_config.current (whichever identity ran the last
-# apply). That's fine for the CI service connection but unstable the moment
-# a human applies dev locally, since the next apply would silently move
-# those roles onto the human's identity and revoke the service principal's.
-#
-# The grants here use fixed object IDs instead (var.dev_developer_object_ids,
-# var.dev_eval_service_principal_object_id), so they don't shift regardless
-# of who runs apply. Both gate on var.environment == "development" - see
-# variables.tf's dev_allowed_ips for why that's safe to leave populated even
-# if dev.tfvars values were accidentally reused in prod.tfvars.
-#
-# The dev_eval_spn_* grants below additionally skip creation when the eval
-# SPN IS the identity currently running apply (dev.tfvars' deploy pipeline
-# service connection and dev_eval_service_principal_object_id are the same
-# SPN there) - eval_access.tf already grants these same roles to
-# data.azurerm_client_config.current in that case, and a second identical
-# role assignment 409s (RoleAssignmentExists).
-# ---------------------------------------------------------------------------
+# Development-only grants to fixed object IDs, so they don't move when a human runs apply.
+# eval_access.tf grants to data.azurerm_client_config.current - fine for the CI service
+# connection, but a local dev apply would silently move those roles onto the human and revoke
+# the service principal's.
+#   - Everything gates on var.environment == "development" (see variables.tf's dev_allowed_ips
+#     for why that is safe even if dev values leak into prod.tfvars).
+#   - The dev_eval_spn grants are skipped when the eval SPN IS the identity running apply (dev's
+#     deploy service connection and dev_eval_service_principal_object_id are the same SPN):
+#     eval_access.tf already grants that identity, and a duplicate (scope, principal, role) 409s
+#     with RoleAssignmentExists.
 
 locals {
   dev_eval_spn_needs_fixed_grant = (
@@ -34,34 +24,10 @@ resource "azurerm_role_assignment" "dev_developer_search_reader" {
   principal_id         = each.value
 }
 
-resource "azurerm_role_assignment" "dev_eval_spn_search_reader" {
-  count                = local.dev_eval_spn_needs_fixed_grant ? 1 : 0
-  scope                = azurerm_search_service.main.id
-  role_definition_name = "Search Index Data Reader"
-  principal_id         = var.dev_eval_service_principal_object_id
-}
-
-resource "azurerm_role_assignment" "dev_eval_spn_storage_contributor" {
-  count                = local.dev_eval_spn_needs_fixed_grant ? 1 : 0
-  scope                = azurerm_storage_account.data.id
-  role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = var.dev_eval_service_principal_object_id
-}
-
-resource "azurerm_role_assignment" "dev_eval_spn_openai_user" {
-  count                = local.dev_eval_spn_needs_fixed_grant ? 1 : 0
-  scope                = data.azurerm_cognitive_account.foundry.id
-  role_definition_name = "Cognitive Services OpenAI User"
-  principal_id         = var.dev_eval_service_principal_object_id
-}
-
-# Mirrors eval_access.tf's eval_cognitive_services_user - see that resource's
-# comment. Needed here too since the eval pipeline's identity when it's NOT
-# the one running apply (the common case) only gets fixed grants from this
-# file, not eval_access.tf's data.azurerm_client_config.current-based ones.
-resource "azurerm_role_assignment" "dev_eval_spn_cognitive_services_user" {
-  count                = local.dev_eval_spn_needs_fixed_grant ? 1 : 0
-  scope                = data.azurerm_cognitive_account.foundry.id
-  role_definition_name = "Cognitive Services User"
+# Same role set as eval_access.tf (local.eval_role_grants), for the fixed eval SPN.
+resource "azurerm_role_assignment" "dev_eval_spn" {
+  for_each             = local.dev_eval_spn_needs_fixed_grant ? local.eval_role_grants : {}
+  scope                = each.value.scope
+  role_definition_name = each.value.role
   principal_id         = var.dev_eval_service_principal_object_id
 }

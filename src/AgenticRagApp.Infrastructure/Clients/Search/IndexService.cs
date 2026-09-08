@@ -218,8 +218,10 @@ public class IndexService : IIndexService
                 // were computed by DocumentIdentityResolver and carried on ChunkObject already,
                 // but never reached the index.
                 new SimpleField("family_id",          SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
-                // Sector code from the title (DomainTagger): GGZ/GHZ/VGZ/VVT. This IS the
-                // "sector" field - not a separate one.
+                // Population code from DomainClassifier (LLM, cached per identity hash):
+                // sector (GGZ/GHZ/VGZ/VVT) or doelgroep (LVB/MVB) — whichever distinguishes
+                // the document inside its near-duplicate family. This IS the "sector" field -
+                // not a separate one.
                 new SimpleField("domain_tag",         SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
                 // Documents whose titles are lexically close but NOT the same family
                 // (Medido/Medimo) - a confusion flag, not a family relationship.

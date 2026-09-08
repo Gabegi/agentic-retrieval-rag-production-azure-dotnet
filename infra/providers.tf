@@ -6,18 +6,15 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
-    # ARM REST passthrough - only used in search.tf to approve the search
-    # service's shared private link connection to the Foundry account.
-    # azurerm has no resource for Cognitive Services private endpoint
-    # connections (unlike Storage/Key Vault), so that one step can't be
-    # done with azurerm alone.
+    # ARM REST passthrough, used only in search.tf: azurerm has no resource for Cognitive Services
+    # private endpoint connections, so approving the search service's shared private link to the
+    # Foundry account needs azapi.
     azapi = {
       source  = "Azure/azapi"
       version = "~> 2.0"
     }
-    # Only used in search.tf to give Azure time to materialize the
-    # shared-private-link connection object on the Foundry account before
-    # azapi looks it up - see the comment there.
+    # Used only in search.tf, to give Azure time to materialize that connection before azapi looks
+    # it up.
     time = {
       source  = "hashicorp/time"
       version = "~> 0.11"
@@ -33,46 +30,30 @@ provider "azurerm" {
 
 provider "azapi" {}
 
-# Hub/connectivity subscription - owns the central
-# private DNS zones our private endpoints need to resolve against
-# (docs/platform-team-dns-verzoek.md). Read-only use only (data sources) -
-# this repo doesn't manage anything in that subscription. Same OIDC identity
-# as the default provider; it just needs at least Reader there, confirmed
-# via the diagnostic step in 1-infra-deploy.yml.
+# Hub/connectivity subscription, which owns the private DNS zones our
+# endpoints resolve against (docs/2607/260720/platform-team-dns-verzoek.md). Data sources only.
+#   - Same OIDC identity as the default provider; needs at least Reader there (confirmed via the
+#     diagnostic step in base/deploy-azure-infrastructure.yml).
+#   - No resources are provisioned through this alias, hence no provider registration. The SP does
+#     hold Private DNS Zone Contributor there, which is what lets private_dns_zone_group blocks
+#     write A records - that happens via ARM when the zone group is created, not through this alias.
 provider "azurerm" {
   alias           = "hub"
   subscription_id = "00000000-0000-0000-0000-000000000000" # hub/connectivity subscription
   features {}
 
-  # This alias itself is only ever used for data sources (see data.tf) - no
-  # resource is provisioned through it directly, so it never needs to
-  # register resource providers in the hub subscription. The SP does also
-  # have write access there now (Private DNS Zone Contributor, confirmed by
-  # the platform team), which is what lets the private_dns_zone_group blocks
-  # on our private endpoints create their A records in the hub zones - that
-  # write happens implicitly via ARM when the zone group is created, not
-  # through this provider alias.
   resource_provider_registrations = "none"
 }
 
-# Log Analytics/management subscription - owns the
-# workspace App Insights writes into (IngestionMode: LogAnalytics on
-# con-appi-cap-*, see data.azurerm_application_insights.main.WorkspaceResourceId).
-# A THIRD subscription, distinct from both the default provider and the hub
-# alias above.
-#
-# CURRENTLY UNUSED - confirmed 2026-08-07 via a real `terraform apply` that
-# this SP has zero access here: even provider initialization itself
-# (Microsoft.Resources/subscriptions/providers/read, evaluated at the
-# subscription scope) 403s, before getting anywhere near an actual resource
-# read. app_insights_privatelink.tf's Log Analytics scoped-service link was
-# dropped rather than blocked on this - see that file's comment. Left
-# declared (not deleted) for when the platform team grants this SP Reader at
-# the subscription scope - see docs/2608/260807/app-insights-private-link.md.
-# The pipeline's 'VERIFY: App Insights private-link DNS zones + Log
-# Analytics access' step still checks for that grant on every Plan run, so
-# re-adding the data source + scoped-service link is a signal away, not a
-# guess.
+# Log Analytics/management subscription - a third subscription, owning the
+# workspace App Insights writes into. CURRENTLY UNUSED.
+#   - Confirmed 2026-08-07 by a real apply: the SP has zero access here - even provider
+#     initialization (Microsoft.Resources/subscriptions/providers/read) 403s.
+#   - app_insights_privatelink.tf dropped its Log Analytics scoped-service link rather than block on
+#     this; see that file.
+#   - Left declared for when the platform team grants subscription-scope Reader
+#     (docs/2608/260807/app-insights-private-link.md). The pipeline's 'VERIFY: App Insights
+#     private-link DNS zones + Log Analytics access' step checks for that grant on every Plan.
 provider "azurerm" {
   alias           = "logmgmt"
   subscription_id = "00000000-0000-0000-0000-000000000000" # log analytics/management subscription

@@ -34,7 +34,11 @@ internal static class CUHelper
         // nothing downstream of the report reads it, and every existing construction of this
         // record (empty-markdown early return, tests) stays valid without it. Null = the
         // response carried no words, which is not the same as zero confidence.
-        WordConfidenceSummary?   WordConfidence = null);
+        WordConfidenceSummary?   WordConfidence = null,
+        // CU's generated whole-document summary, off fields.Summary - see DocumentSummary for
+        // why it is report-only and why grounding is a count. Trailing default for the same
+        // reason as WordConfidence. Null = the response carried no Summary field.
+        DocumentSummary?         Summary = null);
 
     // stringEncoding is AnalysisResult.StringEncoding - the service's echo of what span
     // encoding it actually applied. The SDK's typed Analyze overload hardcodes utf16 on every
@@ -67,7 +71,7 @@ internal static class CUHelper
         var boilerplate = CuPageHelper.BuildBoilerplate(document, pageSpans);
 
         // 3. The rest of the typed structure.
-        var figures = CuFigureHelper.Build(document, pageSpans);
+        var figures = CuFigureHelper.Build(document, pageSpans, warnings);
 
         // Chart/mermaid payloads join their figures on Id (decision: FigureInfo.Payload, no
         // separate ChartInfo/DiagramInfo types).
@@ -83,7 +87,7 @@ internal static class CUHelper
         var structure = new PdfDocumentStructure(
             Headings:       headings,
             Boilerplate:    boilerplate,
-            Tables:         CuTableHelper.Build(document, pageSpans),
+            Tables:         CuTableHelper.Build(document, pageSpans, warnings),
             PageDimensions: CuPageHelper.BuildPageDimensions(document, unit),
             SelectionMarks: [],   // no typed surface exists - dropped by decision 2026-08-26
             Figures:        figures,
@@ -99,6 +103,29 @@ internal static class CUHelper
         // measured on this pipeline.
         return new MappedDocument(
             markdown, pageSpans, structure, title, warnings,
-            WordConfidence: CuPageHelper.SummariseWordConfidence(document));
+            WordConfidence: CuPageHelper.SummariseWordConfidence(document),
+            Summary:        SummaryOf(document));
+    }
+
+    // fields.Summary, the prebuilt's own generated summary. The facade owns this rather than a
+    // helper because it is the only FIELD on the response - every Cu*Helper maps content
+    // elements, and one field does not justify a sixth helper.
+    //
+    // GetFieldOrDefault is the SDK's own idiom for this (ContentFieldDictionaryExtensions), so
+    // a missing Fields dictionary and a missing key are the same null here. Blank text is null
+    // too: "the service returned a Summary field carrying nothing" is not a summary, and the
+    // report shows it as absent rather than as an empty string.
+    private static DocumentSummary? SummaryOf(DocumentContent document)
+    {
+        var field = document.Fields?.GetFieldOrDefault("Summary");
+        var text  = field?.Value?.ToString();
+
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        return new DocumentSummary(
+            text,
+            field!.Confidence,
+            // The spans themselves stay behind (user decision 2026-09-08) - see DocumentSummary.
+            GroundingSpanCount: field.Spans?.Count ?? 0);
     }
 }

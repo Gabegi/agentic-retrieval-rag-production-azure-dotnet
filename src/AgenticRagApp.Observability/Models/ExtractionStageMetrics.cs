@@ -48,4 +48,19 @@ public record ExtractionStageMetrics(
     // scalars above, "no map" and "no tokens" are the same fact here.
     public IReadOnlyDictionary<string, long> BilledTokensByModel { get; init; } =
         new Dictionary<string, long>();
+
+    // The analyzer's generated whole-document summaries, as a COUNT and a MEAN only (user
+    // decision, 2026-09-08). The summaries themselves are per-document text and belong in the
+    // blob-backed facts report; this row travels through Durable Table Storage under a 64KB
+    // limit - the same limit that already caps Issues at 100 entries - so a 51-document run of
+    // summary text would decide the report's fate rather than ride in it.
+    //
+    // SummariesPresent counts documents whose response carried a Summary field: a drop from
+    // "every document" says the analyzer stopped generating one, which is worth seeing since
+    // the generation is billed either way. SummaryConfidenceMean is null when no summary
+    // reported a confidence - blank, not zero - and carries NO threshold: the one field
+    // confidence CU gives us has no published cutoff to cite, and calibrating one against a
+    // real run's distribution is its own step (A11).
+    public int?    SummariesPresent      { get; init; }
+    public double? SummaryConfidenceMean { get; init; }
 }

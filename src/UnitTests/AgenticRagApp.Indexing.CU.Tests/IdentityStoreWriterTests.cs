@@ -35,9 +35,11 @@ public class IdentityStoreWriterTests
     }
 
     private static DocumentIdentity Identity(
-        string sourceId, string title = "CAO GGZ", string? tag = "ggz", string? hash = null) =>
+        string sourceId, string title = "CAO GGZ", string? tag = "ggz", string? hash = null,
+        string? taggedAtHash = null) =>
         new(SourceId: sourceId, Title: title, DomainTag: tag,
-            IdentityText: title, Hash: hash ?? $"hash-{sourceId}", IdentityTokens: 4);
+            IdentityText: title, Hash: hash ?? $"hash-{sourceId}", IdentityTokens: 4)
+        { TaggedAtHash = taggedAtHash };
 
     private static DocumentIdentityRecord Stored(
         string  sourceId,
@@ -46,14 +48,16 @@ public class IdentityStoreWriterTests
         string  familyId = "fam-1",
         string? hash     = null,
         string? modelId  = ModelId,
-        float[]? vector  = null) =>
+        float[]? vector  = null,
+        string? taggedAtHash = null) =>
         new(SourceId:         sourceId,
             Title:            title,
             DomainTag:        tag,
             Vector:           vector ?? [0.1f, 0.2f, 0.3f],
             FamilyId:         familyId,
             IdentityTextHash: hash ?? $"hash-{sourceId}",
-            EmbeddingModelId: modelId);
+            EmbeddingModelId: modelId)
+        { TaggedAtHash = taggedAtHash };
 
     private static Task<PersistOutcome> Persist(
         RecordingStore store,
@@ -73,10 +77,10 @@ public class IdentityStoreWriterTests
             ModelId,
             CancellationToken.None);
 
-    // ── The six-field comparison ─────────────────────────────────────────────
+    // ── The compared-fields gate ─────────────────────────────────────────────
 
     [TestMethod]
-    public async Task ARecordIdenticalInAllSixFields_IsNotWritten()
+    public async Task ARecordIdenticalInAllComparedFields_IsNotWritten()
     {
         var store = new RecordingStore();
         var run   = new[] { Identity("a.pdf") };
@@ -127,6 +131,21 @@ public class IdentityStoreWriterTests
 
         Assert.AreEqual(1, outcome.RecordsWritten);
         Assert.AreEqual("vvt", store.Written.Single().DomainTag);
+    }
+
+    [TestMethod]
+    public async Task AChangedTaggedAtHash_IsWritten()
+    {
+        // A tag freshly classified this run (TaggedAtHash = the identity hash) against a stored
+        // record from before tagging existed (TaggedAtHash null): same tag string, but the
+        // classification provenance moved, and losing it would re-classify every run.
+        var store = new RecordingStore();
+
+        var outcome = await Persist(store, [Identity("a.pdf", taggedAtHash: "hash-a.pdf")],
+            persisted: new Dictionary<string, DocumentIdentityRecord> { ["a.pdf"] = Stored("a.pdf") });
+
+        Assert.AreEqual(1, outcome.RecordsWritten);
+        Assert.AreEqual("hash-a.pdf", store.Written.Single().TaggedAtHash);
     }
 
     [TestMethod]

@@ -7,12 +7,18 @@ using AgenticRagApp.Indexing.CU.Utils;
 namespace AgenticRagApp.Indexing.CU.Services;
 
 // The per-document fingerprint everything in DocumentIdentityResolver is derived from: title +
-// domain tag + every heading, joined with newlines, hashed together with the embedding model
-// id. Split out of DocumentIdentityResolver so it can be tested without mocking an embedding client
-// or a store - the same pure-static shape as DomainTagger in Chunking/Utils.
+// every heading, joined with newlines, hashed together with the embedding model id. Split out
+// of DocumentIdentityResolver so it can be tested without mocking an embedding client or a
+// store - the same pure-static shape as the other Helpers.
 //
-// Because this is the single input to clustering, anything wrong here is wrong in FamilyId,
-// DomainTag AND ConfusableWith simultaneously - there is no second source to disagree.
+// DomainTag is deliberately NOT part of the identity text or its hash (it was, when the tag
+// came from a title regex). The tag is LLM-derived since 2026-08-27 (IdentityTagger →
+// IDomainClassifier), and folding model output into the hash would make the re-embed gate and
+// the clustering geometry hostage to model nondeterminism. Build emits every identity
+// untagged; IdentityTagger fills DomainTag afterwards, from the store when current.
+//
+// Because this is the single input to clustering, anything wrong here is wrong in FamilyId
+// AND ConfusableWith simultaneously - there is no second source to disagree.
 public static class DocumentIdentityBuilder
 {
     // text-embedding-3-large's per-input ceiling. Past it the client either throws or silently
@@ -57,8 +63,7 @@ public static class DocumentIdentityBuilder
 
         foreach (var doc in docs)
         {
-            var title     = doc.Title;
-            var domainTag = DomainTagger.Tag(title);
+            var title = doc.Title;
 
             // Whitespace-normalized before it reaches the hash (B5): a heading that gains a
             // double space or a trailing tab between extraction runs is the same heading, but
@@ -74,7 +79,7 @@ public static class DocumentIdentityBuilder
 
             var identityText = string.Join(
                 "\n",
-                new[] { NormalizeWhitespace(title), domainTag }
+                new[] { NormalizeWhitespace(title) }
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .Concat(headings));
 
@@ -98,7 +103,9 @@ public static class DocumentIdentityBuilder
             // service will. Cheap next to the embedding call it precedes.
             var tokens = TokenCounter.Count(identityText);
 
-            identities.Add(new DocumentIdentity(doc.SourceId, title, domainTag, identityText, hash, tokens));
+            // DomainTag starts null on every identity Build emits; IdentityTagger fills it in
+            // (store reuse or classifier) before anything downstream reads it.
+            identities.Add(new DocumentIdentity(doc.SourceId, title, DomainTag: null, identityText, hash, tokens));
         }
 
         return new IdentityBuildResult(identities, skipped);
@@ -123,7 +130,14 @@ public sealed record DocumentIdentity(
     string SourceId, string Title, string? DomainTag, string IdentityText, string Hash,
     // Exact cl100k_base token count of IdentityText - what the embedding model will charge and
     // measure against its per-input limit.
-    int IdentityTokens);
+    int IdentityTokens)
+{
+    // The identity hash DomainTag was classified against - Hash when IdentityTagger classified
+    // or reused a current tag, the persisted (older) hash when a classification failure kept a
+    // stale tag, null when never classified. Persisted as DocumentIdentityRecord.TaggedAtHash;
+    // see that record for the reuse contract.
+    public string? TaggedAtHash { get; init; }
+}
 
 // SkippedEmptyIdentity carries the documents dropped for having nothing to embed, so the
 // caller can log them - the builder itself stays free of a logger dependency.

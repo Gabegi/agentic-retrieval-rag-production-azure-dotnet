@@ -113,7 +113,24 @@ internal static class ExtractionStatsBuilder
         // The per-model half rides along (2026-08-27) - same source, same row, so the report
         // totals, the CuModelTokens meter and the log line all say the same thing.
         BilledTokensByModel           = diff.Output.BilledTokensByModel,
+        // The summary's count-and-mean half (A2, 2026-09-08). The text stays in the blob-backed
+        // facts report - see ExtractionStageMetrics for why this row carries only these two.
+        SummariesPresent              = diff.Output.Summaries.Count,
+        SummaryConfidenceMean         = MeanSummaryConfidence(diff.Output.Summaries),
     };
+
+    // Null rather than 0 when no summary reported a confidence: "nothing measured" and "every
+    // summary scored zero" are different facts, and the rest of this row already distinguishes
+    // them that way.
+    private static double? MeanSummaryConfidence(IReadOnlyList<DocumentSummaryEntry> summaries)
+    {
+        var confidences = summaries
+            .Select(s => s.Summary.Confidence)
+            .OfType<double>()
+            .ToList();
+
+        return confidences.Count == 0 ? null : confidences.Average();
+    }
 }
 
 internal record DiffResult(

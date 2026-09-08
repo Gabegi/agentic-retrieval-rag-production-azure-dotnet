@@ -3,6 +3,7 @@ using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AgenticRagApp.Infrastructure;
+using AgenticRagApp.Infrastructure.Clients.DomainClassification;
 using AgenticRagApp.Infrastructure.Configuration;
 
 namespace RagApp.UnitTests.Infrastructure;
@@ -70,6 +71,20 @@ public class ServiceCollectionExtensionsTests
         Assert.AreEqual("protocols", config.StorageContainer);
         Assert.AreEqual("text-embedding-3-large", config.OpenAiEmbeddingModelName);
         Assert.AreEqual(3072, config.OpenAiEmbeddingDimensions);
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_RegistersTheDomainClassifier()
+    {
+        // The consumer sits in Indexing.CU (DocumentIdentityResolver via IdentityTagger), so a
+        // missing registration would only surface when the Functions host builds its graph.
+        var services = new ServiceCollection();
+
+        services.AddAgenticRagAppInfrastructure(BuildConfiguration());
+
+        var descriptor = services.Single(d => d.ServiceType == typeof(IDomainClassifier));
+        Assert.AreEqual(ServiceLifetime.Singleton, descriptor.Lifetime);
+        Assert.AreEqual(typeof(DomainClassifier), descriptor.ImplementationType);
     }
 
     [TestMethod]

@@ -1,24 +1,14 @@
-# ---------------------------------------------------------------------------
-# Two storage accounts in the existing data RG:
-#   - func: AzureWebJobsStorage + Durable Functions task hub state for the
-#     indexing Function App (needs blob, queue, and table), plus the file
-#     share used for the Function App's WEBSITE_CONTENTAZUREFILECONNECTIONSTRING
-#     content share (Elastic Premium always needs one; Azure Files/SMB has no
-#     managed-identity auth, so this piece stays key-based - see
-#     function_app.tf).
-#   - data: source documents, chunks, and reports for the indexing/query
-#     pipeline (blob only, organized by container). Pipeline checkpoint
-#     state lives in the func account's indexing-pipeline container instead
-#     (see azurerm_storage_container.indexing_pipeline, function_app.tf).
-# Both are private-endpoint-only (no public network access). Each private
-# endpoint below attaches its private_dns_zone_group directly rather than
-# waiting on the platform team's policy-based zone linking
-# (docs/platform-team-dns-verzoek.md). Their traffic stays VNet-local without
-# any override: Azure's default system route for the VNet's own address space
-# is a longer, more specific prefix than the spoke route table's sole
-# 0.0.0.0/0 -> firewall UDR, so under longest-prefix-match routing, intra-VNet
-# communication (this subnet <-> the pe subnet) takes precedence over that UDR.
-# ---------------------------------------------------------------------------
+# Two storage accounts in the landing-zone data RG, both private-endpoint-only.
+#   - func: AzureWebJobsStorage + Durable task hub state (blob, queue, table) and the EP1 content
+#     share (Azure Files, key-based - no managed-identity auth path; see function_app.tf). Pipeline
+#     checkpoint state also lives here (azurerm_storage_container.indexing_pipeline).
+#   - data: source documents, chunks and reports (blob only, one container per purpose).
+#   - Private endpoints attach their private_dns_zone_group directly rather than waiting on the
+#     platform team's policy-based zone linking
+#     (docs/2607/260720/platform-team-dns-verzoek.md). Intra-VNet traffic wins over the spoke's
+#     0.0.0.0/0 firewall UDR by longest-prefix match, so no override.
+#   - The two accounts stay explicit rather than looped: their policies differ (versioning, dev IP
+#     access) - the same call network.tf makes for its NSGs.
 
 resource "azurerm_storage_account" "func" {
   name                     = lower("constfunccap${local.env}${local.region}")
@@ -31,14 +21,10 @@ resource "azurerm_storage_account" "func" {
 
   public_network_access_enabled   = false
   allow_nested_items_to_be_public = false
-  # shared_access_key_enabled left at its default (true), unlike the "data"
-  # account: WEBSITE_CONTENTAZUREFILECONNECTIONSTRING (function_app.tf) needs
-  # a key-based connection string for the Content Share, and this is an
-  # account-wide toggle - so the indexing-pipeline blob container and the
-  # Durable task hub state end up key-accessible too, not just RBAC-only via
-  # the indexer's managed identity. Fix would be to move the Content Share
-  # onto its own dedicated storage account and set shared_access_key_enabled
-  # = false here. Deferred - revisit later.
+  # shared_access_key_enabled stays at its default (true): WEBSITE_CONTENTAZUREFILECONNECTIONSTRING
+  # needs a key, and the toggle is account-wide - so Durable state and indexing-pipeline are
+  # key-accessible too, not RBAC-only. Fix: move the content share to its own account and disable
+  # keys here. Deferred.
 
   blob_properties {
     versioning_enabled = true
@@ -62,16 +48,13 @@ resource "azurerm_storage_account" "data" {
   account_kind             = "StorageV2"
   min_tls_version          = "TLS1_2"
 
-  # Only flips to true when dev_allowed_ips has entries (development only, per
-  # variables.tf's dev_allowed_ips) - the network_rules block below still denies
-  # everything except those specific IPs, so this isn't a general public-access opt-in.
+  # Public access only while dev_allowed_ips has entries (development); network_rules below still
+  # denies everything except those IPs.
   public_network_access_enabled   = length(local.dev_direct_access_ips) > 0 ? true : false
   allow_nested_items_to_be_public = false
-  # shared_access_key_enabled left at its default (true): disabling it would
-  # require the deploying identity to have Storage Blob Data Contributor
-  # (data-plane RBAC, separate from Contributor) before Terraform can manage
-  # containers via storage_use_azuread, which risks an RBAC-propagation race
-  # on a fresh apply. Revisit once that identity's data-plane access is set up.
+  # shared_access_key_enabled stays at its default (true): disabling it needs the deployer to hold
+  # Storage Blob Data Contributor before Terraform can manage containers via storage_use_azuread -
+  # an RBAC-propagation race on a fresh apply. Revisit once that grant exists.
 
   dynamic "network_rules" {
     for_each = length(local.dev_direct_access_ips) > 0 ? [1] : []
@@ -94,191 +77,95 @@ resource "azurerm_storage_account" "data" {
   tags = local.common_tags
 }
 
-resource "azurerm_storage_container" "documents" {
-  name                  = "documents"
+# Containers on the data account, looped - all private, they differ only by name.
+#   - documents: source PDFs.
+#   - pipeline-reports: every report - IRunReportWriter (gated on IsDevelopment), per-stage
+#     artifact archives, corpus snapshots, eval results (see Observability/Reports.md). The name
+#     must match Program.cs's GetBlobContainerClient("pipeline-reports"); it was once
+#     "telemetry-reports" here, which left this container empty while writes went to an unmanaged
+#     auto-created one.
+#   - pipeline-artifacts: VectorCache only (vector-cache/ prefix). Existed in Azure by runtime
+#     auto-creation before it was declared; the import block below adopts it. NEVER resolve a
+#     conflict by destroy/recreate - that loses every cached embedding and forces a full re-embed.
+#   - test-questions: golden questions.
+#   - eval-results: no longer written to (eval-publish-results.yml uploads into pipeline-reports);
+#     kept because it holds every eval run's history from before that change.
+locals {
+  data_containers = toset([
+    "documents",
+    "pipeline-reports",
+    "pipeline-artifacts",
+    "test-questions",
+    "eval-results",
+  ])
+}
+
+resource "azurerm_storage_container" "data" {
+  for_each              = local.data_containers
+  name                  = each.key
   storage_account_id    = azurerm_storage_account.data.id
   container_access_type = "private"
 }
 
-# Written by IRunReportWriter (Observability/RunReportWriter.cs) - gated on
-# IsEnabled (env.IsDevelopment()), so this stays empty unless DOTNET_ENVIRONMENT
-# is set to Development on the function app. Name must match the container name
-# RunReportWriter's registration uses (Program.cs, GetBlobContainerClient("pipeline-reports"));
-# previously named "telemetry-reports" here, which didn't match and left this
-# container permanently empty while writes went to an unmanaged, auto-created
-# "pipeline-reports" container instead.
-resource "azurerm_storage_container" "pipeline_reports" {
-  name                  = "pipeline-reports"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
-}
-
-# Written by VectorCache (Indexing.CU/Services/Embedding/VectorCache.cs) only, under its
-# vector-cache/ prefix - a content-addressed embedding-vector cache, not a report. Everything
-# else that used to live here (IPipelineArtifactWriter's per-stage content archives,
-# SnapshotService's rolling corpus snapshots) moved to the "pipeline-reports" container
-# alongside every other report - see Observability/Reports.md.
-#
-# THIS CONTAINER ALREADY EXISTS IN AZURE, auto-created at runtime by
-# Program.cs's GetBlobContainerClient("pipeline-artifacts") before it was ever
-# declared here. That is the point of declaring it: it currently exists only by
-# runtime accident, which is the same class of bug documented for
-# pipeline_reports below - a managed container sitting empty while writes went
-# to an unmanaged, auto-created one.
-#
-# A `data` source was considered and rejected: nothing in the configuration
-# references this container's ID (the function's blob RBAC is account-scoped),
-# so a data block would be dead config that documents the drift without fixing
-# it. A resource puts lifecycle under Terraform and is what a retention policy
-# would attach to later, as azurerm_storage_management_policy.func already does
-# for the function account.
-#
-# Because it already exists, a plain apply would fail on a name conflict - the
-# import block below adopts it into state on the next apply instead.
-#
-# Do NOT resolve a conflict by destroying and recreating: RestoreService's snapshots now live
-# in "pipeline-reports" (see above), but this container still holds the vector cache -
-# destroying it loses every cached embedding, forcing a full re-embed of the corpus on the
-# next run.
-resource "azurerm_storage_container" "pipeline_artifacts" {
-  name                  = "pipeline-artifacts"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
-}
-
-# Resource-manager ID, not the https://<account>.blob.core.windows.net/<name>
-# data-plane URL - azurerm v4 moved azurerm_storage_container to ARM IDs along
-# with the storage_account_name -> storage_account_id change. The old URL form
-# fails to import against this provider version.
+# ARM ID form (azurerm v4), not the https://<account>.blob.core.windows.net/<name> URL - the URL
+# form fails to import against this provider version. No-op once the container is in state.
 import {
-  to = azurerm_storage_container.pipeline_artifacts
+  to = azurerm_storage_container.data["pipeline-artifacts"]
   id = "${azurerm_storage_account.data.id}/blobServices/default/containers/pipeline-artifacts"
 }
 
-resource "azurerm_storage_container" "test_questions" {
-  name                  = "test-questions"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
+# Private endpoints, looped. Storage permits one group ID per endpoint ("OnlyOneGroupIdPermitted"),
+# so func needs one per service (blob/queue/table/file); data needs blob only. The key is the
+# <target> segment of the endpoint name (naming.tf), so names are unchanged from the pre-loop
+# resources.
+locals {
+  storage_private_endpoints = {
+    "stfunc-blob" = {
+      target      = azurerm_storage_account.func.id
+      subresource = "blob"
+      dns_zone    = data.azurerm_private_dns_zone.blob.id
+    }
+    "stfunc-queue" = {
+      target      = azurerm_storage_account.func.id
+      subresource = "queue"
+      dns_zone    = data.azurerm_private_dns_zone.queue.id
+    }
+    "stfunc-table" = {
+      target      = azurerm_storage_account.func.id
+      subresource = "table"
+      dns_zone    = data.azurerm_private_dns_zone.table.id
+    }
+    "stfunc-file" = {
+      target      = azurerm_storage_account.func.id
+      subresource = "file"
+      dns_zone    = data.azurerm_private_dns_zone.file.id
+    }
+    "stdata" = {
+      target      = azurerm_storage_account.data.id
+      subresource = "blob"
+      dns_zone    = data.azurerm_private_dns_zone.blob.id
+    }
+  }
 }
 
-# No longer written to - eval-publish-results.yml now uploads results/summary/trx into
-# "pipeline-reports" alongside every other report (see Observability/Reports.md). Left declared,
-# not deleted, since it still holds every eval run's history from before that change and nothing
-# migrates historical reports.
-resource "azurerm_storage_container" "eval_results" {
-  name                  = "eval-results"
-  storage_account_id    = azurerm_storage_account.data.id
-  container_access_type = "private"
-}
-
-# Azure Storage only permits one group Id per private endpoint for this
-# account ("OnlyOneGroupIdPermitted... first-party resource"), so blob/queue/
-# table each need their own private endpoint rather than one bundled PE.
-resource "azurerm_private_endpoint" "stfunc_blob" {
-  name                          = "con-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}"
+resource "azurerm_private_endpoint" "storage" {
+  for_each                      = local.storage_private_endpoints
+  name                          = "con-pep-${each.key}-cap-${local.env}-${local.region}-${local.instance}"
   location                      = var.location
   resource_group_name           = data.azurerm_resource_group.data.name
   subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "con-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}_nic"
+  custom_network_interface_name = "con-pep-${each.key}-cap-${local.env}-${local.region}-${local.instance}_nic"
 
   private_service_connection {
-    name                           = "con-pep-stfunc-blob-cap-${local.env}-${local.region}-${local.instance}-psc"
-    private_connection_resource_id = azurerm_storage_account.func.id
-    subresource_names              = ["blob"]
+    name                           = "con-pep-${each.key}-cap-${local.env}-${local.region}-${local.instance}-psc"
+    private_connection_resource_id = each.value.target
+    subresource_names              = [each.value.subresource]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "default"
-    private_dns_zone_ids = [data.azurerm_private_dns_zone.blob.id]
-  }
-
-  tags = local.common_tags
-}
-
-resource "azurerm_private_endpoint" "stfunc_queue" {
-  name                          = "con-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}"
-  location                      = var.location
-  resource_group_name           = data.azurerm_resource_group.data.name
-  subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "con-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}_nic"
-
-  private_service_connection {
-    name                           = "con-pep-stfunc-queue-cap-${local.env}-${local.region}-${local.instance}-psc"
-    private_connection_resource_id = azurerm_storage_account.func.id
-    subresource_names              = ["queue"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [data.azurerm_private_dns_zone.queue.id]
-  }
-
-  tags = local.common_tags
-}
-
-resource "azurerm_private_endpoint" "stfunc_table" {
-  name                          = "con-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}"
-  location                      = var.location
-  resource_group_name           = data.azurerm_resource_group.data.name
-  subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "con-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}_nic"
-
-  private_service_connection {
-    name                           = "con-pep-stfunc-table-cap-${local.env}-${local.region}-${local.instance}-psc"
-    private_connection_resource_id = azurerm_storage_account.func.id
-    subresource_names              = ["table"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [data.azurerm_private_dns_zone.table.id]
-  }
-
-  tags = local.common_tags
-}
-
-resource "azurerm_private_endpoint" "stfunc_file" {
-  name                          = "con-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}"
-  location                      = var.location
-  resource_group_name           = data.azurerm_resource_group.data.name
-  subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "con-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}_nic"
-
-  private_service_connection {
-    name                           = "con-pep-stfunc-file-cap-${local.env}-${local.region}-${local.instance}-psc"
-    private_connection_resource_id = azurerm_storage_account.func.id
-    subresource_names              = ["file"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [data.azurerm_private_dns_zone.file.id]
-  }
-
-  tags = local.common_tags
-}
-
-resource "azurerm_private_endpoint" "stdata" {
-  name                          = "con-pep-stdata-cap-${local.env}-${local.region}-${local.instance}"
-  location                      = var.location
-  resource_group_name           = data.azurerm_resource_group.data.name
-  subnet_id                     = data.azurerm_subnet.pe.id
-  custom_network_interface_name = "con-pep-stdata-cap-${local.env}-${local.region}-${local.instance}_nic"
-
-  private_service_connection {
-    name                           = "con-pep-stdata-cap-${local.env}-${local.region}-${local.instance}-psc"
-    private_connection_resource_id = azurerm_storage_account.data.id
-    subresource_names              = ["blob"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [data.azurerm_private_dns_zone.blob.id]
+    private_dns_zone_ids = [each.value.dns_zone]
   }
 
   tags = local.common_tags

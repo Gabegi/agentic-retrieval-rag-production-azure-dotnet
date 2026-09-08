@@ -280,6 +280,12 @@ public sealed class ExtractionReporter
         var confidenceByBlob = output.WordConfidences.ToDictionary(
             c => c.BlobName, c => c.Summary, StringComparer.Ordinal);
 
+        // And what the service says the document IS - CU's own generated summary, which the
+        // pipeline paid for on every run since the CU switch and read nowhere until 2026-09-08
+        // (A2). Absent when the response carried no Summary field.
+        var summaryByBlob = output.Summaries.ToDictionary(
+            s => s.BlobName, s => s.Summary, StringComparer.Ordinal);
+
         var fileFacts = output.Docs.Select(d => new
         {
             BlobName  = d.SourceId,
@@ -324,6 +330,14 @@ public sealed class ExtractionReporter
             MergedTableCells = d.Tables.Sum(t =>
                 t.Cells.Count(c => c.RowSpan is not null || c.ColumnSpan is not null)),
 
+            // Geometry coverage (2026-09-08). Every table and figure carries a Source string,
+            // so these should equal Tables and Figures above; a drop back towards zero means
+            // the parse regressed or the service stopped sending it, and that has to be
+            // visible in a report rather than discovered when a highlight feature is built -
+            // the regions cannot be re-read after the run, only re-bought.
+            TablesWithRegions  = d.Tables.Count(t => t.Regions.Count > 0),
+            FiguresWithRegions = d.Figures.Count(f => f.Regions is { Count: > 0 }),
+
             // "chart" / "mermaid" / "unknown", the service's own DocumentFigureKind. Q1 checked
             // by hand that this corpus has zero chart-like figures and concluded "nothing to
             // build until one appears" - this is what makes that a monitored condition rather
@@ -353,6 +367,19 @@ public sealed class ExtractionReporter
             // WordConfidenceSummary for why an invented "low confidence" line is not shipped
             // here. Null means the response carried no word confidences.
             WordConfidence = confidenceByBlob.GetValueOrDefault(d.SourceId),
+
+            // What the service says this document IS, in its own words (A2, 2026-09-08).
+            // Metadata only - deliberately not an indexed chunk, since a whole-document
+            // summary would compete with real chunks for recall (260819 decision).
+            // Text is capped at DocumentSummary.ReportTextCap with the truncation reported
+            // next to it; the confidence is the ONE field confidence this response carries,
+            // and A11 is where a threshold would eventually be calibrated against it - no
+            // rule reads it yet. Grounding is a span COUNT: it says whether the summary was
+            // anchored in the document at all, without carrying the spans.
+            Summary               = summaryByBlob.GetValueOrDefault(d.SourceId)?.TextForReport,
+            SummaryTruncated      = summaryByBlob.GetValueOrDefault(d.SourceId)?.TruncatedInReport,
+            SummaryConfidence     = summaryByBlob.GetValueOrDefault(d.SourceId)?.Confidence,
+            SummaryGroundingSpans = summaryByBlob.GetValueOrDefault(d.SourceId)?.GroundingSpanCount,
         }).ToList();
 
         await _reportWriter.WriteReportAsync(

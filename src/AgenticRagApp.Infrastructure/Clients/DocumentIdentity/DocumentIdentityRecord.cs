@@ -24,4 +24,14 @@ public sealed record DocumentIdentityRecord(
     float[]  Vector,
     string   FamilyId,
     string   IdentityTextHash,
-    string?  EmbeddingModelId = null);
+    string?  EmbeddingModelId = null)
+{
+    // The identity hash DomainTag was classified against (IdentityTagger). The tag is reused
+    // while this equals the document's current identity hash and re-derived otherwise - the
+    // same "pay once per document version" contract IdentityTextHash gives the vector. Null
+    // means never classified (including every record written before this field existed, which
+    // deserializes without it): those documents are classified on their next run. Distinct
+    // from IdentityTextHash only after a classification failure, where the stale tag is kept
+    // but stamped with the OLD hash so the retry still happens.
+    public string? TaggedAtHash { get; init; }
+}

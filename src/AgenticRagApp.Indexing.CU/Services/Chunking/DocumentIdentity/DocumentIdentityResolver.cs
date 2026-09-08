@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
+using AgenticRagApp.Infrastructure.Clients.DomainClassification;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.CU.Models;
@@ -20,6 +21,8 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // admission rules, no store writes, and no log line that belongs to a single step. In order:
 //   DocumentIdentityBuilder      - what gets embedded, and the hash that decides re-embedding
 //   IdentityTokenPressureCheck   - what could not be identified, and what is nearing the limit
+//   IdentityTagger               - the population tag: reused from the store while the identity
+//                                  hash is unchanged, classified by IDomainClassifier otherwise
 //   IdentityEmbedder             - the vectors for the documents whose identity moved
 //   IdentityComparisonSet        - which documents clustering is allowed to run over
 //   CosineSimilarityClusterer    - the grouping, plus the diagnostics the calibration pass needs
@@ -34,9 +37,11 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // class holds them only to pass them in.
 //
 // Not to be confused with DocumentIdentityBuilder, which it calls: the BUILDER composes the
-// text a document is identified BY (title + domain tag + headings, and its hash), while this
-// RESOLVER turns those identities into the resolved identity a chunk carries (FamilyId,
-// DomainTag, ConfusableWith) and persists it.
+// text a document is identified BY (title + headings, and its hash), while this RESOLVER
+// turns those identities into the resolved identity a chunk carries (FamilyId, DomainTag,
+// ConfusableWith) and persists it. DomainTag itself is filled by IdentityTagger - it is
+// deliberately outside the identity text, so the classifier's output can never perturb the
+// hash, the re-embed gate, or the clustering geometry.
 //
 // Family membership is corpus-wide, not run-scoped: a document processed today needs to
 // cluster against every document ever indexed, not just whatever else happens to be in this
@@ -72,6 +77,7 @@ public class DocumentIdentityResolver
 {
     private readonly IEmbeddingClient          _embeddingClient;
     private readonly IDocumentIdentityStore    _store;
+    private readonly IDomainClassifier         _classifier;
     private readonly ILogger<DocumentIdentityResolver> _logger;
 
     // Identifies the embedding space the persisted vectors live in. Folded into the identity
@@ -93,6 +99,7 @@ public class DocumentIdentityResolver
     public DocumentIdentityResolver(
         IEmbeddingClient embeddingClient,
         IDocumentIdentityStore store,
+        IDomainClassifier classifier,
         IndexerConfig config,
         ILogger<DocumentIdentityResolver> logger)
     {
@@ -100,6 +107,7 @@ public class DocumentIdentityResolver
 
         _embeddingClient     = embeddingClient ?? throw new ArgumentNullException(nameof(embeddingClient));
         _store               = store           ?? throw new ArgumentNullException(nameof(store));
+        _classifier          = classifier      ?? throw new ArgumentNullException(nameof(classifier));
         _logger              = logger          ?? throw new ArgumentNullException(nameof(logger));
         _embeddingModelId    = $"{config.OpenAiEmbeddingModelName}@{config.OpenAiEmbeddingDimensions}";
         _embeddingDimensions = config.OpenAiEmbeddingDimensions;
@@ -117,6 +125,12 @@ public class DocumentIdentityResolver
             return IdentityDiagnosticsBuilder.Empty(_embeddingModelId, docs.Count, built.SkippedEmptyIdentity);
 
         var persisted = (await _store.GetAllAsync(ct)).ToDictionary(r => r.SourceId);
+
+        // Tags before vectors: from here on, thisRun carries the resolved DomainTag, and both
+        // IdentityResultBuilder (what chunks get stamped with) and IdentityStoreWriter (what
+        // gets persisted) read it from there. The identity hash was computed WITHOUT the tag,
+        // so nothing about embedding or clustering depends on this step's output.
+        thisRun = await IdentityTagger.ApplyAsync(_classifier, _logger, thisRun, persisted, ct);
 
         var freshVectors = await IdentityEmbedder.EmbedChangedAsync(
             _embeddingClient, _logger, thisRun, persisted, _embeddingDimensions, ct);

@@ -60,6 +60,13 @@ internal sealed record ExtractedFile(
     // with a confidence, which is blank rather than zero.
     public WordConfidenceSummary? WordConfidence { get; init; }
 
+    // CU's generated whole-document summary (fields.Summary), mapped by CUHelper. Measurement
+    // and metadata only, same lifecycle as the three properties above: ExtractionOutputBuilder
+    // lifts it onto PdfExtractionOutput.Summaries and the reporter writes it into the
+    // per-document facts report. It is deliberately NOT indexed - see DocumentSummary. Null
+    // means the response carried no Summary field, or one carrying no text.
+    public DocumentSummary? Summary { get; init; }
+
     // A factory rather than nine positional nulls repeated at every failure site.
     public static ExtractedFile Failed(
         string blobName, PipelineIssue error, IReadOnlyList<PipelineIssue>? warnings = null) =>

@@ -18,6 +18,13 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // ("chart" / "mermaid" / "unknown"); Payload is the analysis content for the kinds that carry
 // one - Chart.js config JSON for a chart (CuChartHelper), Mermaid source for a diagram
 // (CuDiagramHelper). Both trailing defaults for the same snapshot-compat reason as Description.
+//
+// Regions is the figure's geometry, parsed from CU's Source string by CuGeometryHelper
+// (2026-09-08) - one region per page, the same shape and the same reason as TableInfo.Regions:
+// this is what a crop or a highlight-on-source overlay reads, and re-acquiring it after the run
+// means a paid re-analysis rather than a re-read. Null (not empty) for the same snapshot-compat
+// reason as the three fields above: a chunks blob written before the field existed says
+// "extracted before regions existed", which is not the same as "this figure has no geometry".
 public sealed record FigureInfo(
     string? Caption,
     int? Offset,
@@ -26,4 +33,5 @@ public sealed record FigureInfo(
     IReadOnlyList<string> Elements,
     string? Description = null,
     string? Kind = null,
-    string? Payload = null);
+    string? Payload = null,
+    IReadOnlyList<DocumentRegion>? Regions = null);

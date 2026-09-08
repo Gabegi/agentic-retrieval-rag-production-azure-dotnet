@@ -41,6 +41,11 @@ public sealed record PdfExtractionOutput(IReadOnlyList<PdfExtractionDocument> Do
     // absent, not present-with-nulls.
     public IReadOnlyList<DocumentWordConfidence> WordConfidences { get; init; } = [];
 
+    // CU's generated whole-document summary per document, in blob-name order. Report-only and
+    // NOT indexed - see DocumentSummary for both decisions. Same lifecycle as the four lists
+    // above; documents whose response carried no Summary field are absent.
+    public IReadOnlyList<DocumentSummaryEntry> Summaries { get; init; } = [];
+
     // The service's per-model token map summed across every document that reported one, keys
     // verbatim as billed (e.g. "gpt-4.1-mini-input") - see CuUsage.TokensByModel for why the
     // keys are not split. This is the number that maps to the AI-deployment bill; the two

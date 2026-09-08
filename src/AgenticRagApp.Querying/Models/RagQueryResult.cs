@@ -39,4 +39,10 @@ public record RagQueryResult(
     long?                  Seed,
     string?                ResponseFormat,
     IReadOnlyList<string>? StopSequences,
-    IReadOnlyList<Citation> Citations);
+    IReadOnlyList<Citation> Citations,
+    // The searches the knowledge base planned and ran for this question, in order (see
+    // KnowledgeBaseActivitySummary.CollectSubQueries). One entry = the planner produced a
+    // single search, so this request got nothing a plain search could not have done; several
+    // entries = it decomposed the question. Empty on a guard-blocked row, where no retrieval
+    // quality is being measured anyway.
+    IReadOnlyList<string>? SubQueries = null);

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
+using AgenticRagApp.Infrastructure.Clients.DomainClassification;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.CU.Models;
@@ -35,9 +36,26 @@ public class ChunkingServiceTests
         // Dimensions match the 3-float vectors above - DocumentIdentityResolver rejects a vector whose
         // length is not the configured dimension count.
         return new DocumentIdentityResolver(
-            embeddingClient.Object, store.Object,
+            embeddingClient.Object, store.Object, FakeClassifier(),
             new IndexerConfig { OpenAiEmbeddingDimensions = 3 },
             NullLogger<DocumentIdentityResolver>.Instance);
+    }
+
+    // Tags the way the retired title regex used to ("CAO GGZ 2025" -> GGZ), so the
+    // chunk-mechanics assertions (tag in the prefix AND the filterable field) hold without a
+    // live model. The classifier itself is upstream of everything these tests exercise - its
+    // own behaviour is covered by DomainClassifierTests and DocumentIdentityResolverTests.
+    private static IDomainClassifier FakeClassifier()
+    {
+        var classifier = new Mock<IDomainClassifier>();
+        classifier
+            .Setup(c => c.ClassifyAsync(It.IsAny<IReadOnlyList<DocumentToClassify>>(), It.IsAny<CancellationToken>()))
+            .Returns<IReadOnlyList<DocumentToClassify>, CancellationToken>((docs, _) =>
+                Task.FromResult<IReadOnlyDictionary<string, string?>>(docs.ToDictionary(
+                    d => d.SourceId,
+                    d => d.Title.Contains("GGZ", StringComparison.Ordinal) ? "GGZ" : null,
+                    StringComparer.Ordinal)));
+        return classifier.Object;
     }
 
     // Captures whatever ChunkingService writes, so the report-shape tests can assert on it
@@ -537,7 +555,7 @@ public class ChunkingServiceTests
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
         var resolver = new DocumentIdentityResolver(
-            client.Object, store.Object,
+            client.Object, store.Object, FakeClassifier(),
             new IndexerConfig { OpenAiEmbeddingDimensions = 3 },
             NullLogger<DocumentIdentityResolver>.Instance);
 

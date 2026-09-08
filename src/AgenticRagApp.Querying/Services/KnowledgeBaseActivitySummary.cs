@@ -28,4 +28,32 @@ public static class KnowledgeBaseActivitySummary
         }
         return (input, output);
     }
+
+    /// <summary>
+    /// The search queries the knowledge base actually issued against the index for one
+    /// retrieve, in activity order.
+    /// </summary>
+    /// <remarks>
+    /// This is the only direct evidence of what agentic retrieval did with a question. The
+    /// knowledge base plans its own searches and reports one
+    /// <see cref="KnowledgeBaseSearchIndexActivityRecord"/> per search it ran, each carrying
+    /// the query text it used. One record with the question echoed back means the planning
+    /// step cost tokens and produced a single ordinary search; several records with different
+    /// texts mean it decomposed the question, which is the behaviour a plain vector search
+    /// cannot reproduce.
+    ///
+    /// Without this, "did agentic retrieval add value" can only be answered by comparing
+    /// answer scores against a separate non-agentic run - which conflates planning, the
+    /// synthesis model, and retrieval into one number. The per-row count separates them:
+    /// a decomposition-labelled question answered from one search was never actually given
+    /// the chance to benefit.
+    /// </remarks>
+    public static IReadOnlyList<string> CollectSubQueries(IEnumerable<KnowledgeBaseActivityRecord>? activity) =>
+        activity?
+            .OfType<KnowledgeBaseSearchIndexActivityRecord>()
+            .Select(r => r.SearchIndexArguments?.Search)
+            .Where(q => !string.IsNullOrWhiteSpace(q))
+            .Select(q => q!)
+            .ToList()
+        ?? [];
 }

@@ -126,6 +126,7 @@ internal static class ExtractionOutputBuilder
             Durations              = BuildDurations(files),
             Usages                 = BuildUsages(files),
             WordConfidences        = BuildWordConfidences(files),
+            Summaries              = BuildSummaries(files),
             BilledTokensByModel    = BuildTokensByModel(files),
         };
     }
@@ -158,6 +159,15 @@ internal static class ExtractionOutputBuilder
             .Where(f => f.WordConfidence is not null)
             .OrderBy(f => f.BlobName, StringComparer.Ordinal)
             .Select(f => new DocumentWordConfidence(f.BlobName, f.WordConfidence!, f.Ok))];
+
+    // CU's whole-document summary per document, lifted the same way. Documents whose response
+    // carried no Summary field are absent rather than present-with-an-empty-string, exactly as
+    // with usage and word confidence.
+    internal static List<DocumentSummaryEntry> BuildSummaries(IReadOnlyList<ExtractedFile> files) =>
+        [.. files
+            .Where(f => f.Summary is not null)
+            .OrderBy(f => f.BlobName, StringComparer.Ordinal)
+            .Select(f => new DocumentSummaryEntry(f.BlobName, f.Summary!, f.Ok))];
 
     // The run's per-model token bill: every document's TokensByModel summed key-by-key, keys
     // verbatim as the service bills them. Ordered for the same diff-cleanly reason as the lists.

@@ -19,6 +19,8 @@ using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Embedding;
 using AgenticRagApp.Infrastructure.Clients.ContentSafety;
 using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
+using AgenticRagApp.Infrastructure.Clients.DomainClassification;
+using AgenticRagApp.Infrastructure.Clients.Language;
 
 namespace AgenticRagApp.Infrastructure;
 
@@ -173,6 +175,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IBlobStore, BlobStore>();
         services.AddSingleton<IKnowledgeRetrievalClient, KnowledgeBaseClient>();
         services.AddSingleton<IEmbeddingClient, EmbeddingClient>();
+        // Per-document population tags (domain_tag) over the IChatClient above. Consumed by
+        // DocumentIdentityResolver's IdentityTagger step in Indexing.CU.
+        services.AddSingleton<IDomainClassifier, DomainClassifier>();
+        // Per-document language detection over the TextAnalyticsClient above - the producer the
+        // index's `language` field never had (see IDocumentLanguageDetector). Consumed by the
+        // extraction stage in Indexing.CU.
+        services.AddSingleton<IDocumentLanguageDetector, DocumentLanguageDetector>();
 
         // Corpus-wide family/domain identity store — "pipeline-artifacts" container, under its
         // own document-identity/ path prefix (see DocumentIdentityStore), the same container

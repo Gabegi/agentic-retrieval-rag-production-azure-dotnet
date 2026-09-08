@@ -169,7 +169,7 @@ public static class FlagEvaluator
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Chunking.UntaggedFamilyMemberIds",
                 $"{c.UntaggedFamilyMemberIds.Count} ({string.Join(", ", c.UntaggedFamilyMemberIds.Take(5))})", "0",
                 "These documents sit in a multi-member family but carry no DomainTag — the near-duplicate set they belong to cannot be disambiguated by sector, so retrieval can answer from the wrong one.",
-                "Check what DomainTagger was given: it tags off the extracted Title, which under Content Understanding can be a cover slogan or a copyright line. The filename usually carries the sector verbatim."));
+                "Check IdentityTagger in the run logs: either the DomainClassifier call failed for these documents (retried automatically next run) or the model judged that no population applies — for a multi-member family the latter is worth a human look."));
 
         if (c.ChunksProduced == 0) return; // nothing to compute ratios against
 
