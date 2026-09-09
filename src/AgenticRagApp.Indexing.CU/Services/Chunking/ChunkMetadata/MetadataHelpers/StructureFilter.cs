@@ -17,11 +17,16 @@ public static class StructureFilter
     public static ChunkStructure Build(PdfExtractionDocument doc, int pageStart, int pageEnd) =>
         new(Headings:       OnPages(doc.Headings,       h => h.PageNumber, pageStart, pageEnd),
             Boilerplate:    OnPages(doc.Boilerplate,    h => h.PageNumber, pageStart, pageEnd),
-            Tables:         OnPages(doc.Tables,         t => t.PageNumber, pageStart, pageEnd),
+            // Tables are the one element filtered on a RANGE rather than an anchor page
+            // (2026-09-08): a table spanning pages 12-14 has an anchor page of 12, so an
+            // anchor test attached it to chunks on page 12 only and a continuation fragment on
+            // page 14 reported table_count 0 while carrying half the table's rows. The range
+            // comes from the parsed regions; without geometry TableInfo falls back to the
+            // anchor, which is exactly the old behaviour.
+            Tables:         Overlapping(doc.Tables,     t => t.OverlapsPages(pageStart, pageEnd)),
             // The page the cut STARTS on. A cut spanning two differently-sized pages has no
             // single geometry, and the first page is the one a highlight would open on.
             Dimensions:     doc.PageSpans.FirstOrDefault(s => s.PageNumber == pageStart)?.Dimensions,
-            SelectionMarks: OnPages(doc.SelectionMarks, s => s.PageNumber, pageStart, pageEnd),
             Figures:        OnPages(doc.Figures,        f => f.PageNumber, pageStart, pageEnd),
             Annotations:    OnPages(doc.Annotations,    a => a.PageNumber, pageStart, pageEnd),
             Hyperlinks:     OnPages(doc.Hyperlinks,     h => h.PageNumber, pageStart, pageEnd));
@@ -58,4 +63,10 @@ public static class StructureFilter
     private static IReadOnlyList<T> OnPages<T>(
         IReadOnlyList<T> items, Func<T, int> pageOf, int start, int end) =>
         items.Where(i => pageOf(i) >= start && pageOf(i) <= end).ToList();
+
+    // For elements that occupy a page RANGE rather than sitting on one page. The predicate is
+    // the element's own, so the definition of "which pages is this on" stays with the type that
+    // knows - see TableInfo.OverlapsPages.
+    private static IReadOnlyList<T> Overlapping<T>(IReadOnlyList<T> items, Func<T, bool> overlaps) =>
+        items.Where(overlaps).ToList();
 }

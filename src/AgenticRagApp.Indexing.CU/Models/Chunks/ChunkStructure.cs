@@ -8,14 +8,14 @@ namespace AgenticRagApp.Indexing.CU.Models;
 //
 // Every list here is filtered to the chunk's own page range, so its cost scales with the
 // chunk, not with the document. Measured per document on the 260812 corpus run: Headings
-// 4.3 KB, SelectionMarks 3.1 KB, Boilerplate 2.2 KB, Figures 1.2 KB. Tables is heavier
+// 4.3 KB, Boilerplate 2.2 KB, Figures 1.2 KB. Tables is heavier
 // (36.3 KB) but two indexed fields are derived from it.
 //
-// LINES IS DELIBERATELY ABSENT, and is the one exception to the rule above. It was 57% of
-// the entire extraction payload by itself - 178 KB per document, a polygon per text line -
-// and page-filtering only reduces it to roughly one copy per chunk covering that page. It
-// exists for a future highlight-on-source feature, which would read it from
-// PdfExtractionDocument (where it still lives, once) rather than from a chunk.
+// Lines are absent here AND on the document since 2026-09-09 (PdfDocumentStructure carries a
+// LineCount). The list was 57% of the entire extraction payload by itself - 178 KB per
+// document, a polygon per text line - so the polygon was dropped, and without it the list
+// served no consumer; the highlight-on-source feature it was kept for would re-read line
+// geometry off the response (CuGeometryHelper) the day it exists.
 //
 // Sections are absent for a different and stronger reason - see ChunkObject.
 // They are per-DOCUMENT data, so attaching them here costs sections x chunk-count, and both
@@ -32,12 +32,11 @@ public sealed record ChunkStructure(
     IReadOnlyList<Heading>           Boilerplate,
     IReadOnlyList<TableInfo>         Tables,
     PageDimensions?                  Dimensions,
-    IReadOnlyList<SelectionMarkInfo> SelectionMarks,
     IReadOnlyList<FigureInfo>        Figures,
     // CU-typed additions (2026-08-26), page-filtered like everything above. Trailing defaults
     // so chunks blobs written before the fields existed still deserialize.
     IReadOnlyList<AnnotationInfo>?   Annotations = null,
     IReadOnlyList<HyperlinkInfo>?    Hyperlinks  = null)
 {
-    public static readonly ChunkStructure Empty = new([], [], [], null, [], [], [], []);
+    public static readonly ChunkStructure Empty = new([], [], [], null, [], [], []);
 }

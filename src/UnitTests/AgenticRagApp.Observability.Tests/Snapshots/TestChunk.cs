@@ -29,7 +29,6 @@ internal sealed record TestChunk(
     public bool    IsOverlap          => false;
 
     public int     PageEnd            => 0;
-    public bool    PageExtractionFlag => false;
 
     public string?               FamilyId       => null;
     public string?               DomainTag      => null;
@@ -39,6 +38,7 @@ internal sealed record TestChunk(
 
     public int                   TokenCount     => 0;
     public int                   TableCount     => 0;
+    public bool                  HasTable       => false;
     public IReadOnlyList<string> FigureCaptions => [];
     public IReadOnlyList<string> Hyperlinks     => [];
     public IReadOnlyList<string> Annotations    => [];

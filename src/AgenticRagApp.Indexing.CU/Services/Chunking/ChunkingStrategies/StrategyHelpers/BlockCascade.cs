@@ -4,17 +4,23 @@ namespace AgenticRagApp.Indexing.CU.Services;
 
 // Cuts one WINDOW of a document down to a ceiling. The single cutter BOTH routes go through.
 //
-// It receives a window and a ceiling and knows nothing else: not whether the window is a heading
-// section or a whole document, not what reduced the ceiling, no headings, no prefixes, no
-// ChunkObject, no route. That is what makes it shareable - route 1 hands it one section, route 2
-// hands it the whole document - and it is why an oversized section and an unstructured document
-// cannot drift apart about what a table is.
+// It receives a window, a ceiling and the document's typed tables, and knows nothing else: not
+// whether the window is a heading section or a whole document, not what reduced the ceiling, no
+// headings, no prefixes, no ChunkObject, no route. That is what makes it shareable - route 1
+// hands it one section, route 2 hands it the whole document - and it is why an oversized
+// section and an unstructured document cannot drift apart about what a table is.
 //
 // The order is a cascade of DECREASING STRUCTURE. A block is classified once, by the strongest
 // structure it shows, and the classification decides how it may be cut: a table on rows, a
 // key-value run on pairs, a list on items, and only prose falls through to the length ladder.
 // Prose is the LAST answer, not the first, because a mid-row or mid-pair cut destroys
 // information that a mid-paragraph cut merely interrupts.
+//
+// TABLES COME FROM THE SERVICE (2026-09-09): the ranges Content Understanding typed as tables
+// (TableInfo.Offset/Length) are handed to BlockParser as the table blocks; nothing here
+// detects table markup. A document extracted before Length was mapped has no usable spans and
+// therefore no table blocks - its tables are cut as prose, which is the honest consequence of
+// absent data, not a fallback to detection.
 //
 // COORDINATES. The window is sliced out to be parsed, but every block is shifted straight back
 // into the source's coordinates before anything is cut, so the pieces that come out address
@@ -23,8 +29,10 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // having to be re-established afterwards by arithmetic at the call site.
 public static class BlockCascade
 {
-    // start/end are a half-open range into content, in cleaned-content coordinates.
-    public static IReadOnlyList<ContentPiece> Cut(string content, int start, int end, int ceiling)
+    // start/end are a half-open range into content, in doc.Content coordinates (the verbatim CU
+    // markdown); tables are the document's typed tables in the same coordinates.
+    public static IReadOnlyList<ContentPiece> Cut(
+        string content, int start, int end, int ceiling, IReadOnlyList<TableInfo> tables)
     {
         var pieces   = new List<ContentPiece>();
         var proseRun = new List<ContentBlock>();
@@ -37,13 +45,12 @@ public static class BlockCascade
         // 1. Parse the window into blocks - the units the classification cascade runs on - then
         //    shift each one back into source coordinates immediately, so nothing below this line
         //    has to remember that a window was ever taken.
-        foreach (var parsed in BlockParser.Parse(content[start..end]))
+        foreach (var parsed in BlockParser.Parse(content[start..end], TableRangesWithin(tables, start, end)))
         {
             var block = parsed with { Start = parsed.Start + start };
 
-            // 2. Table? A run of consecutive pipe-markdown lines with a header row and a
-            //    separator row. Cut on row boundaries, header repeated per fragment.
-            if (TableDetector.IsTable(block))
+            // 2. Table? The service said so. Cut on row boundaries, header repeated per fragment.
+            if (block.Kind == BlockKind.Table)
             {
                 FlushProse(content, proseRun, pieces, ceiling);
                 pieces.AddRange(TableCutter.Cut(block, ceiling));
@@ -78,6 +85,18 @@ public static class BlockCascade
 
         return pieces;
     }
+
+    // The typed table spans that lie WHOLLY inside the window, in window coordinates. A table
+    // that straddles the window edge is left to the line classifier (prose): a window edge is a
+    // heading offset, and a heading inside a table is not something the analyzer produces, so
+    // this is a shape that should not occur rather than one to handle by clipping. Tables with
+    // no span (Offset or Length null) contribute nothing.
+    private static IReadOnlyList<(int Start, int End)> TableRangesWithin(
+        IReadOnlyList<TableInfo> tables, int start, int end) =>
+        [.. tables
+            .Where(t => t.Offset is int o && t.Length is int l && o >= start && o + l <= end)
+            .Select(t => (t.Offset!.Value - start, t.Offset!.Value + t.Length!.Value - start))
+            .OrderBy(r => r.Item1)];
 
     // Packing is why prose cannot be emitted paragraph by paragraph inside the loop: consecutive
     // paragraphs merge up to the ceiling, and it is an ATOMIC BLOCK that closes the run. A table

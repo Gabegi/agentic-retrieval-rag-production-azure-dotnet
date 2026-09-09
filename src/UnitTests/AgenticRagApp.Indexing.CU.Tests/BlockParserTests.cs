@@ -1,14 +1,26 @@
 using AgenticRagApp.Indexing.CU.Services;
 
+using static RagApp.UnitTests.Indexing.ChunkingTestFixtures;
+
 namespace RagApp.UnitTests.Indexing;
 
 // One forward pass that turns a document into blocks. The helper it replaces split on newlines
 // and rejoined the runs, which is wrong twice over: it rewrites CRLF as LF, and it produces a
 // string with no position in the document. Everything downstream - page attribution, the
 // section window, the slice invariant - depends on a block being a WINDOW onto the content.
+//
+// Tables are TYPED (2026-09-09): the parser is handed the ranges Content Understanding reported
+// as tables and detects nothing table-shaped itself. The fixtures scan their own markdown for
+// `<table>...</table>` to stand in for the analyzer (TableRangesIn) - production never does.
 [TestClass]
 public class BlockParserTests
 {
+    private const string HtmlTable =
+        "<table><tr><th>kop</th><th>waarde</th></tr><tr><td>a</td><td>1</td></tr></table>";
+
+    private static IReadOnlyList<ContentBlock> Parse(string content) =>
+        BlockParser.Parse(content, TableRangesIn(content));
+
     // The property everything else rests on: blocks tile the document exactly, so no character
     // is dropped at parse time and no character is covered twice.
     private static void AssertTilesExactly(string content, IReadOnlyList<ContentBlock> blocks)
@@ -28,7 +40,7 @@ public class BlockParserTests
     [TestMethod]
     public void EmptyContent_ProducesNoBlocks()
     {
-        Assert.AreEqual(0, BlockParser.Parse("").Count);
+        Assert.AreEqual(0, Parse("").Count);
     }
 
     [TestMethod]
@@ -36,12 +48,10 @@ public class BlockParserTests
     {
         // The newline between two runs belongs to the earlier one, which is what makes the
         // concatenation above reproduce the source exactly.
-        const string content =
+        var content =
             "Een gewone alinea met tekst.\n" +
             "\n" +
-            "| kop | waarde |\n" +
-            "| --- | --- |\n" +
-            "| a | 1 |\n" +
+            HtmlTable + "\n" +
             "\n" +
             "- eerste punt\n" +
             "- tweede punt\n" +
@@ -51,18 +61,16 @@ public class BlockParserTests
             "\n" +
             "Slotalinea.";
 
-        AssertTilesExactly(content, BlockParser.Parse(content));
+        AssertTilesExactly(content, Parse(content));
     }
 
     [TestMethod]
     public void EachKindIsRecognised_WhenItStandsOnItsOwn()
     {
-        const string content =
+        var content =
             "Inleidende alinea.\n" +
             "\n" +
-            "| kop | waarde |\n" +
-            "| --- | --- |\n" +
-            "| a | 1 |\n" +
+            HtmlTable + "\n" +
             "\n" +
             "- eerste punt\n" +
             "- tweede punt\n" +
@@ -70,7 +78,7 @@ public class BlockParserTests
             "Vastgesteld: 12-03-2024\n" +
             "Documentnummer: 4.2.1\n";
 
-        var kinds = BlockParser.Parse(content).Select(b => b.Kind).ToList();
+        var kinds = Parse(content).Select(b => b.Kind).ToList();
 
         CollectionAssert.Contains(kinds, BlockKind.Table);
         CollectionAssert.Contains(kinds, BlockKind.ListRun);
@@ -86,38 +94,125 @@ public class BlockParserTests
         // to slice.
         const string content = "Eerste alinea.\r\n\r\nTweede alinea.\r\n";
 
-        var blocks = BlockParser.Parse(content);
+        var blocks = Parse(content);
 
         Assert.IsTrue(blocks.Any(b => b.Text.Contains('\r')));
         AssertTilesExactly(content, blocks);
     }
 
-    [TestMethod]
-    public void OneLineContainingPipes_IsProse_NotATable()
-    {
-        // A table needs two consecutive rows. One line that happens to contain pipes is a
-        // sentence with pipes in it, and the run that fails its own detector is demoted.
-        const string content = "De kolommen | a | b | staan hier in de lopende tekst.";
+    // ── tables are typed, not detected ───────────────────────────────────────
 
-        var blocks = BlockParser.Parse(content);
+    [TestMethod]
+    public void ATableIsWhereTheServiceSaysItIs_NotWhereTheMarkupLooksLikeOne()
+    {
+        // The same text twice: once with the typed span, once without. Only the span makes a
+        // table block - the markup on its own is not evidence, the service is.
+        const string content = "Inleiding.\n\n" + HtmlTable + "\n\nSlot.";
+
+        var typed   = BlockParser.Parse(content, TableRangesIn(content));
+        var untyped = BlockParser.Parse(content, []);
+
+        Assert.AreEqual(1, typed.Count(b => b.Kind == BlockKind.Table));
+        Assert.AreEqual(0, untyped.Count(b => b.Kind == BlockKind.Table), "no span, no table - never a regex fallback");
+        Assert.AreEqual(1, untyped.Count, "without the span the whole thing is one prose flow");
+        AssertTilesExactly(content, typed);
+        AssertTilesExactly(content, untyped);
+    }
+
+    [TestMethod]
+    public void GfmPipeRows_AreProse()
+    {
+        // Content Understanding never emits GFM (tableFormat is fixed at html), and nothing here
+        // recognises it any more - two pipe rows are two lines of prose with pipes in them.
+        const string content = "| kop | waarde |\n| --- | --- |\n| a | 1 |";
+
+        var blocks = Parse(content);
 
         Assert.AreEqual(1, blocks.Count);
         Assert.AreEqual(BlockKind.Prose, blocks[0].Kind);
     }
 
     [TestMethod]
-    public void ADemotedRun_IsMergedWithItsProseNeighbours()
+    public void TwoTypedTablesBackToBack_AreTwoBlocks()
     {
-        // Prose runs that become adjacent after a demotion are one paragraph flow, not three
-        // blocks - and the merge is a re-slice, so the text still matches the source.
-        const string content = "Alinea een.\n| eenzame pipe regel |\nAlinea twee.";
+        // TableCutter closes and repeats the markup of ONE table; two spans that touch are still
+        // two tables, whatever the lines between them look like.
+        const string content = HtmlTable + "\n" + HtmlTable;
 
-        var blocks = BlockParser.Parse(content);
+        var blocks = Parse(content);
 
-        Assert.AreEqual(1, blocks.Count);
-        Assert.AreEqual(BlockKind.Prose, blocks[0].Kind);
-        Assert.AreEqual(content, blocks[0].Text);
+        Assert.AreEqual(2, blocks.Count(b => b.Kind == BlockKind.Table));
+        AssertTilesExactly(content, blocks);
     }
+
+    [TestMethod]
+    public void ABlankLineTerminatesATableRun_ButNotAParagraphFlow()
+    {
+        // Blank lines classify as prose so a paragraph keeps the blank line after it, while a
+        // table run still ends where its span does.
+        const string content = HtmlTable + "\n\n" + HtmlTable;
+
+        var blocks = Parse(content);
+
+        Assert.AreEqual(2, blocks.Count(b => b.Kind == BlockKind.Table));
+        AssertTilesExactly(content, blocks);
+    }
+
+    [TestMethod]
+    public void AnHtmlTableOnOneLine_IsOneTableBlock()
+    {
+        // How Content Understanding actually writes a table: markup with no newlines of its own.
+        const string content =
+            "Inleidende alinea.\n\n" +
+            "<table><tr><th>Functie</th></tr><tr><td>Verpleegkundige</td></tr></table>\n\n" +
+            "Slotalinea.\n";
+
+        var blocks = Parse(content);
+
+        var table = blocks.Single(b => b.Kind == BlockKind.Table);
+        StringAssert.Contains(table.Text, "<table>");
+        StringAssert.Contains(table.Text, "</table>");
+        AssertTilesExactly(content, blocks);
+    }
+
+    [TestMethod]
+    public void AMultiLineTypedTable_StaysOneBlock_WhateverItsLinesLookLike()
+    {
+        // The span covers lines with no markup on them and a blank line inside the table; all of
+        // them are the table's, because the span says so - nothing looks at the line text.
+        const string content =
+            "<table>\n" +
+            "<tr><th>Functie</th><th>Toelichting</th></tr>\n" +
+            "<tr><td>Verpleegkundige</td><td>Een lange toelichting die\n" +
+            "\n" +
+            "doorloopt op de volgende regel</td></tr>\n" +
+            "</table>\n" +
+            "Gewone tekst na de tabel.\n";
+
+        var blocks = Parse(content);
+
+        var table = blocks.Single(b => b.Kind == BlockKind.Table);
+        StringAssert.Contains(table.Text, "doorloopt op de volgende regel");
+        // The prose after the closing tag is its own block - the run ends where the span does.
+        StringAssert.Contains(blocks[^1].Text, "Gewone tekst na de tabel.");
+        Assert.AreEqual(BlockKind.Prose, blocks[^1].Kind);
+        AssertTilesExactly(content, blocks);
+    }
+
+    [TestMethod]
+    public void AStrayTagMentionInProse_StaysProse()
+    {
+        // A sentence mentioning a tag has no typed span, so it opens no table - and no detector
+        // is left to be fooled by it.
+        const string content = "De kolom <td> hoort bij de opmaak, niet bij de inhoud.\n";
+
+        var blocks = Parse(content);
+
+        Assert.AreEqual(BlockKind.Prose, blocks.Single().Kind);
+        AssertTilesExactly(content, blocks);
+    }
+
+    // ── the detected kinds ───────────────────────────────────────────────────
 
     [TestMethod]
     public void ABareLabel_KeepsTheFollowingLineInTheSameKeyValueRun()
@@ -127,7 +222,7 @@ public class BlockParserTests
         // value in different blocks - the one thing the key-value kind exists to prevent.
         const string content = "Vastgesteld:\n12-03-2024\nDocumentnummer:\n4.2.1";
 
-        var blocks = BlockParser.Parse(content);
+        var blocks = Parse(content);
 
         Assert.AreEqual(1, blocks.Count);
         Assert.AreEqual(BlockKind.KeyValue, blocks[0].Kind);
@@ -135,32 +230,34 @@ public class BlockParserTests
     }
 
     [TestMethod]
-    public void ABlankLineTerminatesATableRun_ButNotAParagraphFlow()
+    public void ADemotedRun_IsMergedWithItsProseNeighbours()
     {
-        // Blank lines classify as prose so a paragraph keeps the blank line after it, while a
-        // table or list run still ends there - which is exactly how those runs end in practice.
-        const string content = "| a | b |\n| 1 | 2 |\n\n| c | d |\n| 3 | 4 |";
+        // A single list-looking line fails the list-run detector (two items minimum) and is
+        // demoted; prose runs that become adjacent after a demotion are one paragraph flow, and
+        // the merge is a re-slice, so the text still matches the source.
+        const string content = "Alinea een.\n- eenzaam punt\nAlinea twee.";
 
-        var tables = BlockParser.Parse(content).Where(b => b.Kind == BlockKind.Table).ToList();
+        var blocks = Parse(content);
 
-        Assert.AreEqual(2, tables.Count);
-        AssertTilesExactly(content, BlockParser.Parse(content));
+        Assert.AreEqual(1, blocks.Count);
+        Assert.AreEqual(BlockKind.Prose, blocks[0].Kind);
+        Assert.AreEqual(content, blocks[0].Text);
     }
 
     [TestMethod]
     public void ParserAndDetectorsCannotDisagree_AboutWhatABlockIs()
     {
-        // Confirm re-runs the block detectors the cascade will run. Any block still claiming an
-        // atomic kind has to satisfy that kind's own test, or the cascade would dispatch a
-        // block to a cutter that does not recognise it.
-        const string content =
-            "Alinea.\n\n| a | b |\n| 1 | 2 |\n\n- punt een\n- punt twee\n\nSleutel: waarde\nAnder: iets\n";
+        // Confirm re-runs the block detectors the cascade will run. Any block still claiming a
+        // detected kind has to satisfy that kind's own test, or the cascade would dispatch a
+        // block to a cutter that does not recognise it. Tables are not confirmed: the service
+        // typed them.
+        var content =
+            "Alinea.\n\n" + HtmlTable + "\n\n- punt een\n- punt twee\n\nSleutel: waarde\nAnder: iets\n";
 
-        foreach (var block in BlockParser.Parse(content))
+        foreach (var block in Parse(content))
         {
             switch (block.Kind)
             {
-                case BlockKind.Table:    Assert.IsTrue(TableDetector.IsTable(block));       break;
                 case BlockKind.ListRun:  Assert.IsTrue(ListRunDetector.IsListRun(block));   break;
                 case BlockKind.KeyValue: Assert.IsTrue(KeyValueDetector.IsKeyValue(block)); break;
             }
@@ -174,7 +271,7 @@ public class BlockParserTests
         // pieces are built. Dropping it here would break the tiling property.
         const string content = "   \n\n  \n";
 
-        var blocks = BlockParser.Parse(content);
+        var blocks = Parse(content);
 
         Assert.AreEqual(1, blocks.Count);
         AssertTilesExactly(content, blocks);

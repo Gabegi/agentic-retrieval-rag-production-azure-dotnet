@@ -14,7 +14,9 @@ namespace AgenticRagApp.Indexing.CU.Models;
 //
 // Content is the analyzer's raw markdown. PageSpans, Structure (headings + boilerplate) and
 // Title are derived from that markdown by MarkdownStructureMapper - one coordinate system, the
-// string chunking cuts. Profile and Language stay null: nothing measures them on this backend.
+// string chunking cuts. Language is filled by ExtractFileAsync from AI Language, since CU
+// reports none; the DocumentProfile that used to ride here was deleted 2026-09-08 with the
+// routing decisions it fed - see PdfExtractionDocument.
 // Usage is the analysis's billed cost, read off the LRO Operation via GetUsage() and carried
 // through ContentAnalysis; null only when the completed operation had no readable usage payload.
 internal sealed record ExtractedFile(
@@ -24,7 +26,6 @@ internal sealed record ExtractedFile(
     IReadOnlyList<PageSpan>?     PageSpans,
     PdfDocumentStructure?        Structure,
     string?                      Title,
-    DocumentProfile?             Profile,
     string?                      Language,
     CuUsage?                     Usage,
     PipelineIssue?               Error,
@@ -74,8 +75,8 @@ internal sealed record ExtractedFile(
     // score.
     public double? LanguageConfidence { get; init; }
 
-    // A factory rather than nine positional nulls repeated at every failure site.
+    // A factory rather than eight positional nulls repeated at every failure site.
     public static ExtractedFile Failed(
         string blobName, PipelineIssue error, IReadOnlyList<PipelineIssue>? warnings = null) =>
-        new(false, blobName, null, null, null, null, null, null, null, error, warnings ?? []);
+        new(false, blobName, null, null, null, null, null, null, error, warnings ?? []);
 }

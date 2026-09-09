@@ -74,8 +74,8 @@ public class RecursiveStrategyTests
     {
         // The whole point of the extraction: an oversized section and an unstructured document
         // cannot drift apart about what a table is.
-        var table = "| Functie | Schaal |\n| --- | --- |\n" + string.Join("\n",
-            Enumerable.Range(0, 200).Select(i => "| Rol " + i + " | FWG " + i + " |"));
+        var table = "<table><tr><th>Functie</th><th>Schaal</th></tr>" + string.Concat(
+            Enumerable.Range(0, 200).Select(i => "<tr><td>Rol " + i + "</td><td>FWG " + i + "</td></tr>")) + "</table>";
 
         Assert.IsTrue(Tokens(table) > ChunkingBudget.TokenCeiling, "the fixture has to exceed the ceiling to be cut at all");
 

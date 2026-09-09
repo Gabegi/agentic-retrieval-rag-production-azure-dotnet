@@ -14,7 +14,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // splitter (ChunkingService.ChunkDocumentsAsync). Resolves a FamilyId/DomainTag/
 // ConfusableWith set per SourceId, which the caller then stamps onto every chunk of that
 // document: the same "resolve once at document level, carry onto every chunk" pattern
-// DocumentProfile already uses.
+// DocumentFamily already uses.
 //
 // An ORCHESTRATOR, the same shape as ChunkMetadataBuilder: every step is one call into
 // Helpers, and this class owns the ORDER of the steps and nothing else - no embedding, no

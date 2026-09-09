@@ -10,7 +10,7 @@ public class HeadingChainBuilderTests
         new(content, "sectionHeading", offset, PageNumber: 1);
 
     private static SectionInfo S(int offset, int length) =>
-        new([new SectionSpan(offset, length)], [], []);
+        new([new SectionSpan(offset, length)], []);
 
     [TestMethod]
     public void NestedSections_ProduceAnAncestorChain()

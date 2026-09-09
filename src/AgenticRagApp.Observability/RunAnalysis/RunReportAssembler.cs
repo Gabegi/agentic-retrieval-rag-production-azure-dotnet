@@ -78,19 +78,20 @@ public sealed class RunReportAssembler
         // the run report is filed under StartedAt while stage reports are named at
         // activity-execution time, so a run starting at 23:58 writes them into the next day's
         // folder.
-        var validation = await FindSiblingAsync<Dictionary<string, JsonElement>>(path, "pdf-validation", ct);
+        // No validation report is looked for: the CU pipeline has no validation stage and is not
+        // getting one back (2026-09-09). It was expected here until then, which put
+        // "validation-report" in SourcesMissing on every single run - a permanent false gap that
+        // made the footer's one job, saying which sources were actually absent, useless.
         var fileFacts  = await FindSiblingAsync<List<Dictionary<string, JsonElement>>>(path, "pdf-file-facts", ct);
         var diff       = await FindSiblingAsync<Dictionary<string, JsonElement>>(path, "pdf-extraction-diff", ct);
         var failure    = await FindSiblingAsync<Dictionary<string, JsonElement>>(path, "pdf-failure", ct);
 
-        Track(found, missing, "validation-report",  validation.Blob);
         Track(found, missing, "file-facts",         fileFacts.Blob);
         Track(found, missing, "extraction-diff",    diff.Blob);
-        // A failure report only exists when extraction crashed before validation - its absence
-        // on a healthy run is normal, so it is never reported as missing.
+        // A failure report only exists when extraction crashed - its absence on a healthy run
+        // is normal, so it is never reported as missing.
         if (failure.Blob is not null) found.Add(failure.Blob);
 
-        var validationFacts = ParseValidation(validation.Value);
         var fileFactsSummary = ParseFileFacts(fileFacts.Value);
         var previous = await TryReadAsync<PreviousRunPointer>(LastRunPointerPath, ct);
 
@@ -100,7 +101,6 @@ public sealed class RunReportAssembler
             InstanceId  = path.InstanceId,
             BlobPath    = blobName,
             IndexReport = report,
-            Validation  = validationFacts,
             FileFacts   = fileFactsSummary,
             Diff        = ParseDiff(diff.Value),
             Failure     = ParseFailure(failure.Value),
@@ -108,7 +108,7 @@ public sealed class RunReportAssembler
             Previous     = previous,
             EvalBaseline = await TryReadEvalBaselineAsync(ct),
             Flags = FlagEvaluator.Evaluate(
-                report, validationFacts, fileFactsSummary, previous, _options.CalibrationMode),
+                report, fileFactsSummary, previous, _options.CalibrationMode),
             SourcesFound   = found,
             SourcesMissing = missing,
         };
@@ -202,28 +202,10 @@ public sealed class RunReportAssembler
     }
 
     // ── Parsers ──────────────────────────────────────────────────────────────
-    // These read the reports as loose JSON rather than binding to their concrete types.
-    // PdfQualityGateResult and the two anonymous-typed reports live in Indexing.CU, and the
-    // diff/file-facts blobs have no declared type at all - a shape change there should degrade
-    // one section of the analysis, not break the build or throw at write time.
-
-    private static ValidationReportFacts? ParseValidation(Dictionary<string, JsonElement>? json)
-    {
-        if (json is null) return null;
-
-        return new ValidationReportFacts(
-            Passed:                   GetBool(json, "Passed"),
-            ControlCharsStripped:     GetInt(json, "ControlCharsStripped"),
-            InvisibleCharsStripped:   GetInt(json, "InvisibleCharsStripped"),
-            LigaturesExpanded:        GetInt(json, "LigaturesExpanded"),
-            HyphenationJoinsRepaired: GetInt(json, "HyphenationJoinsRepaired"),
-            TableConversionFallbacks: GetInt(json, "TableConversionFallbacks"),
-            MojibakeRepairedPages:    GetInt(json, "MojibakeRepairedPages"),
-            DetectedTableCount:       GetInt(json, "DetectedTableCount"),
-            MagnitudeWarnings:        GetStrings(json, "MagnitudeWarnings"),
-            RedFlags:                 GetStrings(json, "RedFlags"),
-            DocumentsNeedingFallbackChunking: GetStrings(json, "DocumentsNeedingFallbackChunking"));
-    }
+    // These read the reports as loose JSON rather than binding to their concrete types. The
+    // anonymous-typed reports live in Indexing.CU and the diff/file-facts blobs have no declared
+    // type at all - a shape change there should degrade one section of the analysis, not break
+    // the build or throw at write time.
 
     private static FileFactsSummary? ParseFileFacts(List<Dictionary<string, JsonElement>>? rows)
     {

@@ -48,7 +48,13 @@ internal static class CuTableHelper
                                 .Select(f => f.Content)
                                 .Where(c => !string.IsNullOrWhiteSpace(c))
                                 .Cast<string>()],
-                Regions:     regions));
+                Regions:     regions,
+                // Extensible enum, so ToString() rather than a switch over values this build
+                // happens to know - the same stance the cell Kind above takes.
+                Role:        t.Role?.ToString(),
+                // The span length, so the chunker can take this table as a block off the typed
+                // span (2026-09-09) - verified on the 260827 artifact: all 288 offsets land on "<table".
+                Length:      t.Span?.Length));
         }
 
         // One aggregate line per document rather than one per table: 288 tables could otherwise

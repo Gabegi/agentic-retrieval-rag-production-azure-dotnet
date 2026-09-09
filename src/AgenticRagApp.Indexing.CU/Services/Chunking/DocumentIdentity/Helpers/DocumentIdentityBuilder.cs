@@ -85,9 +85,9 @@ public static class DocumentIdentityBuilder
 
             // Each part is filtered for blank above, but nothing checked the result: a blank
             // title with no headings would be embedded as an empty string and then clustered on
-            // whatever vector came back. Title has a filename fallback so this should be
-            // unreachable - the same reasoning under which DocumentIdentityResolver keeps its
-            // unreachable null-vector branch.
+            // whatever vector came back. Reachable since 2026-09-09 for a document with no
+            // Role=Title paragraph AND no headings (title has no fallback any more); such a
+            // document has no identity text and is skipped, which the run report shows.
             if (string.IsNullOrWhiteSpace(identityText))
             {
                 skipped.Add(doc.SourceId);

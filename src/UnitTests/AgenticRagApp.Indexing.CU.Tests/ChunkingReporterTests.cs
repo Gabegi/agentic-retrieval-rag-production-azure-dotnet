@@ -36,11 +36,10 @@ public class ChunkingReporterTests
         string content = "body",
         string title   = "CAO GGZ",
         IReadOnlyList<Heading>?   headings = null,
-        IReadOnlyList<TableInfo>? tables   = null,
-        DocumentProfile?          profile  = null) =>
+        IReadOnlyList<TableInfo>? tables   = null) =>
         new(SourceId:         sourceId,
             Content:          content,
-            PageSpans:        [new PageSpan(1, 0, content.Length, null, IsPictureOnly: false)],
+            PageSpans:        [new PageSpan(1, 0, content.Length, null)],
             Title:            title,
             Author:           null,
             CreatedAt:        null,
@@ -52,12 +51,9 @@ public class ChunkingReporterTests
             Headings:         headings ?? [],
             Boilerplate:      [],
             Tables:           tables ?? [],
-            SelectionMarks:   [],
             Figures:          [],
-            Lines:            [],
             Annotations:      [],
             Hyperlinks:       [],
-            Profile:          profile,
             Language:         null);
 
     private static ChunkObject Chunk(string documentId, int sectionIndex, int childIndex, int tokens) =>
@@ -235,12 +231,17 @@ public class ChunkingReporterTests
     {
         var (reporter, reports) = BuildReporter();
 
-        // Table-dominant by the fallback branch: no profile, so the table COUNT decides.
-        var tables = Enumerable.Range(0, 3)
-            .Select(_ => new TableInfo(1, 1, [], 0, 1, null, [], []))
-            .ToList();
+        // Table-dominant by DOMINANCE, measured on the content itself (2026-09-08): most of
+        // this document's characters live in the table. The table COUNT decided this row until
+        // then, via a fallback that existed only because DocumentProfile is never populated -
+        // and a count says nothing about dominance. See TableChecker.
+        const string content =
+            "Korte inleiding.\n\n" +
+            "<table><tr><th>Functie</th><th>Bedrag</th></tr>" +
+            "<tr><td>Verpleegkundige niveau 3</td><td>2.847,00</td></tr>" +
+            "<tr><td>Verpleegkundige niveau 4</td><td>3.104,00</td></tr></table>\n";
 
-        var doc        = Doc("untitled", title: "", tables: tables);
+        var doc        = Doc("untitled", content: content, title: "", tables: ChunkingTestFixtures.TablesIn(content));
         var (state, _) = StateFor(doc);
 
         state.Chunked(doc, [Chunk("untitled", 0, 0, 100)], cutCount: 1, route: "Recursive");
@@ -250,6 +251,36 @@ public class ChunkingReporterTests
         var row = reports.Single().Documents.Single();
         Assert.IsTrue(row.EmptyTitle, "an empty title on route 2 means chunks embedded with no identity at all");
         Assert.IsTrue(row.IsTableShaped);
+        Assert.IsTrue(row.TableCharShare > TableChecker.MinTableCharShare,
+            "the share behind the verdict is reported too, so the number can be argued with");
+    }
+
+    [TestMethod]
+    public async Task ADocumentWithAFewTablesInAnOceanOfProse_IsNotTableShaped()
+    {
+        // The mistake the count-based fallback made once the typed table mapping landed: 288
+        // tables across 51 documents meant "3 or more tables" called prose documents
+        // table-dominant. Dominance is relative; a count is not.
+        var (reporter, reports) = BuildReporter();
+
+        var content =
+            string.Join("\n\n", Enumerable.Repeat("Een alinea met gewone tekst erin.", 40)) +
+            "\n\n<table><tr><th>a</th></tr><tr><td>1</td></tr></table>\n";
+
+        var tables = Enumerable.Range(0, 5)
+            .Select(_ => new TableInfo(1, 1, [], 0, 1, null, [], [], Length: 60))
+            .ToList();
+
+        var doc        = Doc("prose-ocean", content: content, tables: tables);
+        var (state, _) = StateFor(doc);
+
+        state.Chunked(doc, [Chunk("prose-ocean", 0, 0, 100)], cutCount: 1, route: "Recursive");
+
+        await reporter.WriteAsync(state, CancellationToken.None);
+
+        var row = reports.Single().Documents.Single();
+        Assert.IsFalse(row.IsTableShaped, "five islands in a prose ocean is not a table-shaped document");
+        Assert.IsTrue(row.TableCharShare is > 0 and < 0.5, "and the share says how far off it is: " + row.TableCharShare);
     }
 
     // ── failure ──────────────────────────────────────────────────────────────

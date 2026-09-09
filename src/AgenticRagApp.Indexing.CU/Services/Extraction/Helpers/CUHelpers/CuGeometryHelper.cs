@@ -26,7 +26,7 @@ internal static class CuGeometryHelper
     // real data, and it is exactly what a cross-page table needs (see A10 in
     // docs/2609/260908/cu-payload-additions-action-plan.md). Its Polygon is empty rather than
     // fabricated, so a highlight consumer must check it before rendering - the same contract
-    // LineInfo.Polygon already has.
+    // TableInfo/FigureInfo regions therefore always carry: check it before rendering.
     internal static IReadOnlyList<DocumentRegion> Parse(string? source)
     {
         if (string.IsNullOrWhiteSpace(source)) return [];

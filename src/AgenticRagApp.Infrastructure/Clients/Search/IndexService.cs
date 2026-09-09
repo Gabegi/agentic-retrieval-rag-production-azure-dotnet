@@ -23,8 +23,9 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 //                            domain_tag, and it needs a vocabulary nobody has settled yet.
 //   - grain                - stamped, but a constant "child": the parent/document grains it
 //                            distinguishes are not emitted by any route today.
-// section_id and page_extraction_flag were on this list and are no longer - both are produced by
-// ChunkMetadataBuilder. Anything added here should be removed from it the moment that changes,
+// section_id was on this list and is no longer - ChunkMetadataBuilder produces it.
+// page_extraction_flag left the schema on 2026-09-09: it had been a constant false since the CU
+// switch (CU has no typed picture-only signal), see docs/2609/260909/cu-helpers-review.md. Anything added here should be removed from it the moment that changes,
 // or the comment starts excusing fields that have no excuse.
 public class IndexService : IIndexService
 {
@@ -155,7 +156,9 @@ public class IndexService : IIndexService
                 // The full heading chain ("Hoofdstuk 3 > 3.2 Dosering"). Searchable because
                 // it is the context §1.6 wants contributing to BM25, not just a label.
                 new SearchableField("heading_path")                                        { IsFilterable = true, AnalyzerName = "nl.microsoft" },
-                // H1-H6 nesting level (Heading.Depth).
+                // The heading level Content Understanding rendered - the "#" run at the heading span
+                // (Heading.Depth). 0 = unknown or no heading. Not capped at 6: the corpus carries
+                // 7-hash headings and 7 is what the service rendered.
                 new SimpleField("heading_depth",      SearchFieldDataType.Int32)          { IsFilterable = true, IsFacetable = true },
                 // "di_heading" | "bookmark" | "di_section" | "none" - breadcrumbs and DI
                 // headings have different provenance, and DI's nested sections are a third.
@@ -199,7 +202,6 @@ public class IndexService : IIndexService
                 // ending up on the recursive route", which is the density test rejecting real
                 // structure - and that is a facet query, not an investigation.
                 new SimpleField("route_name",         SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
-                new SimpleField("size_class",         SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
 
                 // ── Document validity ──────────────────────────────────────────────────
                 // Parsed from the title, which is where this corpus states it ("CAO GGZ 2024
@@ -257,9 +259,6 @@ public class IndexService : IIndexService
                 // The per-chunk form of the heading-locator's failure counter: the aggregate
                 // says how many failed, this says which chunks to distrust.
                 new SimpleField("heading_located",    SearchFieldDataType.Boolean)        { IsFilterable = true },
-                // Set when this unit's pages include figure-only / zero-word pages - the
-                // document-level extraction gate cannot see a mixed document.
-                new SimpleField("page_extraction_flag", SearchFieldDataType.Boolean)      { IsFilterable = true },
 
                 new VectorSearchField("content_vector", _config.OpenAiEmbeddingDimensions, "vector-profile") { IsHidden = true, IsStored = false }
             }

@@ -6,7 +6,7 @@ namespace RagApp.UnitTests.Indexing;
 // Step 9 of the 260818 fix plan, pinned but NOT live - ChunkingService.DropHeadingOnlyChunks is
 // false until a re-index confirms the 35 mislabelled salary chunks have gone to 0. Those 35 ARE
 // heading-only chunks, so enabling this first would make that check pass whether or not
-// TableCaptionSplitter actually worked.
+// TableCaptionSplitter (since removed, 2026-09-09) actually worked.
 [TestClass]
 public class HeadingOnlyChunkTests
 {

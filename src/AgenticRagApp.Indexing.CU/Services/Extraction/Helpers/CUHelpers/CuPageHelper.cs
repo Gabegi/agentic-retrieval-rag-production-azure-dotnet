@@ -3,9 +3,10 @@ using AgenticRagApp.Indexing.CU.Models;
 
 namespace AgenticRagApp.Indexing.CU.Services;
 
-// Page structure from the typed response: PageSpans and PageDimensions from
-// DocumentContent.Pages, Lines from Pages[].Lines, Boilerplate from the furniture-role
-// paragraphs (PageHeader/PageFooter/PageNumber) - CU decides what is furniture, not a regex.
+// Page structure from the typed response: PageSpans (with their dimensions) from
+// DocumentContent.Pages, Boilerplate from the furniture-role paragraphs
+// (PageHeader/PageFooter/PageNumber) - CU decides what is furniture, not a regex - plus the
+// page-scoped counts and rarities (lines, barcodes, formulas, word confidence).
 //
 // Ownership rule (cuhelper-typed-structure-plan.md): this helper owns the furniture roles;
 // CuOutlineHelper owns Title|SectionHeading. Footnote, FormulaBlock and role-less paragraphs
@@ -20,8 +21,11 @@ internal static class CuPageHelper
     // answers 0 ("unknown") there rather than guessing.
     //
     // The consumers were audited for this shape: PageResolver is a pure interval-overlap test,
-    // HeadingLocator.FindInPage falls back to a whole-document search when a page window
-    // misses, and StructureFilter's dimensions lookup is a plain PageNumber match.
+    // HeadingLocator cuts at the heading's own offset and asks PageAt only for the preamble,
+    // and StructureFilter's dimensions lookup is a plain PageNumber match.
+    //
+    // Dimensions ride on the span, not in a parallel per-page list: the list that used to sit
+    // beside this on PdfDocumentStructure had no reader (removed 2026-09-09).
     internal static List<PageSpan> BuildPageSpans(
         DocumentContent document, string markdown, string? unit, List<string> warnings)
     {
@@ -59,12 +63,7 @@ internal static class CuPageHelper
                     warnings.Add(
                         $"Page {page.PageNumber} span [{span.Offset}..{span.Offset + span.Length}] exceeds the markdown length ({markdown.Length}).");
 
-                result.Add(new PageSpan(
-                    page.PageNumber, span.Offset, span.Length,
-                    Dimensions: dimensions,
-                    // No local parser and no owned derivation to say otherwise - same stance
-                    // the markdown mapper took.
-                    IsPictureOnly: false));
+                result.Add(new PageSpan(page.PageNumber, span.Offset, span.Length, Dimensions: dimensions));
             }
         }
 
@@ -74,28 +73,40 @@ internal static class CuPageHelper
         return result;
     }
 
-    internal static List<PageDimensions> BuildPageDimensions(DocumentContent document, string? unit) =>
-        [.. (document.Pages ?? Enumerable.Empty<DocumentPage>())
-            .OrderBy(p => p.PageNumber)
-            .Select(p => DimensionsOf(p, unit))
-            .Where(d => d is not null)
-            .Cast<PageDimensions>()];
-
     private static PageDimensions? DimensionsOf(DocumentPage page, string? unit) =>
         page.Width is null && page.Height is null
             ? null
             : new PageDimensions(page.PageNumber, page.Width, page.Height, unit ?? "");
 
-    // No polygons - BY COST, not by capability. Line geometry is readable: l.Source decodes
-    // through CuGeometryHelper exactly as the tables' and figures' does (2026-09-08). It stays
-    // dropped because a polygon per text line was 178 KB per document and 57% of the whole
-    // extraction payload (see ChunkStructure), and LineInfo's highlight-on-source consumer
-    // still does not exist. Tables and figures are one quad per element, which is why they
-    // were worth taking and this is not.
-    internal static List<LineInfo> BuildLines(DocumentContent document) =>
+    // Lines are COUNTED, not carried (2026-09-09). The LineInfo list this replaces held every
+    // line's text and offset with an always-empty polygon: the geometry was dropped BY COST
+    // (a polygon per text line was 178 KB per document and 57% of the whole extraction payload,
+    // see ChunkStructure), and without it the list served no consumer - the highlight-on-source
+    // feature it was kept for cannot be built from text and offsets alone. Its only reader was
+    // the file-facts report's count column, which this still feeds. Line geometry is readable
+    // (l.Source decodes through CuGeometryHelper exactly as the tables' does) the day a consumer
+    // exists.
+    internal static int CountLines(DocumentContent document) =>
+        (document.Pages ?? Enumerable.Empty<DocumentPage>()).Sum(p => p.Lines?.Count ?? 0);
+
+    // Barcodes and formulas, both page-scoped (Pages[].Barcodes / Pages[].Formulas) and both
+    // mapped to be counted rather than used - see BarcodeInfo and FormulaInfo.
+    //
+    // The page number comes from the OWNING page, not from PageAt: unlike a heading or a table,
+    // these elements are already page-scoped in the response, so resolving their offset against
+    // the page spans would be a slower way of asking a question already answered - and would
+    // report 0 for an element whose offset falls in a gap between spans.
+    internal static List<BarcodeInfo> BuildBarcodes(DocumentContent document) =>
         [.. (document.Pages ?? Enumerable.Empty<DocumentPage>())
-            .SelectMany(p => (p.Lines ?? Enumerable.Empty<DocumentLine>())
-                .Select(l => new LineInfo(l.Content ?? "", l.Span?.Offset, p.PageNumber, Polygon: [])))];
+            .SelectMany(p => (p.Barcodes ?? Enumerable.Empty<DocumentBarcode>())
+                .Select(b => new BarcodeInfo(
+                    b.Kind.ToString(), b.Value, b.Span?.Offset, p.PageNumber, b.Confidence)))];
+
+    internal static List<FormulaInfo> BuildFormulas(DocumentContent document) =>
+        [.. (document.Pages ?? Enumerable.Empty<DocumentPage>())
+            .SelectMany(p => (p.Formulas ?? Enumerable.Empty<DocumentFormula>())
+                .Select(f => new FormulaInfo(
+                    f.Kind.ToString(), f.Value, f.Span?.Offset, p.PageNumber, f.Confidence)))];
 
     // The furniture paragraphs, as classified by CU itself. Same Heading record and role
     // strings the pipeline has always used, so StructureFilter and the reports read on.
@@ -126,7 +137,7 @@ internal static class CuPageHelper
     // Which page an offset falls on: the page whose reported span CONTAINS it, and nothing
     // else. 0 means "unknown" - a null offset, an offset in the gap between pages, or a
     // document with no typed pages at all. The honest answer, never a nearest-page guess
-    // (user decision 2026-08-26); HeadingLocator and StructureFilter both tolerate 0.
+    // (user decision 2026-08-26); HeadingLocator.PageAt and PageResolver give the same 0.
     internal static int PageAt(IReadOnlyList<PageSpan> spans, int? offset)
     {
         if (offset is int o)

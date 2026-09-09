@@ -11,29 +11,40 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // Blocks are contiguous and cover the whole document: block k ends where block k+1 begins, so
 // the newline between two runs belongs to the earlier one. Nothing is dropped at parse time;
 // whitespace-only blocks are trimmed away later, when pieces are built.
+//
+// TABLES ARE TYPED, NOT DETECTED (2026-09-09). The caller passes the ranges Content
+// Understanding reported as tables (DocumentTable.Span, carried as TableInfo.Offset/Length);
+// every line overlapping such a range is that table's, whatever it looks like, and nothing else
+// is a table however much it looks like one. This replaced a regex line test for `<table>`
+// markup (and, before 2026-09-08, for GFM pipe rows that CU never emits) - the same range was
+// being found by the service and then found again here. Lists and key-value runs are still
+// detected: CU types neither.
 public static class BlockParser
 {
-    // Start and End are absolute; End excludes the line's own newline.
-    private readonly record struct Line(int Start, int End, BlockKind Kind, bool IsBlank);
+    // Start and End are absolute; End excludes the line's own newline. Table is the index of the
+    // typed table this line belongs to, or -1.
+    private readonly record struct Line(int Start, int End, BlockKind Kind, bool IsBlank, int Table);
 
-    public static IReadOnlyList<ContentBlock> Parse(string content)
+    public static IReadOnlyList<ContentBlock> Parse(
+        string content, IReadOnlyList<(int Start, int End)> tables)
     {
         if (string.IsNullOrEmpty(content)) return [];
 
-        var lines  = ReadLines(content);
+        var lines  = ReadLines(content, tables);
         var runs   = GroupIntoRuns(content, lines);
         var blocks = Slice(content, lines, runs);
 
-        // The line tests only produce CANDIDATES - a run of pipe lines, a run of item lines. The
+        // The line tests only produce CANDIDATES - a run of item lines, a run of pair lines. The
         // block tests are the authority, so a candidate that does not survive its own detector
         // becomes prose. Running the same detectors the strategy will run means the parser and
-        // the strategy can never disagree about what a block is.
+        // the strategy can never disagree about what a block is. Tables need no confirmation:
+        // the service said so.
         blocks = Confirm(blocks);
 
         return MergeProse(content, blocks);
     }
 
-    private static List<Line> ReadLines(string content)
+    private static List<Line> ReadLines(string content, IReadOnlyList<(int Start, int End)> tables)
     {
         var lines = new List<Line>();
         var start = 0;
@@ -44,7 +55,10 @@ public static class BlockParser
             var end     = newline < 0 ? content.Length : newline;
             var text    = content[start..end];
 
-            lines.Add(new Line(start, end, ClassifyLine(text), string.IsNullOrWhiteSpace(text)));
+            var table = TableAt(tables, start, end);
+            var kind  = table >= 0 ? BlockKind.Table : ClassifyLine(text);
+
+            lines.Add(new Line(start, end, kind, string.IsNullOrWhiteSpace(text), table));
 
             if (newline < 0) break;
             start = newline + 1;
@@ -53,13 +67,26 @@ public static class BlockParser
         return lines;
     }
 
-    // The strongest structure the LINE shows. Blank lines count as prose so that a paragraph and
-    // the blank line after it stay in one run, while a blank line still terminates a table or a
-    // list - which is exactly how those runs end in practice.
+    // The typed table whose span overlaps this line, or -1. A blank line INSIDE a span is still
+    // the table's (CU writes multi-line tables), which is why an empty line is tested as a
+    // one-character range rather than as nothing.
+    private static int TableAt(IReadOnlyList<(int Start, int End)> tables, int start, int end)
+    {
+        var probeEnd = Math.Max(end, start + 1);
+
+        for (var i = 0; i < tables.Count; i++)
+            if (tables[i].Start < probeEnd && tables[i].End > start)
+                return i;
+
+        return -1;
+    }
+
+    // The strongest structure the LINE shows, for the kinds that are detected. Blank lines count
+    // as prose so that a paragraph and the blank line after it stay in one run, while a blank
+    // line still terminates a list - which is exactly how those runs end in practice.
     private static BlockKind ClassifyLine(string line)
     {
         if (string.IsNullOrWhiteSpace(line))   return BlockKind.Prose;
-        if (TableDetector.IsRow(line))         return BlockKind.Table;
         if (ListRunDetector.IsItem(line))      return BlockKind.ListRun;
 
         if (KeyValueDetector.IsPair(line) || KeyValueDetector.IsLabel(line))
@@ -75,23 +102,31 @@ public static class BlockParser
         for (var i = 0; i < lines.Count; i++)
         {
             if (runs.Count > 0 && Continues(content, lines, i, runs[^1].Kind))
-            {
                 runs[^1] = (runs[^1].First, i, runs[^1].Kind);
-                continue;
-            }
-
-            runs.Add((i, i, lines[i].Kind));
+            else
+                runs.Add((i, i, lines[i].Kind));
         }
 
         return runs;
     }
 
-    // Same kind continues a run. The one exception is the adjacent-line key-value form: after a
-    // bare "Label:", the next line IS the value, and it looks like prose because a value is
-    // prose. Closing the run there would put the label and its value in different blocks, which
-    // is the one thing the key-value kind exists to prevent.
+    // Same kind continues a run, with two exceptions.
+    //
+    // A table run is ONE typed table: two tables back to back are two blocks (TableCutter closes
+    // and repeats the markup of one table, not two), so a table line joins the run only when it
+    // belongs to the same typed span as the line before it.
+    //
+    // The adjacent-line key-value form: after a bare "Label:", the next line IS the value, and
+    // it looks like prose because a value is prose. Closing the run there would put the label
+    // and its value in different blocks, which is the one thing the key-value kind exists to
+    // prevent.
     private static bool Continues(string content, List<Line> lines, int index, BlockKind runKind)
     {
+        if (runKind == BlockKind.Table || lines[index].Kind == BlockKind.Table)
+            return runKind == BlockKind.Table
+                && lines[index].Kind == BlockKind.Table
+                && lines[index].Table == lines[index - 1].Table;
+
         if (lines[index].Kind == runKind) return true;
 
         if (runKind != BlockKind.KeyValue || lines[index].Kind != BlockKind.Prose || lines[index].IsBlank)
@@ -126,7 +161,6 @@ public static class BlockParser
         {
             var confirmed = blocks[i].Kind switch
             {
-                BlockKind.Table    => TableDetector.IsTable(blocks[i]),
                 BlockKind.ListRun  => ListRunDetector.IsListRun(blocks[i]),
                 BlockKind.KeyValue => KeyValueDetector.IsKeyValue(blocks[i]),
                 _                  => true,

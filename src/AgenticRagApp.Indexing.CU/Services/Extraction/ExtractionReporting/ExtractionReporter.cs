@@ -327,11 +327,12 @@ public sealed class ExtractionReporter
             Boilerplate = d.Boilerplate.Count,
             Hyperlinks  = d.Hyperlinks.Count,
             Annotations = d.Annotations.Count,
-            Lines       = d.Lines.Count,
+            Lines       = d.LineCount,
 
             // The direct before/after measure for the HTML-table work (review Gap 1): merged
-            // cells are why GFM conversion was rejected as lossy, and TableDetector currently
-            // routes none of these tables. Counted off the mapped spans rather than the markdown.
+            // cells are why GFM conversion was rejected as lossy. Counted off the mapped
+            // spans rather than the markdown - which is also where the chunker takes its table
+            // blocks from since 2026-09-09.
             MergedTableCells = d.Tables.Sum(t =>
                 t.Cells.Count(c => c.RowSpan is not null || c.ColumnSpan is not null)),
 
@@ -342,6 +343,29 @@ public sealed class ExtractionReporter
             // the regions cannot be re-read after the run, only re-bought.
             TablesWithRegions  = d.Tables.Count(t => t.Regions.Count > 0),
             FiguresWithRegions = d.Figures.Count(f => f.Regions is { Count: > 0 }),
+
+            // Barcodes/QR codes and formulas (2026-09-08). Both are expected to be near-zero -
+            // 6 and 36 corpus-wide - and that is what these columns are for: D161 had to grep
+            // the markdown by hand for both numbers. The formula count is the one that carries
+            // a decision: every formula in this corpus is a EURO SIGN misread as LaTeX, and
+            // substituting it back would be a heuristic, so the count is the evidence that
+            // parked decision gets re-judged on. Values, not just counts, are carried on the
+            // documents themselves for whoever needs to look.
+            Barcodes = d.Barcodes?.Count ?? 0,
+            Formulas = d.Formulas?.Count ?? 0,
+
+            // The service's own Role on tables and figures, as a distribution rather than a
+            // rule. It is what could separate a layout table from a data table for the
+            // HTML-table routing work - but nothing routes on it until a run shows which
+            // values this corpus actually produces, exactly as FiguresByKind was handled.
+            TablesByRole = d.Tables
+                .GroupBy(t => t.Role ?? "none", StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal),
+            FiguresByRole = d.Figures
+                .GroupBy(f => f.Role ?? "none", StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal),
 
             // "chart" / "mermaid" / "unknown", the service's own DocumentFigureKind. Q1 checked
             // by hand that this corpus has zero chart-like figures and concluded "nothing to

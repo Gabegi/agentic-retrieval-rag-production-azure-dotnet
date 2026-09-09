@@ -52,7 +52,6 @@ public interface ISnapshotSource : IChunk
     // -- Pages ---------------------------------------------------------------
 
     int  PageEnd            { get; }
-    bool PageExtractionFlag { get; }
 
     // -- Identity the retrieval side filters on ------------------------------
     // Not optional metadata: a restored index missing these answers confidently from the wrong
@@ -72,10 +71,10 @@ public interface ISnapshotSource : IChunk
     // recomputed on the far side: they derive from a per-chunk structural payload the snapshot
     // deliberately excludes, so without carrying them a restored row reports zero and empty.
     //
-    // has_table is deliberately NOT here. It derives from Content, which the snapshot already
-    // carries, so it recomputes correctly on restore - storing it would create a second copy
-    // that could disagree with the text it describes.
+    // has_table is here since 2026-09-09: it is stamped from typed table spans (not from
+    // Content), so like TableCount it cannot be recomputed on the far side.
     int                   TableCount     { get; }
+    bool                  HasTable       { get; }
     IReadOnlyList<string> FigureCaptions { get; }
     IReadOnlyList<string> Hyperlinks     { get; }
     IReadOnlyList<string> Annotations    { get; }

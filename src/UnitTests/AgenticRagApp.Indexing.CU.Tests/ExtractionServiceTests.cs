@@ -21,10 +21,9 @@ public class ExtractionServiceTests
         Ok:        true,
         BlobName:  blobName,
         Content:   "content",
-        PageSpans: [new PageSpan(1, 0, "content".Length, null, false)],
-        Structure: new PdfDocumentStructure([], [], [], [], [], [], [], [], [], []),
+        PageSpans: [new PageSpan(1, 0, "content".Length, null)],
+        Structure: new PdfDocumentStructure([], [], [], [], [], [], []),
         Title:     "",
-        Profile:   null,
         Language:  null,
         Usage:     null,
         Error:     null,
@@ -123,7 +122,8 @@ public class ExtractionServiceTests
             // TryReadJsonWithETagAsync/SaveJsonWithETagAsync are unconfigured - Moq returns
             // default, i.e. "no previous state", and the save is a no-op. That is the right
             // shape for these tests: they assert diff and stats behaviour, and nothing reads
-            // the run-state value until the validation seam is filled in.
+            // the run-state value today - it is written as a baseline for a magnitude check
+            // that is not wired yet (see FlagEvaluator).
             new Mock<BlobContainerClient>().Object,
             blobStore.Object,
             // The real reporter over the mocked writer: the report assertions below are about

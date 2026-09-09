@@ -7,31 +7,23 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // String constants for the same reason as ChunkGrain: this crosses the Search schema.
 public static class ChunkHeadingSource
 {
-    // A Document Intelligence title/sectionHeading paragraph. The primary signal - it works
+    // A title/sectionHeading paragraph the analyzer classified - Content Understanding since
+    // 2026-08; the constant keeps its DI-era value because it crosses the Search schema. The
+    // primary signal - it works
     // even when the PDF has no outline at all, which is most of this corpus.
     public const string DiHeading = "di_heading";
 
 
-    // Document Intelligence's own nested section tree. Phase A measured its boundaries as
-    // identical to the DI headings (99.4-100%, both directions), so it is kept as a
+    // The analyzer section tree. Phase A (DI-era) measured its boundaries as
+    // identical to the headings (99.4-100%, both directions), so it is kept as a
     // hierarchy cross-check rather than a boundary source - but a heading whose chain came
     // from section nesting rather than depth should say so.
     public const string DiSection = "di_section";
 
-    // A caption line standing immediately above a table, promoted to a section boundary
-    // because Document Intelligence did not mark it as a heading.
-    //
-    // The CAO GHZ salary appendix is the measured case: DI detects ONE heading
-    // ("Salarisschaal functiegroep 45") for a page carrying NINE salary tables, so the
-    // section spans all nine and every chunk cut from it inherits that one heading. A chunk
-    // holding functiegroep 50's pay scale was being labelled, embedded and cited as
-    // functiegroep 45 - wrong attribution on pay data, which is worse than retrieving
-    // nothing. Measured at 35 mislabelled chunks in the 260818 run.
-    //
-    // Kept distinct from DiHeading rather than folded into it: this boundary rests on a
-    // layout heuristic, not on DI's own judgement, and "how much of the corpus is resting on
-    // which signal" is the question this whole enum exists to answer.
-    public const string TableCaption = "table_caption";
+    // "table_caption" was a fourth value until 2026-09-09: a caption line above a GFM table,
+    // promoted to a boundary by TableCaptionSplitter. Dead under CU (HTML tables, no caption
+    // lines - the CAO GHZ salary tables carry neither) and a layout heuristic besides; removed.
+    // Rows indexed before then may still carry the value.
 
     // No heading covers this unit - preamble before the first heading, or a document with
     // no headings anywhere. Distinct from null, which would mean "not yet computed".

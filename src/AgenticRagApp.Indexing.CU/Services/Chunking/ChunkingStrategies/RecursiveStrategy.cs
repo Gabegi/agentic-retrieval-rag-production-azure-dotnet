@@ -50,7 +50,7 @@ public sealed class RecursiveStrategy : IDocumentChunkingStrategy
         //      the line -> sentence -> word -> hard ladder) lives in BlockCascade, shared with
         //      route 1's oversized sections. It moved there unchanged: same order, same
         //      ceiling, same pieces.
-        var pieces = BlockCascade.Cut(doc.Content, 0, doc.Content.Length, bodyCeiling);
+        var pieces = BlockCascade.Cut(doc.Content, 0, doc.Content.Length, bodyCeiling, doc.Tables);
 
         // 8. One ChunkObject per piece: SectionIndex 0, running ChildIndex, heading fields null,
         //    HeadingSource "none", HeadingLocated FALSE. True with source "none" is a

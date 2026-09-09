@@ -15,10 +15,9 @@ public class ExtractionOutputBuilderTests
     private static ExtractedFile Ok(string blobName, int pages = 1) =>
         new(true, blobName,
             Content:   $"Inhoud van {blobName}",
-            PageSpans: [.. Enumerable.Range(1, pages).Select(p => new PageSpan(p, 0, 5, null, false))],
-            Structure: new PdfDocumentStructure([], [], [], [], [], [], [], [], [], []),
+            PageSpans: [.. Enumerable.Range(1, pages).Select(p => new PageSpan(p, 0, 5, null))],
+            Structure: new PdfDocumentStructure([], [], [], [], [], [], []),
             Title:     blobName.Replace(".pdf", ""),
-            Profile:   null,
             Language:  "nl",
             Usage:     null,
             Error:     null,

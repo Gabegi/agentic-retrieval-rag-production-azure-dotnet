@@ -9,19 +9,17 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // undid that split itself: DocumentIdentityResolver grouped by SourceId to gather headings,
 // ExtractionService counted distinct SourceIds to get a document count, ChunkingService
 // ordered by SourceId then Ordinal to rebuild reading order. Three regroups, each with a
-// comment apologising for the shape. Meanwhile Document Intelligence analyses a whole
-// document in the first place - AnalyzeResult.Content IS the document - so the pages were
+// comment apologising for the shape. Meanwhile the analyzer (DI then, Content Understanding now) analyses a whole
+// document in the first place - its markdown IS the document - so the pages were
 // a slice made only to be glued back together.
 //
 // It also cost: the whole file's Sections list was attached to every page, so serialized
 // size grew with sections x pages. Carrying file-level data once removes that by
 // construction.
 //
-// Per-page cleaning is unaffected. PdfCleaner still cleans page by page, and one bad page
-// still becomes a PipelineIssue rather than failing the file; extraction assembles the
-// cleaned pages afterwards and records where each one landed (PageSpans). Per-page error
-// isolation and a single coordinate system were never actually in tension - only the
-// output record's shape coupled them.
+// There is no per-page cleaning any more (PdfCleaner went with Document Intelligence): Content
+// is the Content Understanding markdown VERBATIM, and PageSpans are the service page ranges
+// into it - see PageSpan.
 //
 // Deliberately NOT deriving from ExtractionDocumentBase any more: that base is
 // (SourceId, Ordinal, Content), and Ordinal was the page number. A document has no
@@ -31,8 +29,8 @@ public sealed record PdfExtractionDocument(
     // Grouping/chunking boundary - blobName. The chunker never blends across SourceIds.
     string SourceId,
 
-    // The whole document's cleaned text, assembled from its pages in page order.
-    // PageSpans says which range came from which page.
+    // The whole document as markdown, verbatim from Content Understanding. PageSpans says which
+    // range the service attributes to which page.
     string Content,
 
     // Where each page's text sits in Content, in page order. Recorded during assembly, so
@@ -41,7 +39,9 @@ public sealed record PdfExtractionDocument(
 
     // ── File-level facts (carried once, not repeated per page) ──────────────
 
-    // Native PDF Title if the file has one, else a filename-derived fallback.
+    // The Role=Title paragraph Content Understanding classified, or "" when it classified none
+    // (12 of 51 documents on the 260827 run). No fallback: the first section heading used to
+    // stand in and produced "Inleiding" and "Inhoudsopgave" as titles (removed 2026-09-09).
     string Title,
 
     // Native PDF Info-dictionary facts (PdfNativeMetadataExtractor). ModDate is when the
@@ -57,8 +57,8 @@ public sealed record PdfExtractionDocument(
     // rather than resolved onto pages, since a chunk can now span pages.
     IReadOnlyDictionary<int, string> PageBreadcrumbs,
 
-    // DI's own semantic section tree. Phase A measured its boundaries as identical to the
-    // DI headings below (99.4-100%, both directions), so it is a hierarchy cross-check
+    // The service section tree (CU DocumentContent.Sections). Phase A (DI-era) measured its
+    // boundaries as identical to the headings below (99.4-100%, both directions), so it is a hierarchy cross-check
     // rather than a second boundary source - its spans nest, which the flat heading list
     // does not express.
     IReadOnlyList<SectionInfo> Sections,
@@ -70,22 +70,20 @@ public sealed record PdfExtractionDocument(
     IReadOnlyList<Heading>           Headings,
     IReadOnlyList<Heading>           Boilerplate,
     IReadOnlyList<TableInfo>         Tables,
-    IReadOnlyList<SelectionMarkInfo> SelectionMarks,
     IReadOnlyList<FigureInfo>        Figures,
-    IReadOnlyList<LineInfo>          Lines,
     IReadOnlyList<AnnotationInfo>    Annotations,
     IReadOnlyList<HyperlinkInfo>     Hyperlinks,
 
-    // ── Profile measurements (action-plan.md C7) ────────────────────────────
+    // DocumentProfile sat here until 2026-09-08, carrying the measured inputs to the
+    // first-split routing decisions (action-plan.md C7). Deleted with those decisions: the
+    // four-route design it fed is gone (D113 collapsed it to two strategies), 13 of its 16
+    // fields had no reader, and nothing had produced one at all since the CU switch. The three
+    // values that were still read are now measured where they are used - headings per 1,000
+    // chars and the token count in ChunkingService's route gate, chars/page in the run report.
 
-    // Computed at extraction and, until now, read by nothing at all. Carries the measured
-    // inputs to all three first-split decisions (chars/page and bytes/char for the
-    // extraction gate, EstimatedTokens for the parent grain, heading counts for the
-    // navigation grain). The old Route enum is gone - it fused a density test and a token
-    // tier into one four-way value that could not express "large but unstructured".
-    DocumentProfile? Profile,
-
-    // "nl"/"en" from DI's own AnalyzeResult.Languages. The corpus is Dutch plus one
+    // "nl"/"en" from IDocumentLanguageDetector (AI Language) since 2026-09-08; this used to say
+    // "from DI's own AnalyzeResult.Languages", which stopped being true at the CU switch - CU
+    // reports no detected language at all. The corpus is Dutch plus one
     // 36-page English document whose chars/token ratio is ~4 rather than ~3.2, which makes
     // every character-derived ceiling wrong for it - including its own routing input.
     string? Language,
@@ -113,4 +111,19 @@ public sealed record PdfExtractionDocument(
     //
     // Null on the recursive route, which never anchors. Null means NOT ATTEMPTED, never "every
     // heading failed to locate" - the same distinction the zero counters carry.
-    IReadOnlyList<LocatedSection>? LocatedSections = null);
+    IReadOnlyList<LocatedSection>? LocatedSections = null,
+
+    // ── Page-scoped structure mapped 2026-09-08 (A4, A5) ────────────────────
+
+    // Barcodes/QR codes and formulas, carried so the run report can COUNT them - see
+    // BarcodeInfo and FormulaInfo for what each measurement is for and why neither is a
+    // retrieval feature. Trailing and nullable, like everything else added after the fact
+    // here: null on an extraction blob written before they were mapped, which is not the same
+    // as "this document has none".
+    IReadOnlyList<BarcodeInfo>? Barcodes = null,
+    IReadOnlyList<FormulaInfo>? Formulas = null,
+
+    // Text lines the service reported, counted for the file-facts report (2026-09-09; the
+    // LineInfo list it replaces is explained on PdfDocumentStructure). Zero on a blob written
+    // before the count existed.
+    int LineCount = 0);

@@ -104,13 +104,12 @@ public class RestoreService : IRestoreService
 
                     PageStart          = s.PageStart,
                     PageEnd            = s.PageEnd,
-                    PageExtractionFlag = s.PageExtractionFlag,
                     TokenCount         = s.TokenCount,
 
                     // Structure itself is not snapshotted, so these are restored as the
-                    // stamped values they are. has_table needs no restoring - it recomputes off
-                    // Content, which came back above.
+                    // stamped values they are (has_table included since 2026-09-09).
                     TableCount         = s.TableCount,
+                    HasTable           = s.HasTable,
                     FigureCaptions     = s.FigureCaptions,
                     Hyperlinks         = s.Hyperlinks  ?? [],
                     Annotations        = s.Annotations ?? [],

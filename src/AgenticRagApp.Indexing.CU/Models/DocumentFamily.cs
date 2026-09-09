@@ -1,7 +1,8 @@
 ﻿namespace AgenticRagApp.Indexing.CU.Models;
 
 // Per-document identity result DocumentIdentityResolver resolves before chunking - the same value
-// on every chunk of one document, same carry-along pattern as DocumentProfile. FamilyId
+// on every chunk of one document - the same carry-along pattern the deleted DocumentProfile
+// used for its measurements. FamilyId
 // groups near-duplicate documents (embedding-clustered on title + heading list); DomainTag
 // is the GGZ/GHZ/VVT/V&V/VGZ filename-pattern read off the title; ConfusableWith is the
 // separate title-distance check (docs/2608/260811/pre-chunking-action-items.md C3) - titles

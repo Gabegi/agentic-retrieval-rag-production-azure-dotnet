@@ -33,7 +33,7 @@ resource "azurerm_linux_web_app" "api" {
   }
 
   app_settings = {
-    "APPLICATIONINSIGHTS_CONNECTION_STRING" = data.azurerm_application_insights.main.connection_string
+    "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
     "SEARCH_ENDPOINT"                       = "https://${azurerm_search_service.main.name}.search.windows.net"
     "OPENAI_ENDPOINT"                       = data.azurerm_cognitive_account.foundry.endpoint
     "OPENAI_GPT_DEPLOYMENT"                 = var.openai_gpt_deployment

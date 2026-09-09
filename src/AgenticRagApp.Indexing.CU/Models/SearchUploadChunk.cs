@@ -55,7 +55,6 @@ public record SearchUploadChunk(
     [property: JsonPropertyName("chunk_length")] int ChunkLength,
 
     [property: JsonPropertyName("route_name")] string? RouteName,
-    [property: JsonPropertyName("size_class")] string? SizeClass,
 
     [property: JsonPropertyName("valid_from")] DateTimeOffset? ValidFrom,
     [property: JsonPropertyName("valid_to")] DateTimeOffset? ValidTo,
@@ -75,8 +74,7 @@ public record SearchUploadChunk(
     [property: JsonPropertyName("annotations")] IReadOnlyList<string> Annotations,
 
     [property: JsonPropertyName("is_overlap")] bool IsOverlap,
-    [property: JsonPropertyName("heading_located")] bool HeadingLocated,
-    [property: JsonPropertyName("page_extraction_flag")] bool PageExtractionFlag)
+    [property: JsonPropertyName("heading_located")] bool HeadingLocated)
 {
     public static SearchUploadChunk From(ChunkObject chunk) => new(
         Id:                 chunk.Metadata.Id,
@@ -103,7 +101,6 @@ public record SearchUploadChunk(
         ChunkStart:         chunk.Start,
         ChunkLength:        chunk.Length,
         RouteName:          chunk.Metadata.Route,
-        SizeClass:          chunk.Metadata.SizeClass,
         ValidFrom:          chunk.Metadata.ValidFrom,
         ValidTo:            chunk.Metadata.ValidTo,
         Version:            chunk.Metadata.Version,
@@ -119,8 +116,7 @@ public record SearchUploadChunk(
         Hyperlinks:         chunk.Hyperlinks,
         Annotations:        chunk.Annotations,
         IsOverlap:          chunk.IsOverlap,
-        HeadingLocated:     chunk.HeadingLocated,
-        PageExtractionFlag: chunk.Metadata.PageExtractionFlag);
+        HeadingLocated:     chunk.HeadingLocated);
 }
 
 // The key plus one field, for patching family_id onto rows whose content did not change.

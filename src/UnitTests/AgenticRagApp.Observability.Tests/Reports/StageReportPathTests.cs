@@ -11,9 +11,9 @@ public class StageReportPathTests
     [TestMethod]
     public void Build_WithInstanceId_AppendsIdAfterReportName()
     {
-        var path = StageReportPath.Build("pdf-validation", RunAt, "a3f9c21b");
+        var path = StageReportPath.Build("pdf-failure", RunAt, "a3f9c21b");
 
-        Assert.AreEqual("2026/08/07/20260807T031412847Z-pdf-validation-a3f9c21b.json", path);
+        Assert.AreEqual("2026/08/07/20260807T031412847Z-pdf-failure-a3f9c21b.json", path);
     }
 
     [TestMethod]

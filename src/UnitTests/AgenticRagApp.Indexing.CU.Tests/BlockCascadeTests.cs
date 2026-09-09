@@ -14,14 +14,26 @@ namespace RagApp.UnitTests.Indexing;
 // shifts every block back into source coordinates immediately, so pieces address content, not
 // the window. chunking-done.md §5.1 lists asserting that as the first thing left to do,
 // "currently reasoned, not executed" - these run it.
+//
+// Tables are the ranges the service typed (2026-09-09); TablesIn stands in for the analyzer on
+// fixture text. The table fixtures are HTML on one line, as Content Understanding writes them.
 [TestClass]
 public class BlockCascadeTests
 {
     private const string Table =
-        "| Functie | Schaal |\n| --- | --- |\n| Verpleegkundige | FWG 35 |\n| Begeleider | FWG 40 |";
+        "<table><tr><th>Functie</th><th>Schaal</th></tr>" +
+        "<tr><td>Verpleegkundige</td><td>FWG 35</td></tr><tr><td>Begeleider</td><td>FWG 40</td></tr></table>";
+
+    private static string BigTable(int rows) =>
+        "<table><tr><th>Functie</th><th>Schaal</th></tr>" +
+        string.Concat(Enumerable.Range(0, rows).Select(i => "<tr><td>Rol " + i + "</td><td>FWG " + i + "</td></tr>")) +
+        "</table>";
+
+    private static IReadOnlyList<ContentPiece> Cut(string content, int start, int end, int ceiling) =>
+        BlockCascade.Cut(content, start, end, ceiling, TablesIn(content));
 
     private static IReadOnlyList<ContentPiece> CutAll(string content, int ceiling) =>
-        BlockCascade.Cut(content, 0, content.Length, ceiling);
+        Cut(content, 0, content.Length, ceiling);
 
     // ── dispatch ─────────────────────────────────────────────────────────────
 
@@ -30,8 +42,7 @@ public class BlockCascadeTests
     {
         // Classification decides how a block may be cut, and the level it comes back with is
         // how the run report can tell which decision was taken.
-        var table = CutAll(Table + "\n" + string.Join("\n",
-            Enumerable.Range(0, 40).Select(i => "| Rol " + i + " | FWG " + i + " |")), 60);
+        var table = CutAll(BigTable(40), 60);
 
         var list = CutAll(string.Join("\n",
             Enumerable.Range(0, 40).Select(i => "- " + Prose(6, "stap" + i))), 60);
@@ -39,10 +50,25 @@ public class BlockCascadeTests
         var pairs = CutAll(string.Join("\n",
             Enumerable.Range(0, 60).Select(i => "Veld " + i + ": waarde " + i)), 40);
 
+        Assert.IsTrue(table.Count > 1);
         Assert.IsTrue(table.All(p => p.BoundaryLevel == BoundaryLevel.TableRow));
         Assert.IsTrue(list.All(p => p.BoundaryLevel == BoundaryLevel.ListItem));
         Assert.IsTrue(pairs.All(p => p.BoundaryLevel == BoundaryLevel.ListItem),
             "the key-value cutter shares the pair/item boundary level");
+    }
+
+    [TestMethod]
+    public void ATableWithNoTypedSpan_IsCutAsProse()
+    {
+        // The honest consequence of absent data: a document extracted before spans were mapped
+        // gets no table blocks - its table markup goes down the prose ladder, and nothing
+        // regex-detects it back. Absent is not a substitute.
+        var content = BigTable(40);
+
+        var pieces = BlockCascade.Cut(content, 0, content.Length, 60, tables: []);
+
+        Assert.IsTrue(pieces.Count > 1);
+        Assert.IsFalse(pieces.Any(p => p.BoundaryLevel == BoundaryLevel.TableRow));
     }
 
     [TestMethod]
@@ -132,7 +158,7 @@ public class BlockCascadeTests
         var section = Sentences(40);
         var content = lead + section;
 
-        var pieces = BlockCascade.Cut(content, lead.Length, content.Length, 60);
+        var pieces = Cut(content, lead.Length, content.Length, 60);
 
         Assert.IsTrue(pieces.Count > 1);
         Assert.IsTrue(pieces.All(p => p.Start >= lead.Length), "a piece escaped the window");
@@ -147,11 +173,42 @@ public class BlockCascadeTests
         var section = "Sectietekst zonder dat woord.";
         var content = lead + section;
 
-        var pieces = BlockCascade.Cut(content, lead.Length, content.Length, 4096);
+        var pieces = Cut(content, lead.Length, content.Length, 4096);
 
         Assert.AreEqual(1, pieces.Count);
         Assert.AreEqual(section, pieces[0].Text);
         Assert.IsFalse(pieces[0].Text.Contains("kenmerk"));
+    }
+
+    [TestMethod]
+    public void ATypedTableInsideTheWindow_IsATableBlock_InSourceCoordinates()
+    {
+        // The table spans are document coordinates; the window is a slice. The shift has to be
+        // applied to the spans on the way in and to the blocks on the way out, or the table lands
+        // on the wrong characters by the length of the lead.
+        var lead    = "Voorwoord buiten het venster.\n\n";
+        var content = lead + "Sectietekst.\n\n" + Table + "\n\nNa de tabel.";
+
+        var pieces = Cut(content, lead.Length, content.Length, 4096);
+
+        var table = pieces.Single(p => p.Text.Contains("<table>", StringComparison.Ordinal));
+        Assert.AreEqual(Table, table.Text.Trim());
+        AssertSliceInvariant(content, pieces);
+    }
+
+    [TestMethod]
+    public void ATableStraddlingTheWindowEdge_IsNotATableBlock()
+    {
+        // A window edge is a heading offset, and the analyzer does not put headings inside
+        // tables - so a straddling span is a shape that should not occur, and it is left to the
+        // prose ladder rather than clipped into a half-table the cutter would then "close".
+        var content = "Voor.\n\n" + BigTable(40) + "\n\nNa.";
+        var middle  = content.IndexOf("<tr><td>Rol 20", StringComparison.Ordinal);
+
+        var pieces = Cut(content, middle, content.Length, 60);
+
+        Assert.IsFalse(pieces.Any(p => p.BoundaryLevel == BoundaryLevel.TableRow));
+        Assert.IsTrue(pieces.All(p => p.Start >= middle));
     }
 
     [TestMethod]
@@ -162,8 +219,8 @@ public class BlockCascadeTests
         // full-length slice returns the same string instance and the coordinate shift adds 0.
         var content = "Inleiding.\n\n" + Table + "\n\n" + Sentences(40);
 
-        var whole  = BlockCascade.Cut(content, 0, content.Length, 60);
-        var padded = BlockCascade.Cut(content, -20, content.Length + 20, 60);
+        var whole  = Cut(content, 0, content.Length, 60);
+        var padded = Cut(content, -20, content.Length + 20, 60);
 
         CollectionAssert.AreEqual(
             whole.Select(p => (p.Text, p.Start, p.Length, p.BoundaryLevel, p.Degraded)).ToArray(),
@@ -179,8 +236,8 @@ public class BlockCascadeTests
         var second  = Sentences(20);
         var content = first + "\n\n" + second;
 
-        var perSection = BlockCascade.Cut(content, 0, first.Length, 60)
-            .Concat(BlockCascade.Cut(content, first.Length, content.Length, 60))
+        var perSection = Cut(content, 0, first.Length, 60)
+            .Concat(Cut(content, first.Length, content.Length, 60))
             .ToList();
 
         AssertSliceInvariant(content, perSection);
@@ -193,13 +250,13 @@ public class BlockCascadeTests
     [TestMethod]
     public void AnEmptyRange_ProducesNothing()
     {
-        Assert.AreEqual(0, BlockCascade.Cut("wat tekst hier", 5, 5, 512).Count);
+        Assert.AreEqual(0, Cut("wat tekst hier", 5, 5, 512).Count);
     }
 
     [TestMethod]
     public void EmptyContent_ProducesNothing()
     {
-        Assert.AreEqual(0, BlockCascade.Cut("", 0, 0, 512).Count);
+        Assert.AreEqual(0, Cut("", 0, 0, 512).Count);
     }
 
     [TestMethod]
@@ -207,8 +264,8 @@ public class BlockCascadeTests
     {
         const string content = "Een enkele alinea.";
 
-        Assert.AreEqual(1, BlockCascade.Cut(content, -50, 5_000, 512).Count);
-        Assert.AreEqual(0, BlockCascade.Cut(content, 10, 2, 512).Count, "end clamps up to start, so the range is empty");
+        Assert.AreEqual(1, Cut(content, -50, 5_000, 512).Count);
+        Assert.AreEqual(0, Cut(content, 10, 2, 512).Count, "end clamps up to start, so the range is empty");
     }
 
     [TestMethod]

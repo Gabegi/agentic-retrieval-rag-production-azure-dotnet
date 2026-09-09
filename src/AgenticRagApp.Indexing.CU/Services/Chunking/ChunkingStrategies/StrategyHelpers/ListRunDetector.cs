@@ -15,8 +15,9 @@ public static partial class ListRunDetector
     //
     // Ported unchanged from the splitter this replaces, so a corpus that chunked one way before
     // does not silently change shape - and that is why the exception is stated rather than
-    // quietly widened. PdfCleaner.OrphanedListMarker now rejoins a stranded "N." to its clause
-    // upstream, so this case should not survive extraction at all; it stays here because the
+    // quietly widened. The DI-era PdfCleaner used to rejoin a stranded "N." to its clause
+    // upstream; the CU markdown is taken verbatim, so the case can reach this detector, and the
+    // exception stays because the
     // failure it caused was disproportionate. The old pattern required content on the SAME line,
     // so one stray marker made IsListRun's lines.All(IsItem) false and dropped the entire block
     // to the prose ladder - losing whole-item cutting for every other item in the run.

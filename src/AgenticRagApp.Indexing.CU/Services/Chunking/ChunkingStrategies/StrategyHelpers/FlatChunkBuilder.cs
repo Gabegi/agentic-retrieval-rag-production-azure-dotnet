@@ -22,7 +22,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // cutting - that is what the ceiling is budgeted against - it just does not carry it.
 public static class FlatChunkBuilder
 {
-    // Start/Length address the body slice in cleaned-content coordinates. The prefix has no
+    // Start/Length address the body slice in doc.Content coordinates (the verbatim CU markdown). The prefix has no
     // position in the document, which is the other reason it cannot live in Content.
     public static IReadOnlyList<ChunkObject> Build(IReadOnlyList<ContentPiece> pieces)
     {

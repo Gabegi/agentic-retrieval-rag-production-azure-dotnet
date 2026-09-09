@@ -34,11 +34,6 @@ data "azurerm_cognitive_account" "foundry" {
   resource_group_name = data.azurerm_resource_group.ai.name
 }
 
-data "azurerm_application_insights" "main" {
-  name                = "con-appi-cap-${local.env}-${local.region}-${local.instance}"
-  resource_group_name = data.azurerm_resource_group.ai.name
-}
-
 # --- Data tier ----------------------------------------------------------------
 
 data "azurerm_resource_group" "data" {
@@ -56,11 +51,12 @@ data "azurerm_resource_group" "data" {
 #   - The four AMPLS zones (privatelink.monitor.azure.com, .oms/.ods.opinsights.azure.com,
 #     .agentsvc.azure-automation.net) are deliberately NOT declared: the SP has no grant on them
 #     (403 AuthorizationFailed on 2026-08-07, not 404), and a data source is read at plan time even
-#     if unreferenced. See app_insights_privatelink.tf and
+#     if unreferenced. See app_insights.tf and
 #     docs/2608/260807/app-insights-private-link.md.
-#   - The Log Analytics workspace behind App Insights is not declared either: providers.tf's
-#     azurerm.logmgmt alias cannot even initialize in that subscription (zero access, 2026-08-07).
-#     Re-add once the platform team grants subscription-scope Reader there.
+#   - The landing-zone team's Log Analytics workspace is not declared either. It no longer needs to
+#     be: app_insights.tf now creates this config's own workspace, so nothing here depends on
+#     the log analytics/management subscription, where providers.tf's azurerm.logmgmt alias cannot
+#     even initialize (zero access, 2026-08-07).
 
 locals {
   dns_hub_resource_group_name = "example-connectivity-dns-prd-we-001"

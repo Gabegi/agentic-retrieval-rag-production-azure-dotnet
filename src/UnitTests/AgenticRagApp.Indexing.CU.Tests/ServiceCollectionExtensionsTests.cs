@@ -116,8 +116,8 @@ public class ServiceCollectionExtensionsTests
 
     // The cleaning and validation registrations that used to be asserted here (IPdfCleaner,
     // IPdfPipelineValidator) are gone with their classes. Cleaning moved into the extraction
-    // mapper, which has since been deleted too; both cleaning and validation are absent and will be
-    // reintroduced at the seam in ExtractionService.
+    // mapper, which has since been deleted too; both are absent for good - the CU pipeline is
+    // not getting a validation stage (2026-09-09, see ExtractionService).
 
     [TestMethod]
     public void AddPdfIndexing_RegistersDiffEmbedUploadAndRecoveryPipeline()

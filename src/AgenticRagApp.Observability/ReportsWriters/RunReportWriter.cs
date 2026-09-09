@@ -21,8 +21,8 @@ public class RunReportWriter : IRunReportWriter
     private readonly IBlobStore         _blobStore;
     private readonly BlobContainerClient _container;
 
-    // Always true - these are the small (few-KB) diagnostic reports (validation-report.json,
-    // file-facts.json, the extraction diff, PdfIndexRunReport) that operators need to read in
+    // Always true - these are the small (few-KB) diagnostic reports (file-facts.json, the
+    // extraction diff, the failure report, PdfIndexRunReport) that operators need to read in
     // Azure, not just locally. Previously gated to env.IsDevelopment(), which meant the one
     // environment where you can't attach a debugger was also the one environment with none of
     // these reports - same principle GetLastIndexStatsAsync/SaveLastIndexStatsAsync below

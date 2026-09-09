@@ -5,8 +5,8 @@ namespace AgenticRagApp.Indexing.CU.Models;
 //
 // Content Understanding reports a per-word Confidence (DocumentPage.Words[].Confidence, SDK
 // 1.1.0). Nothing in this project touched it: CuPageHelper mapped spans, lines and dimensions,
-// and the only Confidence field that existed anywhere sat on SelectionMarkInfo - a list CU can
-// never populate. So a document that OCR'd badly and one that read perfectly produced identical
+// and the only Confidence field that existed anywhere sat on a selection-mark record CU could
+// never populate (deleted 2026-09-09). So a document that OCR'd badly and one that read perfectly produced identical
 // reports, on a pipeline whose whole justification was extraction quality.
 //
 // AGGREGATED IN THE MAPPER, NEVER STORED. The words themselves do not enter

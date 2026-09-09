@@ -58,7 +58,6 @@ public class ChunkObjectTests
             FamilyId         = "fam-1",
             DomainTag        = "GHZ",
             Route            = "DeclaredBoundary",
-            SizeClass        = "Medium",
             TableCount       = 1,
             FigureCaptions   = ["Organogram Contoso"],
             Structure        = new ChunkStructure(
@@ -66,7 +65,6 @@ public class ChunkObjectTests
                 Boilerplate:    [new Heading("Pagina 1 van 12", "pageFooter", 50, 0)],
                 Tables:         [new TableInfo(2, 2, [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)], 10, 0, null, [], [])],
                 Dimensions:     new PageDimensions(0, 8.27, 11.69, "inch"),
-                SelectionMarks: [new SelectionMarkInfo(0, "selected", 5, 0.98, [new PolygonPoint(1f, 1f)])],
                 Figures:        [new FigureInfo("Organogram Contoso", 20, 0, "/figures/0", ["/paragraphs/3"])]),
         },
     };
@@ -119,7 +117,6 @@ public class ChunkObjectTests
         Assert.AreEqual(1, restored.Metadata.Structure.Headings.Count);
         Assert.AreEqual(1, restored.Metadata.Structure.Boilerplate.Count);
         Assert.IsNotNull(restored.Metadata.Structure.Dimensions);
-        Assert.AreEqual(1, restored.Metadata.Structure.SelectionMarks.Count);
         Assert.AreEqual(1, restored.Metadata.Structure.Tables.Count);
         Assert.AreEqual(
             original.Metadata.Structure.Tables[0].Cells.Count,
@@ -157,8 +154,8 @@ public class ChunkObjectTests
             // document metadata (the zenya_* fields are gone with the Zenya mechanism,
             // 2026-08-26)
             "last_modified_date", "created_at", "mod_date", "page_count",
-            // which route ran and how the document was sized
-            "route_name", "size_class",
+            // which route ran (size_class went with DocumentProfile, 2026-09-08)
+            "route_name",
             // validity, parsed out of the title
             "valid_from", "valid_to", "version",
             // pages - a unit can span them once sections are the grain
@@ -172,7 +169,7 @@ public class ChunkObjectTests
             // CU-typed additions (2026-08-26)
             "hyperlinks", "annotations",
             // quality flags
-            "is_overlap", "heading_located", "page_extraction_flag",
+            "is_overlap", "heading_located",
         };
 
         CollectionAssert.AreEquivalent(expectedKeys.ToList(), actualKeys.ToList());

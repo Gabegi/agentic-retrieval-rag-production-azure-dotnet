@@ -5,6 +5,22 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- Several versions in Directory.Packages.props float (Azure.Identity 1.*, the
+       OpenTelemetry/Monitor exporters 1.*, the Evaluation packages *-*), so "newest match"
+       is re-answered against nuget.org on every restore: the same commit resolved a
+       different graph on a dev machine with a warm cache than on a hosted agent with a cold
+       one. That is how the Azure.Core 1.60.0 pin started failing CI with no commit behind
+       it, a new exporter release having moved its own floor to 1.62.0.
+       The lock file records the resolved graph so every restore reproduces it. CI restores
+       in locked mode (RestoreLockedMode, see .pipelines/), which fails on any drift instead
+       of silently resolving something new.
+       After changing a version in Directory.Packages.props, regenerate the lock files with
+       a force-evaluate restore of the solution and commit the changed packages.lock.json
+       alongside the version change. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
   <!-- The solution builds warning-free, so any new warning is a real signal rather than
        noise to scroll past. Production projects only: test projects host analyzers
        (MSTest, Durable Functions) that flag patterns which are legitimate in tests - most

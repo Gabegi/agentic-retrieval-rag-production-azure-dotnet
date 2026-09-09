@@ -75,7 +75,7 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     [JsonPropertyName("heading_source")]
     public string HeadingSource { get; set; } = ChunkHeadingSource.None;
 
-    // Whether the heading was actually found in the cleaned text. False whenever HeadingSource
+    // Whether the heading opened a real section (its CU span offset fell inside the markdown). False whenever HeadingSource
     // is "none" - true there would read as a successful location in any aggregate. Note this
     // defaults FALSE, where DocumentChunk defaulted true: an unset value now means "not
     // located", which is what the aggregate should assume until something claims otherwise.
@@ -130,7 +130,6 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     [JsonIgnore] public string?         SectionId          => Metadata.SectionId;
     [JsonIgnore] public string          Grain              => Metadata.Grain;
     [JsonIgnore] public int             PageEnd            => Metadata.PageEnd;
-    [JsonIgnore] public bool            PageExtractionFlag => Metadata.PageExtractionFlag;
     [JsonIgnore] public int             TokenCount         => Metadata.TokenCount;
 
     [JsonIgnore] public string?               FamilyId       => Metadata.FamilyId;
@@ -177,17 +176,16 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     // ── The structural index fields ─────────────────────────────────────────
     // Simple scalars/collections Search can store, standing in for the richer objects it can't.
     //
-    // Split by what they are properties OF, which is what decides how each one survives a
-    // restore. HasTable is a property of this chunk's own text, so it is computed from Content -
-    // and because Content is snapshotted, it comes back correct for free. The other two are
-    // properties of the document's PAGES, so they are stamped once in step 4 and carried:
-    // ChunkStructure is deliberately absent from the snapshot, so anything recomputed from it at
-    // read time can only ever restore as empty.
+    // All three are stamped once in step 4 and carried: ChunkStructure is deliberately absent
+    // from the snapshot, so anything recomputed from it at read time can only ever restore as
+    // empty. HasTable used to be recomputed from Content by a GFM pipe-row regex - which meant
+    // it was FALSE on every chunk since the CU switch (CU emits HTML tables). Since 2026-09-09
+    // it is whether this chunk's [Start, Start+Length) overlaps a typed table span, and it
+    // travels in the snapshot like TableCount.
 
-    // Does this chunk's text contain a markdown table? Note this is a narrower claim than the
-    // page-scoped one it replaced ("a table exists on the pages this chunk covers"), which was
-    // true of any prose chunk sharing a page with a table.
-    [JsonIgnore] public bool HasTable => ChunkingHelper.ContainsTable(Content);
+    // Does THIS chunk carry (part of) a table? Narrower than TableCount's page-scoped claim,
+    // which is true of any prose chunk sharing a page with a table.
+    [JsonIgnore] public bool HasTable => Metadata.HasTable;
 
     [JsonIgnore] public int                   TableCount     => Metadata.TableCount;
     [JsonIgnore] public IReadOnlyList<string> FigureCaptions => Metadata.FigureCaptions;
@@ -277,13 +275,14 @@ public sealed class ChunkMetadata
     [JsonPropertyName("population")]
     public string? Population { get; set; }
 
-    // Which route ran (step 2's answer) and how the document was sized. On the report row this
-    // is how "why did this document take this route" stays answerable from the report alone.
+    // Which route ran (step 2's answer). On the report row this is how "why did this document
+    // take this route" stays answerable from the report alone.
+    //
+    // size_class sat here until 2026-09-08 and is gone with DocumentProfile: it was derived
+    // from a record nothing produced under Content Understanding, so it read "Medium" on every
+    // chunk in the index while looking like a measurement. No query filtered or faceted on it.
     [JsonPropertyName("route_name")]
     public string? Route     { get; set; }
-
-    [JsonPropertyName("size_class")]
-    public string? SizeClass { get; set; }
 
     // ── Validity, parsed out of the TITLE ───────────────────────────────────
     // The retrieval failure these address is a confident answer quoted from a superseded CAO -
@@ -356,12 +355,6 @@ public sealed class ChunkMetadata
     [JsonPropertyName("page_end")]
     public int PageEnd   { get; set; }
 
-    // The cut's pages include figure-only / zero-word pages. The document-level extraction gate
-    // cannot see a mixed document - a 134-page file with 20 image-only pages passes chars/page
-    // comfortably and loses that content with nothing marking it.
-    [JsonPropertyName("page_extraction_flag")]
-    public bool PageExtractionFlag { get; set; }
-
     // The derived context this chunk carries into its own embedding: title line, sector tag,
     // and (route 1 only) the capped heading path. Built by PrefixBuilder, the same call the
     // strategy priced against the ceiling before cutting.
@@ -387,8 +380,14 @@ public sealed class ChunkMetadata
     //
     // Page-scoped by definition, and kept that way: "a table exists on the pages this chunk
     // covers" is a genuinely different question from "this chunk contains a table", which is
-    // what ChunkObject.HasTable now answers off Content.
+    // what HasTable below answers.
     public int TableCount { get; set; }
+
+    // This chunk's range overlaps a typed table span (TableInfo.Overlaps) - stamped in step 4
+    // from the document's Tables, snapshotted, and false on a document whose tables carry no
+    // span Length (extracted before 2026-09-09). Replaces a Content regex for GFM pipe rows
+    // that CU's HTML tables never matched.
+    public bool HasTable { get; set; }
 
     // Sourced only from CU's structured Figure.Caption - the generated Description rides
     // inline in chunk content instead, so it is deliberately not duplicated here.

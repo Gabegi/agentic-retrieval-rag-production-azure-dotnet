@@ -98,8 +98,8 @@ public class ExtractionService : IExtractionService
     // Counts extracted PAGES now; it counted cleaned page records before, which was the same
     // grain by a different name - the cleaner produced one record per page. A state blob written
     // by an older build carries {"CleanedRecords":N} and deserializes to ExtractedPages = 0,
-    // which is harmless: nothing reads this value until the validation seam below is filled in,
-    // and the first run after that writes a real number.
+    // which is harmless: nothing reads this value today - it is a baseline for the magnitude
+    // check described below, and the first run after this one writes a real number.
     internal sealed record RunState(int ExtractedPages);
 
     public ExtractionService(
@@ -256,22 +256,27 @@ public class ExtractionService : IExtractionService
 
             var (previousCount, previousETag) = await PreviousRunCountAsync(ct);
 
-            // ── VALIDATION SEAM — deliberately absent ────────────────────────────────────
+            // ── No validation stage, by decision (2026-09-09) ────────────────────────────
             //
-            // This is where the pipeline validation step ran, and where it will run again. It
-            // read the extraction results and produced a quality-gate result: page-count
-            // reconciliation between what was extracted and what was cleaned, an aggregate
-            // error-rate evaluation, a magnitude check against previousCount below, a
-            // duplicate-(document, page) assertion, and a spot-check sample.
+            // A pipeline validation step ran here under Document Intelligence and produced a
+            // quality-gate result: page-count reconciliation between what was extracted and
+            // what was cleaned, an aggregate error-rate evaluation, a magnitude check against
+            // previousCount below, a duplicate-(document, page) assertion, and a spot-check
+            // sample. It went with PdfCleaner and PdfPipelineValidator and is NOT being ported.
             //
-            // It was removed with PdfCleaner and PdfPipelineValidator rather than ported,
-            // because half of what it reconciled (raw pages vs cleaned records) no longer
-            // exists as two separate things to compare - Content Understanding returns one
-            // assembled document and the mapper produces the page map directly from it. What
-            // it should check instead is an open question, and a validator ported to check
-            // conditions that can no longer occur would read as coverage while providing none.
+            // The reason is that most of what it checked cannot happen here. Content
+            // Understanding returns one assembled document and the mapper builds the page map
+            // from it, so "raw pages vs cleaned records" is not two things to reconcile, and the
+            // character-level cleaning transforms it counted are not performed at all. Of what
+            // remains, the error rate, duplicate content, table count and spot-check sample are
+            // already measured in ExtractionOutputBuilder and travel on ExtractionStageMetrics -
+            // a validator would be a second writer of numbers the run report already owns.
             //
-            // Prior art, for whoever fills this in: docs/archive/AgenticRagApp.Indexing.DI,
+            // The one check with nowhere else to live is the run-to-run magnitude comparison.
+            // That belongs in FlagEvaluator against the previous-run pointer, not in a
+            // quality-gate blob; see the note there for why no threshold is wired yet.
+            //
+            // Prior art, if this is ever revisited: docs/archive/AgenticRagApp.Indexing.DI,
             // Services/Extraction/PdfPipelineValidator.cs. Note that validation there was
             // reported, never enforced - it warned and the run continued regardless.
             //
@@ -443,7 +448,7 @@ public class ExtractionService : IExtractionService
             PageSpans: mapped.PageSpans, Structure: mapped.Structure, Title: mapped.Title,
             // Language: null is not the final answer - ExtractFileAsync's
             // WithDetectedLanguageAsync fills it from AI Language, since CU reports none.
-            Profile: null, Language: null,
+            Language: null,
             Usage: analysis.Usage, Error: null, Warnings: warnings)
         {
             // Rides here rather than in the run loop (unlike DurationMs, which only the loop can

@@ -53,7 +53,6 @@ public static class FlagEvaluator
 
     public static IReadOnlyList<ReportFlag> Evaluate(
         PdfIndexRunReport report,
-        ValidationReportFacts? validation,
         FileFactsSummary? fileFacts,
         PreviousRunPointer? previous,
         bool calibrationMode)
@@ -63,7 +62,6 @@ public static class FlagEvaluator
         EvaluateExtraction(report.Extraction, flags, calibrationMode);
         EvaluateChunking(report.Chunking, flags, calibrationMode);
         EvaluateEmbedding(report.Embedding, report.Chunking, report.StatsReadback, flags);
-        EvaluateValidation(validation, flags);
         EvaluateCost(fileFacts, previous, flags, calibrationMode);
         EvaluateRunHealth(report, flags);
 
@@ -77,11 +75,15 @@ public static class FlagEvaluator
     {
         if (x is null) return; // stage never ran - no measurement, no flags
 
+        // Unreachable today and knowingly kept: ExtractionOutputBuilder hardcodes
+        // ReconciliationProblems = 0 because the validator that counted them is gone and is not
+        // coming back (2026-09-09). The field still travels on the report, so the flag stays
+        // rather than being deleted and re-derived if anything ever counts this again.
         if (x.ReconciliationProblems > 0)
             flags.Add(new ReportFlag(FlagSeverity.Critical, "Extraction.ReconciliationProblems",
                 x.ReconciliationProblems.ToString(), "0",
                 "Counts don't add up across stages — a logic bug or data truncation.",
-                "Read the validation report's ReconciliationProblems list; do not trust this run's other counts until resolved."));
+                "Compare Extraction.DocsToProcess against the chunking stage's document count; do not trust this run's other counts until resolved."));
 
         if (x.ValidationErrors > 0)
         {
@@ -140,7 +142,7 @@ public static class FlagEvaluator
         foreach (var redFlag in x.RedFlags)
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Extraction.RedFlags", redFlag, "none",
                 "Pre-computed signal raised by the extraction stage.",
-                "See the validation report for context."));
+                "See Extraction.Issues and the file-facts report for context."));
     }
 
     private static void EvaluateChunking(ChunkingStageMetrics? c, List<ReportFlag> flags, bool calibrationMode)
@@ -304,33 +306,16 @@ public static class FlagEvaluator
                 "Check the next run's PreviousIndexDocumentCount, or query the index's $count directly."));
     }
 
-    private static void EvaluateValidation(ValidationReportFacts? v, List<ReportFlag> flags)
-    {
-        if (v is null) return;
-
-        // Only diagnostic against a non-trivial table count: a couple of fallbacks in a run with
-        // hundreds of tables is noise, the same number against 3 tables is not.
-        if (v.TableConversionFallbacks > 0 && v.DetectedTableCount > 0)
-        {
-            var rate = v.TableConversionFallbacks / (double)v.DetectedTableCount;
-            if (rate > 0.25)
-                flags.Add(new ReportFlag(FlagSeverity.Warning, "Validation.TableConversionFallbacks",
-                    $"{v.TableConversionFallbacks} of {v.DetectedTableCount} tables ({rate:P0})", "≤ 25%",
-                    "Tables fell back to plain text — their structure is lost for retrieval.",
-                    "Check the affected documents' table markup in the extraction artifact."));
-        }
-
-        foreach (var w in v.MagnitudeWarnings)
-            flags.Add(new ReportFlag(FlagSeverity.Watch, "Validation.MagnitudeWarnings", w, "none",
-                "Corpus size moved unusually against the baseline (advisory — never gates a run).",
-                "Expected on a small changeset; investigate only if it repeats."));
-
-        if (v.DocumentsNeedingFallbackChunking.Count > 0)
-            flags.Add(new ReportFlag(FlagSeverity.Warning, "Validation.DocumentsNeedingFallbackChunking",
-                $"{v.DocumentsNeedingFallbackChunking.Count} document(s)", "0",
-                "No structural guidance available — these were chunked blind and may retrieve worse.",
-                "Check whether these PDFs have a bookmark outline or DI-detected headings."));
-    }
+    // The Validation.* flags that lived here are gone with the validation report they read
+    // (2026-09-09). Three flags, none of them reachable: TableConversionFallbacks and
+    // DocumentsNeedingFallbackChunking were PdfCleaner/PdfPipelineValidator counters that no
+    // stage in the CU pipeline produces, and MagnitudeWarnings needed a baseline comparison
+    // that never got ported. The magnitude check is the one worth having back - the baseline
+    // exists already (PreviousRunPointer, plus the page count SaveRunStateAsync writes every
+    // run), so it belongs here against `previous` rather than in a report of its own. It is
+    // NOT written yet: the only measurement of run-to-run variance so far is a ±0.7%
+    // chunk-count band over three runs (docs/2608/260827/todays-runs-comparison.md), which is
+    // a noise floor and not a warn threshold.
 
     private static void EvaluateCost(
         FileFactsSummary? facts, PreviousRunPointer? previous, List<ReportFlag> flags, bool calibrationMode)

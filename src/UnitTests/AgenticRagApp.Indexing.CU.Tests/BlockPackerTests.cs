@@ -60,9 +60,9 @@ public class BlockPackerTests
         // Absorbing a table into the paragraph before it would put two different things behind
         // one vector and make the table unfindable as a table.
         const string content =
-            "Alinea voor de tabel.\n\n| kop | waarde |\n| --- | --- |\n| a | 1 |\n\nAlinea na de tabel.";
+            "Alinea voor de tabel.\n\n<table><tr><th>kop</th><th>waarde</th></tr><tr><td>a</td><td>1</td></tr></table>\n\nAlinea na de tabel.";
 
-        var blocks = BlockParser.Parse(content);
+        var blocks = BlockParser.Parse(content, TableRangesIn(content));
         var packed = BlockPacker.Pack(content, blocks, 4096);
 
         var table = packed.Single(b => b.Kind == BlockKind.Table);
@@ -77,9 +77,9 @@ public class BlockPackerTests
         // adjacent, and merging them would put the before and after in one chunk with the table
         // itself in another.
         const string content =
-            "Alinea voor de tabel.\n\n| a | b |\n| 1 | 2 |\n\nAlinea na de tabel.";
+            "Alinea voor de tabel.\n\n<table><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></table>\n\nAlinea na de tabel.";
 
-        var packed = BlockPacker.Pack(content, BlockParser.Parse(content), 4096);
+        var packed = BlockPacker.Pack(content, BlockParser.Parse(content, TableRangesIn(content)), 4096);
 
         Assert.AreEqual(3, packed.Count);
         Assert.IsFalse(packed.Any(b => b.Text.Contains("voor") && b.Text.Contains("na de tabel")));
@@ -92,10 +92,10 @@ public class BlockPackerTests
         // packing far below the ceiling - chunks that are small for no measurable reason.
         var paragraph = Prose(10);
         var content   = string.Join("\n\n", Enumerable.Repeat(paragraph, 3)) +
-                        "\n\n| a | b |\n| 1 | 2 |\n\n" +
+                        "\n\n<table><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></table>\n\n" +
                         string.Join("\n\n", Enumerable.Repeat(paragraph, 3));
 
-        var packed = BlockPacker.Pack(content, BlockParser.Parse(content), 4096);
+        var packed = BlockPacker.Pack(content, BlockParser.Parse(content, TableRangesIn(content)), 4096);
 
         Assert.AreEqual(3, packed.Count);
         Assert.AreEqual(BlockKind.Table, packed[1].Kind);

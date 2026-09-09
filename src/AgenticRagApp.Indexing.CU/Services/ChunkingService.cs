@@ -129,12 +129,11 @@ public class ChunkingService : IChunkingService
                         //     likeliest document to emit nothing - so counters recovered from the
                         //     chunks would drop it.
                         //
-                        //     Locate is the whole read: it orders headings by raw DI offset,
-                        //     finds each one's real position in the cleaned text, and pairs
-                        //     consecutive hits into contiguous sections, preamble and zero-body
-                        //     merges included. Raw offsets ORDER headings and never slice -
-                        //     cleaning drifts length by a measured 1.066-1.202x, so a raw offset
-                        //     cuts wrong, and further wrong the deeper into the document it is.
+                        //     Locate is the whole read: it opens a section at each heading.s own
+                        //     CU span offset (the markdown is verbatim and the span is a utf16 index
+                        //     into it - span-direct since 2026-09-09) and pairs consecutive
+                        //     headings into contiguous sections, preamble and zero-body merges
+                        //     included.
                         state.Stage = "heading-location";
 
                         var located = HeadingLocator.Locate(
@@ -310,14 +309,32 @@ public class ChunkingService : IChunkingService
     {
         int headingCount = doc.Headings.Count;
 
-        // Null means extraction never measured this document, so the count decides alone - a
-        // missing measurement never punishes a document. It is likewise not "small": null < int
-        // is false, so an unmeasured document never takes the single-heading clause.
-        double? density = doc.Profile?.HeadingsPerThousandChars;
-        bool    isSmall = doc.Profile?.EstimatedTokens < SmallDocumentTokenCeiling;
+        // Both inputs are MEASURED HERE (2026-09-08), from the document's own content. They used
+        // to be read off DocumentProfile, which has had no producer since the CU switch - so
+        // both were null on every document, the density tripwire never fired, and the
+        // single-heading clause could never be taken. The gate ran in its "unmeasured" branch
+        // for weeks without anything saying so. Computing them where they are used costs one
+        // tokenizer pass per document and removes the possibility entirely.
+        //
+        // The token count is the real cl100k count, not the chars/token ratio estimate the
+        // deleted record carried - the same counter the strategies budget with, so the gate and
+        // the cut can never disagree about how big a document is.
+        double density = HeadingsPerThousandChars(doc);
+        bool   isSmall = TokenEstimator.Estimate(doc.Content) < SmallDocumentTokenCeiling;
 
-        return (headingCount >= MinHeadings && (density is null || density >= MinHeadingsPerThousandChars))
+        return (headingCount >= MinHeadings && density >= MinHeadingsPerThousandChars)
             || (isSmall && headingCount >= MinHeadingsWhenSmall);
+    }
+
+    // Headings per 1,000 characters - the over-firing tripwire measured on the corpus (D060:
+    // one heading per ~1,012 chars is normal; Buddy's 10 headings on 1 page is not). An empty
+    // document reports 0 rather than dividing by zero, which fails the density clause and
+    // leaves the heading count to decide - the same direction the unmeasured case took.
+    private static double HeadingsPerThousandChars(PdfExtractionDocument doc)
+    {
+        if (doc.Content.Length == 0) return 0;
+
+        return doc.Headings.Count / (doc.Content.Length / 1000.0);
     }
 
     private const int    MinHeadings                 = 2;
@@ -325,9 +342,14 @@ public class ChunkingService : IChunkingService
     private const int    MinHeadingsWhenSmall        = 1;
 
     // The "can the whole document BE the retrieval unit" line, and the only size threshold this
-    // gate needs. Reasoned, never measured (chunking-signals-map.md) - it was
-    // DocumentSizeClassifier.MediumTokenThreshold, the boundary below which a document was
-    // classified Small.
+    // gate needs.
+    //
+    // REASONED, NEVER MEASURED (chunking-signals-map.md), and it is now the only such number
+    // left in this gate - it was DocumentSizeClassifier.MediumTokenThreshold, the boundary
+    // below which a document was classified Small, and that classifier is gone. It survives
+    // because it guards a clause that only ADMITS documents (a small document's single heading
+    // genuinely describes the whole thing), so being wrong costs a route, not data. It is the
+    // first thing to re-argue when Phase D measures a return bound.
     private const int    SmallDocumentTokenCeiling   = 4_000;
 
     // The floor for the minimum-content rule. Set from the corpus's known residue chunks

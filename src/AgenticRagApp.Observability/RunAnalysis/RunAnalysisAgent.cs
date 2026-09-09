@@ -116,7 +116,6 @@ public sealed class RunAnalysisAgent
             embedding  = r?.Embedding,
             restore    = s.RestoreReport,
 
-            validation = s.Validation,
             fileFacts  = s.FileFacts,
             diff       = s.Diff,
             failure    = s.Failure,

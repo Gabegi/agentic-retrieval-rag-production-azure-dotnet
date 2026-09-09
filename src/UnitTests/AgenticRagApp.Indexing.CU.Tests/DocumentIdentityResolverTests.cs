@@ -30,18 +30,15 @@ public class DocumentIdentityResolverTests
             ModDate:          null,
             PageCount:        null,
             LastModifiedDate: null,
-            PageSpans:        [new PageSpan(1, 0, "content".Length, null, false)],
+            PageSpans:        [new PageSpan(1, 0, "content".Length, null)],
             PageBreadcrumbs:  new Dictionary<int, string>(),
             Sections:         [],
             Headings:         headings ?? [],
             Boilerplate:      [],
             Tables:           [],
-            SelectionMarks:   [],
             Figures:          [],
-            Lines:            [],
             Annotations:      [],
             Hyperlinks:       [],
-            Profile:          null,
             Language:         null);
 
     // Each identity text gets whichever vector its title maps to - lets a test force known

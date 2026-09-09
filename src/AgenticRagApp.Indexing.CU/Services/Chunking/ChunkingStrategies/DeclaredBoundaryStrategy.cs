@@ -23,9 +23,9 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
             return ValueTask.FromResult<IReadOnlyList<ChunkObject>>([]);
 
         // 1. Read the sections. ChunkingService anchored them (HeadingLocator) before calling
-        //    this route, so the whole read - sort by raw DI offset, find each heading's real
-        //    position in the cleaned text, pair consecutive anchors, split off the preamble,
-        //    merge paired zero-body headings - has already happened.
+        //    this route, so the whole read - open a section at each heading span offset, pair
+        //    consecutive anchors, split off the preamble, merge paired zero-body headings - has
+        //    already happened.
         //
         //    It sits up there rather than here because the three heading counters have to reach
         //    the run report even when this method goes on to emit nothing, and a strategy that
@@ -104,7 +104,7 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
             //    prefix stays paid for on every piece the cut produces.
             chunks.AddRange(SectionChunkBuilder.Build(
                 section,
-                BlockCascade.Cut(doc.Content, section.Start, section.End, bodyCeiling)));
+                BlockCascade.Cut(doc.Content, section.Start, section.End, bodyCeiling, doc.Tables)));
         }
 
         return ValueTask.FromResult<IReadOnlyList<ChunkObject>>(chunks);

@@ -75,13 +75,13 @@ variable "dev_allowed_ips" {
 
 variable "dev_developer_object_ids" {
   type        = list(string)
-  description = "AAD object IDs of developers granted Search Index Data Reader on the dev search service, for manual knowledge-base querying/testing - development convenience only. See dev_access.tf. Gated on var.environment == \"development\" like dev_allowed_ips."
+  description = "AAD object IDs of developers granted Search Index Data Reader on the dev search service, for manual knowledge-base querying/testing - development convenience only. See access.tf. Gated on var.environment == \"development\" like dev_allowed_ips."
   default     = []
 }
 
 variable "dev_eval_service_principal_object_id" {
   type        = string
-  description = "Object ID of the service principal (con-cap-app-dev-spn) that runs the eval pipeline against dev, e.g. .pipelines/base/run-eval-tests.yml. Granted fixed role assignments in dev_access.tf, independent of data.azurerm_client_config.current (eval_access.tf), so they don't shift if a human applies dev locally. Empty string disables these grants."
+  description = "Object ID of the service principal (con-cap-app-dev-spn) that runs the eval pipeline against dev, e.g. .pipelines/base/run-eval-tests.yml. Granted fixed role assignments in access.tf (azurerm_role_assignment.dev_eval_spn), independent of data.azurerm_client_config.current (azurerm_role_assignment.eval), so they don't shift if a human applies dev locally. Empty string disables these grants."
   default     = ""
 }
 

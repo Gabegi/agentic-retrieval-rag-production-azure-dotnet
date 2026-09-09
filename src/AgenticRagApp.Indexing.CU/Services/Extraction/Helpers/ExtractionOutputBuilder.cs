@@ -60,13 +60,13 @@ internal static class ExtractionOutputBuilder
                     Headings:         structure?.Headings       ?? [],
                     Boilerplate:      structure?.Boilerplate    ?? [],
                     Tables:           structure?.Tables         ?? [],
-                    SelectionMarks:   structure?.SelectionMarks ?? [],
                     Figures:          structure?.Figures        ?? [],
-                    Lines:            structure?.Lines          ?? [],
                     Annotations:      structure?.Annotations    ?? [],
                     Hyperlinks:       structure?.Hyperlinks     ?? [],
-                    Profile:          f.Profile,
-                    Language:         f.Language);
+                    Language:         f.Language,
+                    Barcodes:         structure?.Barcodes ?? [],
+                    Formulas:         structure?.Formulas ?? [],
+                    LineCount:        structure?.LineCount ?? 0);
             })];
 
     // Maps the extracted files into the source-agnostic PdfExtractionOutput returned to the
@@ -76,8 +76,9 @@ internal static class ExtractionOutputBuilder
     // null means "no equivalent concept" (StaleDocCount - no source attention flag;
     // MissingDepartmentCount - no folder concept), while zero means "the thing that counted this
     // is gone". ReconciliationProblems and MojibakeRepairedPages are the second kind: they were
-    // produced by PdfPipelineValidator and PdfCleaner, both deleted, and they will report real
-    // numbers again when the validation layer returns (see ExtractionService's validation seam).
+    // produced by PdfPipelineValidator and PdfCleaner, both deleted, and with no validation
+    // stage coming back (2026-09-09, see ExtractionService) they now read 0 permanently. They
+    // still travel on the report; removing them from its shape is a separate call.
     internal static PdfExtractionOutput BuildExtractionOutput(
         IReadOnlyList<ExtractedFile>             files,
         IReadOnlyDictionary<string, PdfBlobInfo> entries)

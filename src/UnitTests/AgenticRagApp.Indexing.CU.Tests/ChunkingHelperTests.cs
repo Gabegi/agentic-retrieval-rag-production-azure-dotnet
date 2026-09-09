@@ -2,6 +2,9 @@ using AgenticRagApp.Indexing.CU.Utils;
 
 namespace RagApp.UnitTests.Indexing;
 
+// The GFM table members (ContainsTable, SplitIntoBlocks) and their tests went 2026-09-09: tables
+// are typed by Content Understanding and cut by TableCutter, and a pipe-row regex matched nothing
+// CU emits.
 [TestClass]
 public class ChunkingHelperTests
 {
@@ -182,127 +185,5 @@ public class ChunkingHelperTests
 
         Assert.IsTrue(tagged.StartsWith(title, StringComparison.Ordinal));
         Assert.IsTrue(tagged.Length > title.Length);
-    }
-
-    // ── ContainsTable ────────────────────────────────────────────────────────
-
-    [TestMethod]
-    public void ContainsTable_TwoConsecutiveRows_IsATable()
-    {
-        var content = "| Functie | Schaal |\n|---|---|";
-
-        Assert.IsTrue(ChunkingHelper.ContainsTable(content));
-    }
-
-    [TestMethod]
-    public void ContainsTable_OneLineWithPipes_IsProseNotATable()
-    {
-        // A single line containing '|' is prose with a pipe in it. This predicate is what the
-        // index's has_table is built from, so a lone pipe marking a chunk as tabular would
-        // mislabel ordinary text corpus-wide.
-        Assert.IsFalse(ChunkingHelper.ContainsTable("kies optie A | optie B en ga verder"));
-    }
-
-    [TestMethod]
-    public void ContainsTable_TwoRowsSeparatedByProse_IsNotATable()
-    {
-        // The two rows have to be CONSECUTIVE - the run counter resets on any non-row line.
-        var content = "| a | b |\ngewone zin ertussen\n| c | d |";
-
-        Assert.IsFalse(ChunkingHelper.ContainsTable(content));
-    }
-
-    [TestMethod]
-    public void ContainsTable_TableAfterLeadingProse_IsStillFound()
-    {
-        var content = "Zie onderstaande tabel:\n\n| Functie | Schaal |\n| FWG 35 | 10 |\n\nEinde.";
-
-        Assert.IsTrue(ChunkingHelper.ContainsTable(content));
-    }
-
-    [TestMethod]
-    public void ContainsTable_EmptyOrWhitespace_IsFalse()
-    {
-        Assert.IsFalse(ChunkingHelper.ContainsTable(""));
-        Assert.IsFalse(ChunkingHelper.ContainsTable("   \n  "));
-    }
-
-    [TestMethod]
-    public void ContainsTable_AgreesWithSplitIntoBlocks()
-    {
-        // The two share the 2-consecutive-rows rule deliberately, kept beside one another so
-        // there is one definition of "markdown table row" rather than two that drift.
-        var content = "intro\n| a | b |\n|---|---|\nuitro";
-
-        Assert.AreEqual(
-            ChunkingHelper.SplitIntoBlocks(content).Any(b => b.IsTable),
-            ChunkingHelper.ContainsTable(content));
-    }
-
-    // ── SplitIntoBlocks ──────────────────────────────────────────────────────
-
-    [TestMethod]
-    public void SplitIntoBlocks_ProseOnly_IsASingleProseBlock()
-    {
-        var blocks = ChunkingHelper.SplitIntoBlocks("regel een\nregel twee");
-
-        Assert.AreEqual(1, blocks.Count);
-        Assert.IsFalse(blocks[0].IsTable);
-        Assert.AreEqual("regel een\nregel twee", blocks[0].Text);
-    }
-
-    [TestMethod]
-    public void SplitIntoBlocks_ProseThenTableThenProse_AlternatesThreeBlocks()
-    {
-        var blocks = ChunkingHelper.SplitIntoBlocks("intro\n| a | b |\n| c | d |\nuitro");
-
-        CollectionAssert.AreEqual(new[] { false, true, false }, blocks.Select(b => b.IsTable).ToList());
-        Assert.AreEqual("intro", blocks[0].Text);
-        Assert.AreEqual("| a | b |\n| c | d |", blocks[1].Text);
-        Assert.AreEqual("uitro", blocks[2].Text);
-    }
-
-    [TestMethod]
-    public void SplitIntoBlocks_LoneTableLine_IsDemotedToProseAndMergedWithItsNeighbours()
-    {
-        // Demoting a one-line "table" would leave two prose runs adjacent; leaving them split
-        // would hand the caller two blocks where the text has one paragraph, and each would be
-        // sized and cut on its own.
-        var blocks = ChunkingHelper.SplitIntoBlocks("intro\n| eenzaam |\nuitro");
-
-        Assert.AreEqual(1, blocks.Count);
-        Assert.IsFalse(blocks[0].IsTable);
-        Assert.AreEqual("intro\n| eenzaam |\nuitro", blocks[0].Text);
-    }
-
-    [TestMethod]
-    public void SplitIntoBlocks_TableAtTheStart_KeepsItsRowsTogether()
-    {
-        var blocks = ChunkingHelper.SplitIntoBlocks("| a | b |\n|---|---|\n| c | d |\nnawoord");
-
-        Assert.AreEqual(2, blocks.Count);
-        Assert.IsTrue(blocks[0].IsTable);
-        Assert.AreEqual(3, blocks[0].Text.Split('\n').Length);
-        Assert.IsFalse(blocks[1].IsTable);
-    }
-
-    [TestMethod]
-    public void SplitIntoBlocks_TwoTablesSeparatedByProse_StayTwoTables()
-    {
-        var blocks = ChunkingHelper.SplitIntoBlocks("| a | b |\n| c | d |\ntussen\n| e | f |\n| g | h |");
-
-        CollectionAssert.AreEqual(new[] { true, false, true }, blocks.Select(b => b.IsTable).ToList());
-    }
-
-    [TestMethod]
-    public void SplitIntoBlocks_PreservesEveryLineOfTheInput()
-    {
-        // The blocks are what the routing profile and the block cascade both measure, so a
-        // line lost in the split is content that is never chunked and never indexed.
-        var content = "intro\n| a | b |\n|---|---|\nmidden\n| eenzaam |\nslot";
-
-        var rejoined = string.Join("\n", ChunkingHelper.SplitIntoBlocks(content).Select(b => b.Text));
-
-        Assert.AreEqual(content, rejoined);
     }
 }

@@ -22,10 +22,16 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // the slice invariant (Content == doc.Content[Start..(Start + Length)]) that page attribution,
 // the snapshot round-trip and the minimum-content rule all read. The strategy still PRICES the
 // prefix before cutting - that is what the ceiling is budgeted against.
+//
+// A relabel step sat here until 2026-09-09: a piece opening with a GFM "merged header row" (the
+// same label repeated across every cell) took that label as its heading. Dead under CU, whose
+// tables are HTML - the row test never matched - and gone with TableCaptionSplitter, which owned
+// it. The heading is the section's, full stop.
 public static class SectionChunkBuilder
 {
-    // Start/Length address the body slice in cleaned-content coordinates. The prefix has no
-    // position in the document, which is the other reason it cannot live in Content.
+    // Start/Length address the body slice in doc.Content coordinates (the verbatim CU markdown).
+    // The prefix has no position in the document, which is the other reason it cannot live in
+    // Content.
     public static IReadOnlyList<ChunkObject> Build(
         LocatedSection section, IReadOnlyList<ContentPiece> pieces)
     {
@@ -34,16 +40,6 @@ public static class SectionChunkBuilder
         for (var i = 0; i < pieces.Count; i++)
         {
             var piece = pieces[i];
-
-            // A table that opens with a merged label row ("| Salarisschaal functiegroep 75 |"
-            // repeated across its cells) names ITSELF, and that name is authoritative over
-            // whatever heading the section inherited - it is part of the table, immune to the
-            // caption drift a column-serialized page suffers. Without this, a section holding
-            // several such tables stamps them all with its one heading (the CAO GHZ salary
-            // appendix shape, 35 mislabelled chunks in the 260818 run). TableCutter repeats
-            // header rows onto continuation fragments, so those carry the label too.
-            var ownLabel = TableCaptionSplitter.MergedHeaderLabel(piece.Text);
-            var relabel  = ownLabel is not null && ownLabel != section.HeadingText;
 
             chunks.Add(new ChunkObject
             {
@@ -56,12 +52,8 @@ public static class SectionChunkBuilder
                 SectionIndex = section.Index,
                 ChildIndex   = i,
 
-                HeadingText  = relabel ? ownLabel : section.HeadingText,
-                HeadingPath  = relabel
-                    ? (string.IsNullOrWhiteSpace(section.HeadingPath)
-                          ? ownLabel
-                          : $"{section.HeadingPath} > {ownLabel}")
-                    : section.HeadingPath,
+                HeadingText  = section.HeadingText,
+                HeadingPath  = section.HeadingPath,
                 HeadingDepth = section.Depth,
 
                 // Both come off the section rather than being asserted here. A preamble
@@ -69,11 +61,8 @@ public static class SectionChunkBuilder
                 // all, so stamping a flat `true` would produce the contradiction FlatChunkBuilder
                 // exists to warn about: located true with source none reads as a successfully
                 // anchored heading in any aggregate that counts one without reading the other.
-                // A relabelled chunk says so: its heading came from the table's own merged
-                // header row, not from the section's signal.
-                HeadingSource  = relabel ? ChunkHeadingSource.TableCaption : section.HeadingSource,
-                HeadingLocated = relabel ||
-                                 (section.Located && section.HeadingSource != ChunkHeadingSource.None),
+                HeadingSource  = section.HeadingSource,
+                HeadingLocated = section.Located && section.HeadingSource != ChunkHeadingSource.None,
 
                 // Carried from the piece, not defaulted: BoundaryLevel is the fall-through
                 // metric, and Degraded is the one flag that says an over-ceiling chunk was

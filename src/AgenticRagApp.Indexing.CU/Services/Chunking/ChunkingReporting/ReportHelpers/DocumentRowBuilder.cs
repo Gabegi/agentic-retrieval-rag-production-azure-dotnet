@@ -39,9 +39,10 @@ public static class DocumentRowBuilder
             Outcome:  facts?.Outcome ?? "not_reached",
             Reason:   facts?.Reason  ?? notReachedReason,
 
-            // Read off the profile, not off a route: on a not_reached row no route was picked,
-            // and a route-derived answer would be an invention rather than a measurement.
-            FailedExtractionGate:  doc.Profile is { HasExtractableContent: false },
+            // Measured off the document itself, not off a route: on a not_reached row no route
+            // was picked, and a route-derived answer would be an invention rather than a
+            // measurement. Zero pages means zero - not a division by zero, and not a guess.
+            CharsPerPage:          CharsPerPageOf(doc),
             ResidueChunksDropped:  facts?.ResidueDropped ?? 0,
             TocChunksDropped:      facts?.TocDropped     ?? 0,
 
@@ -54,11 +55,6 @@ public static class DocumentRowBuilder
             ChunkCount:            chunks.Count,
             HeadingsTotal:         facts?.HeadingsTotal   ?? 0,
             HeadingsLocated:       facts?.HeadingsLocated ?? 0,
-
-            // Sized from the classifier even though the gate no longer uses it, so a row still
-            // says how big the document was. DocumentSizeClassifier is report-only now: the
-            // gate reads Profile.EstimatedTokens against its own ceiling directly.
-            SizeClass:             DocumentSizeClassifier.Classify(doc.Profile).ToString(),
 
             // Null where no route was picked. Naming one would read as a route that ran and
             // produced nothing, which is a different fact from never having run.
@@ -78,14 +74,28 @@ public static class DocumentRowBuilder
 
             // A reported signal, not a routing input: tables are an atomicity constraint for
             // the splitter, and TableChecker stopped influencing the route with the two-strategy
-            // design.
-            IsTableShaped:         TableChecker.IsTableShaped(doc.Tables.Count, doc.Profile),
+            // design. Measured off the typed table spans since 2026-09-09 (regex block detection
+            // before that, a DocumentProfile that was null under CU before that). The share is
+            // reported next to the boolean so the number behind the verdict is visible.
+            IsTableShaped:         TableChecker.IsTableShaped(doc.Content, doc.Tables),
+            TableCharShare:        TableChecker.TableCharShare(doc.Content, doc.Tables),
 
             // On the recursive route the title is the ONLY prefix, so an empty-title document
             // emits chunks whose embedded text is bare body with zero identity in the vector.
             // DocumentIdentityResolver only drops documents with NEITHER title nor headings, so
             // this case survives selection silently without this flag.
             EmptyTitle:            string.IsNullOrWhiteSpace(doc.Title));
+    }
+
+    // Characters per extracted page - DISTINCT page numbers, the same denominator every other
+    // per-page number in these reports uses (a page can carry several verbatim CU spans). Zero
+    // when the document reported no pages at all, which is a real state on a failed extraction
+    // and reads correctly next to ChunkCount 0.
+    private static double CharsPerPageOf(PdfExtractionDocument doc)
+    {
+        var pages = doc.PageSpans.Select(s => s.PageNumber).Distinct().Count();
+
+        return pages == 0 ? 0 : (double)doc.Content.Length / pages;
     }
 
     // Nearest-rank, on the tokenizer counts step 4 stamped. Zero on a document that produced no

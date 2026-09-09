@@ -1,9 +1,9 @@
-﻿using AgenticRagApp.Indexing.CU.Models;
+using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Indexing.CU.Services;
 
 namespace AgenticRagApp.Indexing.CU.Utils;
 
-// One heading section of a document, in CLEANED-content coordinates.
+// One heading section of a document, in markdown coordinates - the same string chunking cuts.
 // Body is the text between this heading and the next one - which is what gets cut, not the
 // heading line itself.
 public sealed record LocatedSection(
@@ -26,202 +26,100 @@ public sealed record HeadingLocationResult(
     int                           HeadingsLocated,
     int                           PairedHeadingsMerged,
 
-    // Headings that arrived with no DI offset at all, and so had to be ordered by arrival
-    // position rather than by a measured one - see OrderByOffset. Zero on every document
-    // measured so far (0 of 1,273 across the big four), which is exactly why it is counted
-    // rather than assumed: a nonzero value here means extraction handed us a heading whose
-    // paragraph carried no spans, and the section boundary it opens rests on a fallback.
+    // Headings that arrived with no span at all. Such a heading cannot open a section - there
+    // is no position to open it at, and inventing one (the previous locator inherited the last
+    // offset seen) is a guess about where in the document it sits. It is counted and NOT
+    // located: zero on every document measured so far (0 of 1,273 across the big four), so a
+    // nonzero value here is an extraction anomaly worth reporting, not an input worth absorbing.
     //
     // Reported for the same reason as the three counters above: the caller needs it even
     // when the document goes on to produce no chunks at all.
     int                           HeadingsWithoutOffset)
 {
-    // Share of headings that could not be placed in the cleaned text. This is the permanent
-    // form of the measurement that chose this approach over rewriting PdfCleaner: Phase A
-    // measured 1,273/1,273 exact matches across the big four, and the escalation rule was
-    // fixed in advance at >2% corpus-wide (or >5% on any single document). If this metric
-    // starts moving, that decision is due to be reopened - it is not a curiosity.
+    // Share of headings that could not open a section: no offset, or an offset outside the
+    // content. Both mean the service's own span disagrees with the service's own markdown,
+    // which is not a chunking result but an upstream one - CUHelper warns per document when
+    // its span check fails, and this is the run-level form of the same measurement.
     public double FailureRate => HeadingsTotal == 0 ? 0 : 1 - (HeadingsLocated / (double)HeadingsTotal);
 }
 
-// Locates DI's detected headings inside a document's CLEANED text, and turns them into
-// section boundaries (action-plan.md C6, and C5's two missing cascade rules).
+// Turns Content Understanding's detected headings into section boundaries: the cut for a
+// heading is its own span offset, directly (2026-09-09).
 //
-// Why not just use Heading.Offset: those offsets address Document Intelligence's RAW
-// content, while everything downstream consumes cleaned content. PdfCleaner changes length
-// in nine separate ways - control and invisible characters removed, ligatures expanded,
-// markdown escapes unescaped, NFC normalisation, hyphenation repair, three whitespace
-// collapses, per-page trim - plus table HTML rewritten to pipe markdown and figures reduced
-// to a caption or deleted. Phase A measured the resulting raw/cleaned ratio at 1.066-1.202
-// across the big four, and the drift accumulates down the document. Slicing cleaned text at
-// a raw offset cuts in the wrong place, further wrong the further in you go.
+// This class used to re-find every heading by string search - normalize the text, search
+// within the heading's page window from a moving cursor, then walk back over the "##" marker
+// the match had landed after. That existed for Document Intelligence, whose offsets addressed
+// RAW content while chunking cut CLEANED content (PdfCleaner drifted length by a measured
+// 1.066-1.202x). Neither half of that premise survives the CU switch: nothing cleans the
+// markdown any more (CUHelper returns it verbatim), the heading span is a utf16 index into
+// exactly that string, and the cu-raw-response capture shows the span STARTS AT THE MARKER
+// ("# Wifi uitzetten..." at offset 0, length 56, content 54 chars) - so the walk-back was
+// reconstructing a position the service had already reported. Three runs x 51 documents on
+// 2026-08-27 produced zero span-misalignment warnings from CUHelper's check. D146 round 2
+// deferred span-direct addressing "until Step 0 shows span reliability"; that is the evidence.
 //
-// So: PageNumber narrows the search to one page, a string match finds the real position,
-// and Offset is used only to ORDER headings - which is what it is reliable for and what
-// PageNumber cannot do (two headings on the same page are indistinguishable by page).
+// What remains here is chunking POLICY, none of it a re-derivation of service data: the
+// preamble section and the paired zero-body merge (with its two refusals). TableCaptionSplitter
+// - a caption line above a GFM table promoted to a boundary - went 2026-09-09: dead under the
+// HTML tables CU emits (its row test never matched), and the CAO GHZ salary tables it was
+// written for carry neither a caption line nor a typed Caption in the CU output.
 public static class HeadingLocator
 {
     public static HeadingLocationResult Locate(
         string content,
         IReadOnlyList<Heading> headings,
         IReadOnlyList<PageSpan> pageSpans,
-        IReadOnlyList<SectionInfo>? diSections = null)
+        IReadOnlyList<SectionInfo>? sections = null)
     {
         if (string.IsNullOrEmpty(content))
             return new HeadingLocationResult([], headings.Count, 0, 0, 0);
 
-        var (ordered, offsetless) = OrderByOffset(headings);
+        var found      = new List<(Heading Heading, int At)>();
+        var offsetless = 0;
 
-        var located = new List<(Heading Heading, int At, bool Found)>();
-        var cursor  = 0;
-
-        foreach (var heading in ordered)
+        foreach (var heading in headings)
         {
-            var at = FindInPage(content, heading, pageSpans, cursor);
-            if (at >= 0)
+            // A null offset means the paragraph carried no span - explicitly not 0, since 0 is a
+            // real offset and cannot double as "unknown". No position, no section.
+            if (heading.Offset is not { } at)
             {
-                // The match lands on the heading TEXT, but DI renders headings as markdown -
-                // "### Kop" - so the boundary cut there leaves the "### " tail ending the
-                // PREVIOUS section's body: 1,754 of 2,997 chunks in the 260818 index ended in
-                // a bare marker line. Pull the boundary back over the marker so it stays with
-                // the heading it belongs to, and both sections remain pure slices.
-                at = IncludeMarkdownMarker(content, at);
+                offsetless++;
+                continue;
+            }
 
-                located.Add((heading, at, true));
-                cursor = at + 1;
-            }
-            else
-            {
-                located.Add((heading, -1, false));
-            }
+            // An offset past the end of the content is the service contradicting itself (the
+            // span addresses a string the markdown is not). Not located, and the failure rate
+            // shows it - never clamped to the end, which would open an empty section there.
+            if (at < 0 || at >= content.Length) continue;
+
+            found.Add((heading, at));
         }
 
-        var found  = located.Where(l => l.Found).OrderBy(l => l.At).ToList();
+        // Reading order is offset order, and offsets are positions in the string being cut -
+        // the sort is stable, so two headings the service placed at one offset keep arrival order.
+        found = [.. found.OrderBy(f => f.At)];
 
-        // Ancestor chains come from DI's nested section spans, not from Heading.Depth -
+        // Ancestor chains come from CU's nested section spans, not from Heading.Depth -
         // containment is measured, depth is assumed. See HeadingChainBuilder.
-        var chains = HeadingChainBuilder.Build(diSections ?? [], headings);
+        var chains = HeadingChainBuilder.Build(sections ?? [], headings);
 
         var (built, merged) = BuildSections(content, found, pageSpans, chains);
 
-        // Table captions DI did not call headings become boundaries of their own - otherwise a
-        // section spanning nine salary tables stamps all nine with one heading, and a chunk
-        // ends up labelled with a functiegroep it does not contain. See TableCaptionSplitter.
-        var sections = TableCaptionSplitter.Split(content, built);
-
         return new HeadingLocationResult(
-            sections, headings.Count, found.Count, merged, offsetless.Count);
+            built, headings.Count, found.Count, merged, offsetless);
     }
 
-    // Reading order, plus the headings that could not state their own position.
-    //
-    // Offset is DI's raw-content offset, and it is used ONLY to order - never to slice. That
-    // split is the whole premise of this class (see the note above): cleaning changes length,
-    // so a raw offset cuts in the wrong place, but cleaning is monotonic, so a heading earlier
-    // in the raw content is still earlier in the cleaned content. Order survives what position
-    // does not. PageNumber cannot substitute, since two headings on one page are
-    // indistinguishable by page.
-    //
-    // The sort is a re-assertion rather than a repair. GetHeadingsHelper builds the list by
-    // walking DI's paragraphs forward once, and paragraph spans ascend through the document,
-    // so this list already arrives ordered - measured at 1,273 headings across the big four
-    // with zero out of order, zero ties and zero missing offsets. Sorting anyway costs one
-    // pass over a few hundred items and removes the dependence on an upstream guarantee that
-    // nothing states.
-    //
-    // A null offset means the paragraph carried no spans at all - explicitly not 0, since 0 is
-    // a real offset and cannot double as "unknown" (DiGeometryHelpers.FirstOffset). Because
-    // the input IS in reading order, the one thing known about such a heading is which
-    // headings it came after, so it inherits the last offset seen and stays with its
-    // neighbours. Sorting it last instead would move it to the one position in the document it
-    // is guaranteed not to occupy, and its section boundary would go with it. It is counted
-    // and returned either way: 0 of 1,273 means this is an extraction anomaly worth reporting,
-    // not a routine input worth absorbing quietly.
-    private static (List<Heading> Ordered, List<Heading> Offsetless) OrderByOffset(
-        IReadOnlyList<Heading> headings)
-    {
-        var keyed      = new List<(Heading Heading, int Key, int Index)>(headings.Count);
-        var offsetless = new List<Heading>();
-        var carried    = 0;
-
-        for (var i = 0; i < headings.Count; i++)
-        {
-            if (headings[i].Offset is { } offset) carried = offset;
-            else offsetless.Add(headings[i]);
-
-            keyed.Add((headings[i], carried, i));
-        }
-
-        // Index is the final tie-break, so a run of carried-offset headings keeps its arrival
-        // order among themselves and stays behind the heading whose offset they borrowed.
-        var ordered = keyed
-            .OrderBy(k => k.Key)
-            .ThenBy(k => k.Heading.PageNumber)
-            .ThenBy(k => k.Index)
-            .Select(k => k.Heading)
-            .ToList();
-
-        return (ordered, offsetless);
-    }
-
-    // Searches only within the heading's own page, and only at or after the previous
-    // heading's position - so a heading whose text repeats (a running title, a term reused
-    // as a heading later) matches the occurrence in document order rather than the first
-    // one anywhere in the file.
-    private static int FindInPage(
-        string content, Heading heading, IReadOnlyList<PageSpan> pageSpans, int cursor)
-    {
-        var needle = Normalize(FirstLine(heading.Content));
-        if (needle.Length == 0) return -1;
-
-        var span = pageSpans.FirstOrDefault(s => s.PageNumber == heading.PageNumber);
-
-        var from = span is null ? cursor : Math.Max(cursor, span.Offset);
-        var to   = span is null ? content.Length : Math.Min(content.Length, span.Offset + span.Length);
-        if (from >= to) return -1;
-
-        var at = content.IndexOf(needle, from, to - from, StringComparison.Ordinal);
-        if (at >= 0) return at;
-
-        // Fall back to the whole document from the cursor. A heading whose page span is
-        // slightly off (cleaning removed its page's content entirely, say) is still better
-        // placed approximately than dropped.
-        return content.IndexOf(needle, cursor, StringComparison.Ordinal);
-    }
-
-    // A merged heading ("Artikel 9\nBegrippen") carries both lines in Content but its Offset
-    // covers only the first paragraph, so only the first line is reliably contiguous in the
-    // text. GetHeadingsHelper's own comment predicted this exact consumer.
+    // A heading paragraph is one line in CU's output; FirstLine is kept for the length
+    // comparison below so a Content that does carry a newline compares its heading LINE, which
+    // is what the body slice would start with.
     private static string FirstLine(string content) =>
         content.Split('\n')[0].Trim();
-
-    // Trim only. This used to apply the shared character repair so the needle transformed
-    // exactly like the page text it searches; neither side is repaired now, so they match on
-    // whatever form Content Understanding produced. That holds ONLY while nothing else
-    // normalizes - restoring repair on one side without the other silently breaks every lookup.
-    private static string Normalize(string s) => s.Trim();
-
-    // Walks a located heading's position back over the markdown marker that precedes it -
-    // "#{1,6}" plus spacing - but only when that marker starts its own line, so a '#' inside
-    // running text is never absorbed. Returns the original position when there is no marker.
-    private static int IncludeMarkdownMarker(string content, int at)
-    {
-        var i = at;
-        while (i > 0 && content[i - 1] is ' ' or '\t') i--;
-
-        var hashes = 0;
-        while (i > 0 && content[i - 1] == '#' && hashes < 6) { i--; hashes++; }
-
-        if (hashes == 0) return at;
-
-        return i == 0 || content[i - 1] == '\n' ? i : at;
-    }
 
     // Turns located headings into contiguous sections, applying the two rules the cascade
     // was missing.
     private static (List<LocatedSection> Sections, int Merged) BuildSections(
         string content,
-        List<(Heading Heading, int At, bool Found)> found,
+        List<(Heading Heading, int At)> found,
         IReadOnlyList<PageSpan> pageSpans,
         IReadOnlyDictionary<int, IReadOnlyList<string>> chains)
     {
@@ -245,7 +143,7 @@ public static class HeadingLocator
 
         for (var i = 0; i < found.Count; i++)
         {
-            var (heading, at, _) = found[i];
+            var (heading, at) = found[i];
             var end = i + 1 < found.Count ? found[i + 1].At : content.Length;
 
             // Rule 2 - paired zero-body headings. Hygienecode emits pairs like
@@ -255,32 +153,22 @@ public static class HeadingLocator
             // merged into one section: the second heading's text is folded into the first's,
             // and the section runs to wherever the second would have ended.
             //
-            // This is the SECOND merge of the same phenomenon, and the two have to agree.
-            // GetHeadingsHelper already merges adjacent heading-role paragraphs at extraction,
-            // and it deliberately refuses to when the first is a bare numbered label: two
-            // consecutive "Artikel 8" / "Artikel 9" markers are separate short articles, not a
-            // pair (BareLabelFollowedByAnotherHeading_NeitherMerges). This rule had no such
-            // gate, so it re-merged exactly the pairs extraction had just decided to keep apart
-            // - overriding a deliberate decision from the one place that can see paragraph
-            // adjacency, and inflating a counter that shares its name with extraction's.
-            //
-            // Gated on the same regex rather than a copy of it, for the same reason
-            // GetQualityWarningsHelper shares it: two patterns that must agree, kept as one.
-            // The boundary now includes the heading's markdown marker (IncludeMarkdownMarker),
-            // so strip it before the zero-body length comparison below - otherwise a marker'd
-            // pair reads as having "### " of body and the merge stops firing.
-            var body = content[at..end].Trim().TrimStart('#').TrimStart();
-            var headingLine = Normalize(FirstLine(heading.Content));
+            // The section starts at the heading's span, which includes its markdown marker, so
+            // the marker is stripped before the zero-body length comparison - otherwise a
+            // marker'd pair reads as having "### " of body and the merge stops firing.
+            var body        = content[at..end].Trim().TrimStart('#').TrimStart();
+            var headingLine = FirstLine(heading.Content);
 
+            // Two refusals, and they must agree with each other and with the shape rules in
+            // HeadingChainBuilder. A bare numbered label ("Artikel 8") followed by another
+            // heading is two short articles, not a pair (BareNumberedLabelWithWord); and two
+            // headings at the same structural level are siblings whatever the body length says
+            // (AreSameStructuralLevel). The vacant articles this stops merging become
+            // heading-only sections, which is what they are - the residue filter, not this
+            // merge, is the right place to drop them.
             var isBareLabel = HeadingNumbering.BareNumberedLabelWithWord()
                                                .IsMatch(FirstLine(heading.Content));
 
-            // The same refusal, made on shape instead of on bareness. A pair is a heading and
-            // its continuation; two headings at the same structural level are separate
-            // sections, and folding them yields one segment naming both articles. See
-            // HeadingChainBuilder.AreSameStructuralLevel. The vacant articles this stops
-            // merging become heading-only sections, which is what they are - the residue
-            // filter, not this merge, is the right place to drop them.
             var nextIsSibling = i + 1 < found.Count
                 && HeadingChainBuilder.AreSameStructuralLevel(
                        HeadingTextNormalizer.Flatten(heading.Content) ?? "",
@@ -288,12 +176,10 @@ public static class HeadingLocator
 
             if (!isBareLabel && !nextIsSibling && body.Length <= headingLine.Length + 2 && i + 1 < found.Count)
             {
-                var (next, _, _) = found[i + 1];
+                var (next, _) = found[i + 1];
                 var nextEnd = i + 2 < found.Count ? found[i + 2].At : content.Length;
 
-                // Every line of both headings, space-joined - see HeadingTextNormalizer. Taking
-                // the first line of each dropped the title half of an already-merged heading
-                // ("Artikel 9\nBegrippen" became "Artikel 9"), which is the half a query matches.
+                // Every line of both headings, space-joined - see HeadingTextNormalizer.
                 var mergedHeading = string.Join(' ',
                     new[] { HeadingTextNormalizer.Flatten(heading.Content),
                             HeadingTextNormalizer.Flatten(next.Content) }
@@ -316,9 +202,6 @@ public static class HeadingLocator
                 continue;
             }
 
-            // Same one shape as the merged branch above: every line, space-joined. This stored
-            // heading.Content.Trim() whole, so an extraction-merged heading reached heading_text,
-            // heading_path and the embedded prefix with its newline intact.
             var headingText = HeadingTextNormalizer.Flatten(heading.Content);
 
             sections.Add(new LocatedSection(
@@ -345,12 +228,14 @@ public static class HeadingLocator
         return (sections, merged);
     }
 
+    // The page whose reported span CONTAINS the offset; 0 ("unknown") otherwise - the same
+    // answer CuPageHelper.PageAt and PageResolver give, never the first span as a guess.
     private static int PageAt(IReadOnlyList<PageSpan> spans, int offset)
     {
         foreach (var s in spans)
             if (offset >= s.Offset && offset < s.Offset + s.Length)
                 return s.PageNumber;
 
-        return spans.Count > 0 ? spans[0].PageNumber : 0;
+        return 0;
     }
 }

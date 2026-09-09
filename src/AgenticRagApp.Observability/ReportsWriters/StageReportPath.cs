@@ -1,7 +1,7 @@
 namespace AgenticRagApp.Observability.Reports;
 
-// Builds the blob path for a per-stage diagnostic report (validation, file-facts, failure,
-// extraction diff). Delegates to ReportPath, the one naming scheme shared by every report
+// Builds the blob path for a per-stage diagnostic report (file-facts, failure, extraction
+// diff, raw capture). Delegates to ReportPath, the one naming scheme shared by every report
 // producer in the app - see ReportPath.cs.
 //
 // instanceId is nullable because not every caller runs inside an orchestration (tests, ad-hoc

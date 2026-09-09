@@ -53,7 +53,6 @@ public record SnapshotChunk(
     bool IsOverlap,
 
     int PageEnd,
-    bool PageExtractionFlag,
 
     // What retrieval filters on. A restore that drops these produces a confidently wrong index.
     string? FamilyId,
@@ -66,9 +65,11 @@ public record SnapshotChunk(
 
     // Page-scoped structural counts, carried because they cannot be recomputed on the far side -
     // they derive from a per-chunk structural payload this snapshot deliberately excludes.
-    // has_table is absent on purpose: it derives from Content, which is right here, so it
-    // recomputes correctly and a stored copy could only ever disagree with the text.
+    // has_table joined them 2026-09-09: it is stamped from the typed table spans, which the
+    // snapshot does not carry, so it has to travel like TableCount. Snapshots written before
+    // then deserialize with false - which is what the index held for them anyway.
     int TableCount,
+    bool HasTable,
     IReadOnlyList<string> FigureCaptions,
 
     // CU-typed additions (2026-08-26): index fields derived from the excluded structural
@@ -108,7 +109,6 @@ public record SnapshotChunk(
         HeadingLocated:     doc.HeadingLocated,
         IsOverlap:          doc.IsOverlap,
         PageEnd:            doc.PageEnd,
-        PageExtractionFlag: doc.PageExtractionFlag,
         FamilyId:           doc.FamilyId,
         DomainTag:          doc.DomainTag,
         ConfusableWith:     doc.ConfusableWith,
@@ -116,6 +116,7 @@ public record SnapshotChunk(
         Language:           doc.Language,
         TokenCount:         doc.TokenCount,
         TableCount:         doc.TableCount,
+        HasTable:           doc.HasTable,
         FigureCaptions:     doc.FigureCaptions,
         Hyperlinks:         doc.Hyperlinks,
         Annotations:        doc.Annotations,

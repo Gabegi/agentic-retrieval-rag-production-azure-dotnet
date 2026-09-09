@@ -6,15 +6,26 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //
 // A header-less run of numbers means nothing to the embedder or to the model reading the
 // retrieved chunk - "1.847" is not an answer to anything. So every continuation fragment carries
-// the header row and, when the table has one, the separator row, which is what keeps the
-// fragment valid markdown rather than a headerless remainder.
+// the opening markup, the caption and the header rows, which is what keeps the fragment valid
+// HTML rather than a headerless remainder.
+//
+// HTML ONLY (2026-09-09). Content Understanding writes tables as HTML (tableFormat is fixed at
+// html on the prebuilt) and without regard for newlines - the whole table can arrive on one
+// line - so rows are `</tr>` boundaries wherever they fall. A GFM path existed here until
+// 2026-09-09 for the Document Intelligence output that preceded CU; it was kept "in case any
+// source emits it", no source does, and it went with the regex detection it belonged to.
+//
+// The block handed in IS a table: BlockParser took it off the typed span. This class reads the
+// markup only for the row geometry (TableMarkup), never to decide whether it is looking at one.
 //
 // Never overlapped: repeating DATA rows across two fragments duplicates records, which is not
 // the same thing as restoring context.
 //
-// The repeated header is the one place in this pipeline where a piece's Text is composed rather
-// than sliced - see PieceFactory.Composed. Start and Length keep addressing the rows the
-// fragment actually carries, so page attribution still lands on the right pages.
+// EVERY fragment is composed, including the first: even a fragment that starts at the table's
+// opening tag has to be closed with markup that lives at the far end of the table, so none of
+// them is a pure slice - see PieceFactory.Composed. Start/Length address the fragment's own
+// DATA ROWS, which is what keeps page attribution honest for a table spanning a page break -
+// the whole point of cutting it on rows.
 public static class TableCutter
 {
     public static IReadOnlyList<ContentPiece> Cut(ContentBlock block, int ceiling)
@@ -24,68 +35,75 @@ public static class TableCutter
         if (TokenEstimator.Estimate(block.Text) <= ceiling)
             return [PieceFactory.Whole(block, BoundaryLevel.None)];
 
-        var lines = LineSpans.NonBlank(block.Text);
-        if (lines.Count == 0) return [];
+        var text = block.Text;
+        var rows = TableMarkup.Rows(text);
+        if (rows.Count == 0) return [PieceFactory.Whole(block, BoundaryLevel.None, degraded: true)];
 
-        var headerCount  = Math.Min(TableDetector.HeaderLineCount(block), lines.Count);
-        var headerStart  = lines[0].Start;
-        var header       = block.Text[headerStart..lines[headerCount - 1].End];
-        var headerTokens = TokenEstimator.Estimate(header);
+        var headerEnd = TableMarkup.HeaderEnd(text, rows);
+        var tableEnd  = TableMarkup.TableEnd(text);
 
-        var pieces = new List<ContentPiece>();
-        var first  = true;
+        // Repeated on every fragment: the opening tag, the caption (a table chunk without its
+        // caption loses most of what makes it findable - see TableInfo), any `<thead>`/`<tbody>`
+        // openings, and the header rows themselves. Leading whitespace is dropped because this
+        // is composed text, not a slice.
+        var prefix = text[..headerEnd].TrimStart();
 
-        // The rows accumulated into the fragment being built, in local coordinates.
+        var dataRows = rows.Where(r => r.Start >= headerEnd).ToList();
+        if (dataRows.Count == 0) return [PieceFactory.Whole(block, BoundaryLevel.None, degraded: true)];
+
+        // The closing markup, verbatim: `</tbody></table>` and whatever else sits between the
+        // last row and the end of the table.
+        var suffix = text[Math.Min(dataRows[^1].End, tableEnd)..tableEnd];
+
+        // Anything after `</table>` on the same line - CU writes table footnotes as text after
+        // the table, and a single-line table puts them inside this block. Carried on the LAST
+        // fragment only, so it is neither dropped nor duplicated.
+        var tail = text[tableEnd..];
+
+        var prefixTokens = TokenEstimator.Estimate(prefix + suffix);
+
+        var fragments = new List<(int Start, int End, bool Degraded)>();
         int? start  = null;
         var  end    = 0;
-        var  tokens = headerTokens;
+        var  tokens = prefixTokens;
 
-        foreach (var row in lines.Skip(headerCount))
+        foreach (var row in dataRows)
         {
-            var rowTokens = TokenEstimator.Estimate(block.Text[row.Start..row.End]);
+            var rowTokens = TokenEstimator.Estimate(text[row.Start..row.End]);
 
             if (start.HasValue && tokens + rowTokens > ceiling)
             {
-                pieces.Add(Fragment(block, header, headerStart, start.Value, end, first, degraded: false));
-                first  = false;
+                fragments.Add((start.Value, end, false));
                 start  = null;
-                tokens = headerTokens;
+                tokens = prefixTokens;
             }
 
             start ??= row.Start;
             end     = row.End;
             tokens += rowTokens;
 
-            // One row that alone breaches the ceiling is emitted whole and flagged. Cutting
-            // inside it would corrupt the column alignment, and a corrupt row is worse than an
-            // oversized chunk - the reader cannot tell which column a value belongs to.
-            if (start == row.Start && headerTokens + rowTokens > ceiling)
+            // One row over the ceiling on its own: emitted whole and flagged. Cutting inside it
+            // would corrupt the column alignment, and a corrupt row is worse than an oversized
+            // chunk - the reader cannot tell which column a value belongs to.
+            if (start == row.Start && prefixTokens + rowTokens > ceiling)
             {
-                pieces.Add(Fragment(block, header, headerStart, start.Value, end, first, degraded: true));
-                first  = false;
+                fragments.Add((start.Value, end, true));
                 start  = null;
-                tokens = headerTokens;
+                tokens = prefixTokens;
             }
         }
 
-        if (start.HasValue)
-            pieces.Add(Fragment(block, header, headerStart, start.Value, end, first, degraded: false));
+        if (start.HasValue) fragments.Add((start.Value, end, false));
 
-        // A table with a header and no data rows at all: keep it whole rather than lose it.
-        return pieces.Count > 0 ? pieces : [PieceFactory.Whole(block, BoundaryLevel.None, degraded: true)];
+        if (fragments.Count == 0)
+            return [PieceFactory.Whole(block, BoundaryLevel.None, degraded: true)];
+
+        return [.. fragments.Select((f, i) => PieceFactory.Composed(
+            block,
+            prefix + text[f.Start..f.End] + suffix + (i == fragments.Count - 1 ? tail : ""),
+            f.Start,
+            f.End,
+            BoundaryLevel.TableRow,
+            f.Degraded))];
     }
-
-    // The FIRST fragment already begins at the header, so it is a pure slice. Every later one
-    // has the header prepended and is therefore composed.
-    private static ContentPiece Fragment(
-        ContentBlock block, string header, int headerStart, int start, int end, bool first, bool degraded) =>
-        first
-            ? PieceFactory.Piece(block, headerStart, end, BoundaryLevel.TableRow, degraded)
-            : PieceFactory.Composed(
-                  block,
-                  $"{header}\n{block.Text[start..end]}",
-                  start,
-                  end,
-                  BoundaryLevel.TableRow,
-                  degraded);
 }

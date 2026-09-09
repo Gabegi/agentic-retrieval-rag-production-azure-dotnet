@@ -79,7 +79,7 @@ resource "azurerm_windows_function_app" "indexer" {
 
   app_settings = {
     "FUNCTIONS_WORKER_RUNTIME"              = "dotnet-isolated"
-    "APPLICATIONINSIGHTS_CONNECTION_STRING" = data.azurerm_application_insights.main.connection_string
+    "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
     # Drives IHostEnvironment.IsDevelopment() (dev-only diagnostics, IRunReportWriter). Both set on
     # purpose: the isolated-worker host takes its environment from AZURE_FUNCTIONS_ENVIRONMENT, and
     # DOTNET_ENVIRONMENT alone was confirmed insufficient (pipeline-reports stayed empty).

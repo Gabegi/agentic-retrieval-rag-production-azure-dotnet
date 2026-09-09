@@ -117,25 +117,73 @@ public class CuHelperTests
     }
 
     [TestMethod]
-    public void DepthComesFromSectionTreeNesting()
+    public void DepthIsTheMarkerRunTheServiceRendered()
     {
+        // Not the section-tree nesting (2026-09-09): measured on the 260827 artifact that
+        // derivation disagreed with the rendered "#" level on 1,189 of 2,451 headings. Sectie Twee
+        // is NESTED in the fixture tree but rendered "##" - the rendering is the fact.
         var headings = Map(Fixture()).Structure.Headings;
 
         Assert.AreEqual(1, headings.Single(h => h.Role == "title").Depth);
-        Assert.AreEqual(1, headings.Single(h => h.Content == "Sectie Een").Depth);   // root child
-        Assert.AreEqual(2, headings.Single(h => h.Content == "Sectie Twee").Depth);  // nested
+        Assert.AreEqual(2, headings.Single(h => h.Content == "Sectie Een").Depth);
+        Assert.AreEqual(2, headings.Single(h => h.Content == "Sectie Twee").Depth);
     }
 
     [TestMethod]
-    public void SectionsAreMappedWithResolvedElementLabels()
+    public void AHeadingSpanNotAtTheMarker_HasDepthZero_NotADefaultLevel()
+    {
+        var document = ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            paragraphs: [Paragraph(SemanticRole.SectionHeading, "Sectie Een", "Sectie Een")]);
+
+        Assert.AreEqual(0, Map(document).Structure.Headings.Single().Depth);
+    }
+
+    [TestMethod]
+    public void SectionsCarryTheServicesSpanAndElementRefsVerbatim()
     {
         var sections = Map(Fixture()).Structure.Sections;
 
         Assert.AreEqual(3, sections.Count);
         var root = sections[0];
-        Assert.AreEqual("paragraphs", root.ResolvedElements[0].Kind);
-        Assert.AreEqual(0, root.ResolvedElements[0].Index);
-        Assert.AreEqual("sections", root.ResolvedElements[1].Kind);
+        Assert.AreEqual((0, Md.Length), (root.Spans[0].Offset, root.Spans[0].Length));
+        CollectionAssert.AreEqual(new[] { "/paragraphs/0", "/sections/1" }, root.Elements.ToArray());
+    }
+
+    [TestMethod]
+    public void NoTitleRoleParagraph_MeansNoTitle_NotTheFirstSectionHeading()
+    {
+        // No fallback (2026-09-09): on the 260827 artifact the first-heading substitute fired on
+        // 12 of 51 documents and produced "Inleiding", "Inhoudsopgave" and a copyright line as
+        // titles. Null is what the service reported; MissingTitleCount now measures it.
+        var document = ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            paragraphs: [Paragraph(SemanticRole.SectionHeading, "Sectie Een", "## Sectie Een")]);
+
+        var mapped = Map(document);
+
+        Assert.IsNull(mapped.Title);
+        Assert.AreEqual(1, mapped.Structure.Headings.Count, "the heading is still a heading");
+    }
+
+    [TestMethod]
+    public void AHeadingSpanNotStartingAtTheMarker_IsCountedInOneWarning()
+    {
+        // HeadingLocator cuts at the span, so a span that starts on the text rather than the "##"
+        // leaves the marker with the previous section - the check says so, once per document.
+        var document = ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            paragraphs:
+            [
+                Paragraph(SemanticRole.SectionHeading, "Sectie Een",  "Sectie Een"),   // text, not marker
+                Paragraph(SemanticRole.SectionHeading, "Sectie Twee", "Sectie Twee"),
+            ]);
+
+        var mapped = Map(document);
+
+        Assert.AreEqual(1, mapped.Warnings.Count(w => w.Contains("do not start at a markdown")));
+        Assert.IsTrue(mapped.Warnings.Single(w => w.Contains("do not start at a markdown")).StartsWith("2 of 2"));
+        Assert.AreEqual(0, mapped.Warnings.Count(w => w.Contains("misalignment")), "the text IS at the offset");
     }
 
     // --- Pages ------------------------------------------------------------------
@@ -186,13 +234,15 @@ public class CuHelperTests
     }
 
     [TestMethod]
-    public void PageDimensionsComeFromTypedPages()
+    public void PageDimensionsRideOnThePageSpans()
     {
+        // The one home for page geometry (2026-09-09): a parallel PageDimensions list on the
+        // structure record was a second copy nothing read.
         var mapped = Map(Fixture());
 
-        Assert.AreEqual(2, mapped.Structure.PageDimensions.Count);
-        Assert.AreEqual(8.5, mapped.Structure.PageDimensions[0].Width!.Value, 0.001);
-        Assert.IsNotNull(mapped.PageSpans[0].Dimensions);
+        Assert.IsTrue(mapped.PageSpans.All(s => s.Dimensions is not null));
+        Assert.AreEqual(8.5, mapped.PageSpans[0].Dimensions!.Width!.Value, 0.001);
+        Assert.AreEqual(2, mapped.PageSpans[1].Dimensions!.PageNumber);
     }
 
     // The A3 check from docs/2609/260908/cu-payload-additions-action-plan.md, at the one hop
@@ -495,6 +545,110 @@ public class CuHelperTests
         Assert.AreEqual("Microsoft", mapped.Content);
         Assert.AreEqual("https://www.microsoft.com", mapped.Uri);
         Assert.AreEqual(1, mapped.PageNumber);
+    }
+
+    // --- Barcodes / formulas / roles (A4, A5, A6) -------------------------------------
+    //
+    // All three are mapped to be COUNTED, not used: 6 barcodes and 36 formulas corpus-wide, and
+    // no consumer routes on Role yet. The tests fix the shape so the counts mean something.
+
+    [TestMethod]
+    public void BarcodesAreMappedWithTheirOwningPage_NotAnOffsetLookup()
+    {
+        // Page-scoped in the response already, so the page comes from the owning page - an
+        // offset lookup would report 0 for a barcode sitting in a gap between page spans.
+        var document = ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            pages:
+            [
+                ContentUnderstandingModelFactory.DocumentPage(
+                    pageNumber: 7, width: null, height: null, spans: null, angle: null,
+                    words: null, lines: null,
+                    barcodes:
+                    [
+                        ContentUnderstandingModelFactory.DocumentBarcode(
+                            DocumentBarcodeKind.QRCode, "https://contoso.example/protocol", null,
+                            ContentUnderstandingModelFactory.ContentSpan(10, 5), 0.91f),
+                    ],
+                    formulas: null),
+            ]);
+
+        var barcode = Map(document).Structure.Barcodes!.Single();
+
+        // Verbatim as the SDK spells the service's own value ("QRCode", not a normalised
+        // "qrCode") - the same stance the billing keys and cell kinds take: the service owns
+        // its vocabulary, and normalising it here would make a report column disagree with
+        // the response it came from.
+        Assert.AreEqual("QRCode", barcode.Kind);
+        Assert.AreEqual("https://contoso.example/protocol", barcode.Value);
+        Assert.AreEqual(7, barcode.PageNumber);
+        Assert.AreEqual(0.91, barcode.Confidence!.Value, 1e-6);
+    }
+
+    [TestMethod]
+    public void FormulasAreMappedVerbatim_IncludingTheEuroMisread()
+    {
+        // Every formula in this corpus is a euro sign the service read as LaTeX. The value is
+        // carried EXACTLY as returned - substituting the euro back would be the pipeline
+        // rewriting service output on an assumption, which is a parked decision, not a mapping.
+        var document = ContentUnderstandingModelFactory.DocumentContent(
+            markdown: Md,
+            pages:
+            [
+                ContentUnderstandingModelFactory.DocumentPage(
+                    pageNumber: 3, width: null, height: null, spans: null, angle: null,
+                    words: null, lines: null, barcodes: null,
+                    formulas:
+                    [
+                        ContentUnderstandingModelFactory.DocumentFormula(
+                            DocumentFormulaKind.Inline, @"\epsilon", null,
+                            ContentUnderstandingModelFactory.ContentSpan(4, 8), 0.62f),
+                    ]),
+            ]);
+
+        var formula = Map(document).Structure.Formulas!.Single();
+
+        Assert.AreEqual("inline", formula.Kind);
+        Assert.AreEqual(@"\epsilon", formula.Value);
+        Assert.AreEqual(3, formula.PageNumber);
+    }
+
+    [TestMethod]
+    public void ADocumentWithNeither_ReportsEmptyRatherThanNull()
+    {
+        // The fixture has pages but no barcodes and no formulas: "the service reported none"
+        // is an empty list. Null is reserved for a document extracted before these were mapped.
+        var structure = Map(Fixture()).Structure;
+
+        Assert.AreEqual(0, structure.Barcodes!.Count);
+        Assert.AreEqual(0, structure.Formulas!.Count);
+    }
+
+    [TestMethod]
+    public void TableAndFigureRolesAreMappedAsTheServiceReportsThem()
+    {
+        var table = ContentUnderstandingModelFactory.DocumentTable(
+            rowCount: 1, columnCount: 1, cells: null, source: null,
+            span: SpanOf("Inhoud van sectie een."), caption: null, footnotes: null,
+            role: SemanticRole.PageFooter);
+
+        var figure = ContentUnderstandingModelFactory.DocumentFigure(
+            kind: "unknown", id: "1.1", source: null, span: SpanOf("Intro tekst."),
+            elements: null, caption: null, footnotes: null, description: null,
+            role: SemanticRole.PageHeader);
+
+        var mapped = Map(Fixture(tables: [table], figures: [figure])).Structure;
+
+        Assert.AreEqual("pageFooter", mapped.Tables.Single().Role);
+        Assert.AreEqual("pageHeader", mapped.Figures.Single().Role);
+    }
+
+    [TestMethod]
+    public void ARoleLessTableOrFigureCarriesNull_NotAnInventedDefault()
+    {
+        var mapped = Map(Fixture(tables: [TableWithSource(null)])).Structure;
+
+        Assert.IsNull(mapped.Tables.Single().Role);
     }
 
     // --- Fields / summary (A2) --------------------------------------------------------

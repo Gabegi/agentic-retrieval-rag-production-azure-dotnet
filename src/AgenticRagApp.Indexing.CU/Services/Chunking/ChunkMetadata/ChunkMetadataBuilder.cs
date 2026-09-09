@@ -19,18 +19,18 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //
 // ── Scope 1: property of the DOCUMENT (extract once, stamp onto every chunk) ──
 //   DocumentStamp: doc_id, title, language, author, family_id, domain_tag, confusable_with,
-//   route_name, size_class, the dates, and valid_from/valid_to/version parsed
+//   route_name, the dates, and valid_from/valid_to/version parsed
 //   out of the title. No source_path: DocumentId already IS the blob name.
 //
 // ── Scope 2: property of the CHUNK (derived at cut time, free) ──
 //   Heading fields, ordinals, Start/Length, BoundaryLevel, Degraded and IsOverlap are already
 //   on the chunk - the cut set them, and this class READS them rather than writing them.
-//   Derived here: page_start/page_end/page_extraction_flag, chunk_id, section_id (which IS
+//   Derived here: page_start/page_end, chunk_id, section_id (which IS
 //   parent_id, so no new field is needed), the embedded prefix, the real token count, the
 //   breadcrumb, and the page-scoped structure with table_count and figure_captions stamped
 //   off it.
-//   contains_table is NOT stamped: ChunkObject.HasTable computes it from Content, which is also
-//   what makes it survive a restore - Content is snapshotted and ChunkStructure is not.
+//   has_table is stamped too (2026-09-09), from the typed table spans this cut overlaps; it
+//   used to be a GFM regex over Content that never matched CU's HTML tables.
 //   Ordinals are plain fields and must NEVER enter the chunk hash: an inserted section must not
 //   re-embed everything below it.
 //
@@ -101,12 +101,10 @@ public sealed class ChunkMetadataBuilder
             // 3. Scope 2, derived per cut, in dependency order.
 
             // 3a. Which pages this cut covers. Everything page-scoped below reads these.
-            var (pageStart, pageEnd, pictureOnly) = PageResolver.Resolve(
-                doc.PageSpans, chunk.Start, chunk.Length);
+            var (pageStart, pageEnd) = PageResolver.Resolve(doc.PageSpans, chunk.Start, chunk.Length);
 
-            metadata.PageStart          = pageStart;
-            metadata.PageEnd            = pageEnd;
-            metadata.PageExtractionFlag = pictureOnly;
+            metadata.PageStart = pageStart;
+            metadata.PageEnd   = pageEnd;
 
             // 3b. Identity. SectionId IS parent_id.
             metadata.Id        = ChunkIdBuilder.ChunkId(doc.SourceId, chunk.SectionIndex, chunk.ChildIndex);
@@ -141,6 +139,9 @@ public sealed class ChunkMetadataBuilder
 
             metadata.Structure      = structure;
             metadata.TableCount     = structure.Tables.Count;
+            // Whether THIS cut carries table markup: its range overlaps a typed span. Not
+            // derived from the page-filtered structure above - that is the page-scoped question.
+            metadata.HasTable       = doc.Tables.Any(t => t.Overlaps(chunk.Start, chunk.Start + chunk.Length));
             metadata.FigureCaptions = StructureFilter.CaptionsOf(structure);
             // CU-typed additions (2026-08-26): hyperlink targets and annotation notes on the
             // pages this cut covers, stamped for the same snapshot-survival reason as the two

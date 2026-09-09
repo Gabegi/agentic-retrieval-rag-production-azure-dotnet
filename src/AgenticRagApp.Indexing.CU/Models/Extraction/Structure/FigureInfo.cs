@@ -16,8 +16,9 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // Kind/Payload carry enableFigureAnalysis output (decision 2026-08-26: extend FigureInfo, no
 // separate ChartInfo/DiagramInfo types). Kind is the service's DocumentFigureKind as a string
 // ("chart" / "mermaid" / "unknown"); Payload is the analysis content for the kinds that carry
-// one - Chart.js config JSON for a chart (CuChartHelper), Mermaid source for a diagram
-// (CuDiagramHelper). Both trailing defaults for the same snapshot-compat reason as Description.
+// one - Chart.js config JSON for a chart, Mermaid source for a diagram - both read off the SDK
+// subclass in CuFigureHelper (the two payload-only helpers were folded into it 2026-09-09).
+// Both trailing defaults for the same snapshot-compat reason as Description.
 //
 // Regions is the figure's geometry, parsed from CU's Source string by CuGeometryHelper
 // (2026-09-08) - one region per page, the same shape and the same reason as TableInfo.Regions:
@@ -34,4 +35,8 @@ public sealed record FigureInfo(
     string? Description = null,
     string? Kind = null,
     string? Payload = null,
-    IReadOnlyList<DocumentRegion>? Regions = null);
+    IReadOnlyList<DocumentRegion>? Regions = null,
+    // DocumentFigure.Role, mapped 2026-09-08 (A6) - the service's semantic role for the figure,
+    // distinct from Kind (which says chart/mermaid). Reported, never routed on yet; same
+    // sequence and same snapshot-compat reasoning as TableInfo.Role.
+    string? Role = null);

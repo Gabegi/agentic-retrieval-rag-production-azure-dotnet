@@ -3,62 +3,53 @@ using AgenticRagApp.Indexing.CU.Utils;
 
 namespace RagApp.UnitTests.Indexing;
 
+// Span-direct boundaries (2026-09-09): a heading's section starts at Heading.Offset, which is
+// CU's own utf16 span into the verbatim markdown and (per the cu-raw-response capture) starts at
+// the "#" marker. Offsets in these tests are therefore computed with IndexOf against the content
+// being cut, never hand-counted and never deliberately wrong - the string-search era, where a
+// wrong offset was the premise, is what this file replaced.
 [TestClass]
 public class HeadingLocatorTests
 {
     private static Heading H(string content, int offset, int page = 1, int depth = 1) =>
         new(content, "sectionHeading", offset, page, depth);
 
+    // A heading at its own position in the content: the marker (if any) is where the span starts.
+    private static Heading At(string content, string heading, string? markedAs = null) =>
+        H(heading, content.IndexOf(markedAs ?? heading, StringComparison.Ordinal));
+
     private static IReadOnlyList<PageSpan> OnePage(string content, int page = 1) =>
-        [new PageSpan(page, 0, content.Length, null, false)];
+        [new PageSpan(page, 0, content.Length, null)];
 
     [TestMethod]
-    public void LocatesHeadingsByText_NotByRawOffset()
+    public void SectionsStartAtTheHeadingsOwnOffset()
     {
-        // The offsets here are deliberately wrong for the cleaned text - which is the real
-        // situation, since Heading.Offset addresses DI's raw content and cleaning shifts
-        // everything. A locator that trusted the offset would cut in the wrong place.
         var content = "Intro paragraph.\n\nEerste kop\n\nBody one.\n\nTweede kop\n\nBody two.";
-        var result  = HeadingLocator.Locate(content, [H("Eerste kop", 9_999), H("Tweede kop", 12_345)], OnePage(content));
+        var result  = HeadingLocator.Locate(
+            content, [At(content, "Eerste kop"), At(content, "Tweede kop")], OnePage(content));
 
         Assert.AreEqual(2, result.HeadingsLocated);
         Assert.AreEqual(0, result.FailureRate);
 
-        var sections = result.Sections;
-        Assert.AreEqual("Eerste kop", sections.Single(s => s.HeadingText == "Eerste kop").HeadingText);
-        Assert.IsTrue(content.Substring(sections[1].Start, sections[1].Length).Contains("Body one."));
+        var second = result.Sections.Single(s => s.HeadingText == "Tweede kop");
+        Assert.AreEqual(content.IndexOf("Tweede kop", StringComparison.Ordinal), second.Start);
+        Assert.IsTrue(content[result.Sections[1].Start..result.Sections[1].End].Contains("Body one."));
     }
 
     [TestMethod]
-    public void AMarkdownMarker_StaysWithItsHeading_NotWithThePreviousSection()
+    public void ASpanThatStartsAtTheMarker_KeepsTheMarkerWithItsHeading()
     {
-        // DI renders headings as markdown ("## Kop") but the text match lands on the heading
-        // TEXT, so the cut used to leave "## " dangling at the end of the previous section -
-        // 1,754 of 2,997 chunks in the 260818 index ended in a bare marker line.
+        // The shape the raw capture showed: paragraph content "Tweede kop", span covering
+        // "## Tweede kop". Cutting at the span leaves nothing dangling in the previous section.
         var content = "Intro paragraaf.\n\n## Tweede kop\n\nBody twee.";
-        var result  = HeadingLocator.Locate(content, [H("Tweede kop", 0)], OnePage(content));
+        var result  = HeadingLocator.Locate(
+            content, [At(content, "Tweede kop", markedAs: "## Tweede kop")], OnePage(content));
 
         var preamble = result.Sections[0];
         var section  = result.Sections[1];
 
-        Assert.IsFalse(content[preamble.Start..preamble.End].TrimEnd().EndsWith('#'),
-            "previous section must not end in a dangling marker");
-        Assert.IsTrue(content[section.Start..section.End].StartsWith("## Tweede kop"),
-            "the marker belongs to the heading's own section");
-    }
-
-    [TestMethod]
-    public void AHashInsideRunningText_IsNotAbsorbedAsAMarker()
-    {
-        // Only a marker that starts its own line is pulled in. Here the match lands on "Kop"
-        // directly after a mid-sentence '#' - the walk-back must leave that '#' where it is,
-        // in the preceding text, rather than treating it as the heading's marker.
-        var content = "Zie ook #Kop voor details.\n\nBody.";
-        var result  = HeadingLocator.Locate(content, [H("Kop", 0)], OnePage(content));
-
-        var section = result.Sections.Single(s => s.HeadingText == "Kop");
-        Assert.AreEqual('K', content[section.Start]);
-        Assert.AreEqual('#', content[section.Start - 1], "the mid-text '#' must not be absorbed");
+        Assert.IsFalse(content[preamble.Start..preamble.End].TrimEnd().EndsWith('#'));
+        Assert.IsTrue(content[section.Start..section.End].StartsWith("## Tweede kop"));
     }
 
     [TestMethod]
@@ -68,7 +59,7 @@ public class HeadingLocatorTests
         // a cover page or table of contents to a heading it has nothing to do with, and that
         // misattribution rides into the embedded text as a prefix.
         var content = "Cover page text.\n\nHoofdstuk 1\n\nBody.";
-        var result  = HeadingLocator.Locate(content, [H("Hoofdstuk 1", 0)], OnePage(content));
+        var result  = HeadingLocator.Locate(content, [At(content, "Hoofdstuk 1")], OnePage(content));
 
         Assert.AreEqual(2, result.Sections.Count);
         Assert.IsNull(result.Sections[0].HeadingText);
@@ -80,7 +71,7 @@ public class HeadingLocatorTests
     public void NoPreambleSection_WhenTheDocumentOpensWithAHeading()
     {
         var content = "Hoofdstuk 1\n\nBody.";
-        var result  = HeadingLocator.Locate(content, [H("Hoofdstuk 1", 0)], OnePage(content));
+        var result  = HeadingLocator.Locate(content, [At(content, "Hoofdstuk 1")], OnePage(content));
 
         Assert.AreEqual(1, result.Sections.Count);
         Assert.AreEqual("Hoofdstuk 1", result.Sections[0].HeadingText);
@@ -94,14 +85,27 @@ public class HeadingLocatorTests
         var content = "3.3 Wat moet je doen\n\nActies als het misgaat\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("3.3 Wat moet je doen", 0), H("Acties als het misgaat", 30)],
+            [At(content, "3.3 Wat moet je doen"), At(content, "Acties als het misgaat")],
             OnePage(content));
 
         Assert.AreEqual(1, result.PairedHeadingsMerged);
         Assert.AreEqual(1, result.Sections.Count);
         Assert.AreEqual("3.3 Wat moet je doen Acties als het misgaat", result.Sections[0].HeadingText);
-        Assert.IsTrue(content.Substring(result.Sections[0].Start, result.Sections[0].Length)
-                             .Contains("De echte inhoud"));
+        Assert.IsTrue(content[result.Sections[0].Start..result.Sections[0].End].Contains("De echte inhoud"));
+    }
+
+    [TestMethod]
+    public void PairedZeroBodyHeadings_StillMerge_WhenTheSpanIncludesTheMarker()
+    {
+        // The body slice starts at the marker, so the zero-body comparison must strip it -
+        // otherwise every marker'd pair reads as having "### " of body and never merges.
+        var content = "### 3.3 Wat moet je doen\n\n### Acties als het misgaat\n\nDe echte inhoud staat hier.";
+        var result  = HeadingLocator.Locate(
+            content,
+            [At(content, "3.3 Wat moet je doen", "### 3.3"), At(content, "Acties als het misgaat", "### Acties")],
+            OnePage(content));
+
+        Assert.AreEqual(1, result.PairedHeadingsMerged);
     }
 
     [TestMethod]
@@ -118,14 +122,14 @@ public class HeadingLocatorTests
     }
 
     [TestMethod]
-    public void RepeatedHeadingText_MatchesInDocumentOrder_NotTheFirstOccurrence()
+    public void RepeatedHeadingText_IsToldApartByOffset()
     {
-        // A running title or a term reused as a heading appears more than once. Matching the
-        // first occurrence every time would collapse later sections onto the earlier one.
+        // A running title or a term reused as a heading appears more than once. The offsets
+        // are different positions, so no text search and no cursor is needed to keep them apart.
         var content = "Bijlage\n\nOne.\n\nMidden\n\nTwo.\n\nBijlage\n\nThree.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("Bijlage", 0), H("Midden", 10), H("Bijlage", 20)],
+            [H("Bijlage", 0), At(content, "Midden"), H("Bijlage", content.LastIndexOf("Bijlage", StringComparison.Ordinal))],
             OnePage(content));
 
         Assert.AreEqual(3, result.HeadingsLocated);
@@ -135,48 +139,42 @@ public class HeadingLocatorTests
     }
 
     [TestMethod]
-    public void UnlocatableHeading_IsCountedAsAFailure_NotSilentlyDropped()
+    public void AnOffsetBeyondTheContent_IsCountedAsAFailure_NotClamped()
     {
-        // The failure rate is the permanent form of the measurement that chose string
-        // matching over rewriting PdfCleaner. If it starts moving, that decision is due to
-        // be reopened - so an unfindable heading has to be visible, not absorbed.
+        // The service's span addresses a string its markdown is not. Clamping to the end would
+        // open an empty section there and hide the disagreement; the failure rate is where it
+        // has to show.
         var content = "Only this text exists.";
-        var result  = HeadingLocator.Locate(content, [H("Ontbrekende kop", 0)], OnePage(content));
+        var result  = HeadingLocator.Locate(content, [H("Ontbrekende kop", 9_999)], OnePage(content));
 
         Assert.AreEqual(1, result.HeadingsTotal);
         Assert.AreEqual(0, result.HeadingsLocated);
         Assert.AreEqual(1.0, result.FailureRate);
+        Assert.AreEqual(1, result.Sections.Count, "the document is still one section");
+        Assert.IsNull(result.Sections[0].HeadingText);
     }
 
     [TestMethod]
-    public void MergedTwoLineHeading_MatchesOnItsFirstLineOnly()
+    public void MergedTwoLineHeading_IsStoredSpaceJoined()
     {
-        // A paired "Artikel 9" + title merge carries both lines in Content but its Offset
-        // covers only the first paragraph, so only the first line is reliably contiguous.
         var content = "Artikel 9\n\nBegrippen\n\nBody text here.";
         var result  = HeadingLocator.Locate(content, [H("Artikel 9\nBegrippen", 0)], OnePage(content));
 
         Assert.AreEqual(1, result.HeadingsLocated);
         Assert.AreEqual(0, result.Sections[0].Start);
-
-        // Matched on the first line, but STORED whole - every line, space-joined. It used to be
-        // stored as heading.Content.Trim(), so the newline rode into heading_text, heading_path
-        // and the embedded prefix, and rendered as a line break mid-citation.
         Assert.AreEqual("Artikel 9 Begrippen", result.Sections[0].HeadingText);
         Assert.IsFalse(result.Sections[0].HeadingText!.Contains('\n'));
     }
 
-    // The gate that stops this rule from re-merging what extraction deliberately kept apart.
-    // GetHeadingsHelper refuses to merge a run that starts with a bare numbered label - two
-    // consecutive "Artikel" markers are separate short articles - and this rule had no such
-    // check, so it merged them back on the cleaned text a step later.
+    // The gate that stops the merge from folding what is really two sections: a bare numbered
+    // label followed by another heading is two short articles.
     [TestMethod]
     public void BareNumberedLabelWithNoBody_IsNotMergedWithTheNextHeading()
     {
         var content = "Artikel 8\n\nArtikel 9\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("Artikel 8", 0), H("Artikel 9", 11)],
+            [At(content, "Artikel 8"), At(content, "Artikel 9")],
             OnePage(content));
 
         Assert.AreEqual(0, result.PairedHeadingsMerged);
@@ -196,128 +194,76 @@ public class HeadingLocatorTests
         Assert.AreEqual(0, result.HeadingsWithoutOffset);
     }
 
-    // ── ordering, and the null offset (chunking-done.md §1) ───────────────────
+    // ── the null offset ──────────────────────────────────────────────────────
     //
-    // Offset is DI's RAW-content offset. It is used only to ORDER headings, never to slice:
-    // cleaning changes length (a measured 1.066-1.202x drift) but is monotonic, so order
-    // survives what position does not. A null offset means the paragraph carried no spans at
-    // all - explicitly not 0, since 0 is a real offset and cannot double as "unknown".
+    // A null offset means the paragraph carried no span at all - explicitly not 0, since 0 is a
+    // real offset and cannot double as "unknown". Measured at 0 of 1,273 headings across the big
+    // four, so it is counted as an anomaly rather than absorbed: the previous locator gave such a
+    // heading its predecessor's offset and searched from there, which is a guess about position.
 
     private static Heading NoOffset(string content, int page = 1) =>
         new(content, "sectionHeading", null, page, 1);
 
     [TestMethod]
-    public void AHeadingWithNoOffset_InheritsTheLastOneSeen_AndStaysWithItsNeighbours()
+    public void AHeadingWithNoOffset_OpensNoSection_AndIsCounted()
     {
-        // The change §1 made. The previous `?? int.MaxValue` sent an offsetless heading to the
-        // END of the document - the one position it is guaranteed not to occupy - and took its
-        // section boundary with it. Because the input IS in reading order, the one thing known
-        // about such a heading is which headings it came after, so it inherits their offset.
         var content = "Eerste kop\n\nBody een.\n\nTweede kop\n\nBody twee.\n\nDerde kop\n\nBody drie.";
 
         var result = HeadingLocator.Locate(
             content,
-            [H("Eerste kop", 100), NoOffset("Tweede kop"), H("Derde kop", 300)],
+            [At(content, "Eerste kop"), NoOffset("Tweede kop"), At(content, "Derde kop")],
             OnePage(content));
 
-        Assert.AreEqual(3, result.HeadingsLocated);
+        Assert.AreEqual(3, result.HeadingsTotal);
+        Assert.AreEqual(2, result.HeadingsLocated);
+        Assert.AreEqual(1, result.HeadingsWithoutOffset);
         CollectionAssert.AreEqual(
-            new[] { "Eerste kop", "Tweede kop", "Derde kop" },
+            new[] { "Eerste kop", "Derde kop" },
             result.Sections.Select(s => s.HeadingText).ToArray(),
-            "the offsetless heading kept its place in reading order");
+            "the offsetless heading has no position and therefore no section; its text stays in Eerste kop's body");
+        Assert.IsTrue(content[result.Sections[0].Start..result.Sections[0].End].Contains("Tweede kop"));
     }
 
     [TestMethod]
-    public void AnOffsetlessHeadingIsCounted_SoAnExtractionAnomalyIsVisible()
+    public void EveryHeadingWithoutAnOffset_LeavesTheDocumentAsOneSection()
     {
-        // Zero on every document measured so far - 0 of 1,273 across the big four - which is
-        // exactly why it is counted rather than assumed. A nonzero value means extraction
-        // handed us a heading whose paragraph carried no spans, and the section boundary it
-        // opens rests on a fallback.
-        var content = "Eerste kop\n\nBody een.\n\nTweede kop\n\nBody twee.";
-
-        var withNull = HeadingLocator.Locate(
-            content, [H("Eerste kop", 0), NoOffset("Tweede kop")], OnePage(content));
-
-        var withoutNull = HeadingLocator.Locate(
-            content, [H("Eerste kop", 0), H("Tweede kop", 20)], OnePage(content));
-
-        Assert.AreEqual(1, withNull.HeadingsWithoutOffset);
-        Assert.AreEqual(0, withoutNull.HeadingsWithoutOffset, "the normal path, and the corpus's measured value");
-    }
-
-    [TestMethod]
-    public void EveryHeadingWithoutAnOffset_KeepsArrivalOrder()
-    {
-        // A whole document's worth of anomalies: with nothing to inherit, the carried offset
-        // stays 0 for all of them and the arrival index is what orders them - which is the only
-        // information there is.
-        var content = "Kop A\n\nBody een.\n\nKop B\n\nBody twee.\n\nKop C\n\nBody drie.";
+        var content = "Kop A\n\nBody een.\n\nKop B\n\nBody twee.";
 
         var result = HeadingLocator.Locate(
-            content, [NoOffset("Kop A"), NoOffset("Kop B"), NoOffset("Kop C")], OnePage(content));
+            content, [NoOffset("Kop A"), NoOffset("Kop B")], OnePage(content));
 
-        Assert.AreEqual(3, result.HeadingsWithoutOffset);
-        CollectionAssert.AreEqual(
-            new[] { "Kop A", "Kop B", "Kop C" },
-            result.Sections.Select(s => s.HeadingText).ToArray());
-    }
-
-    [TestMethod]
-    public void ARunOfCarriedOffsets_StaysBehindTheHeadingWhoseOffsetItBorrowed()
-    {
-        // Index is the final tie-break, so several headings sharing one carried offset keep
-        // their arrival order among themselves rather than being reshuffled by the sort.
-        var content =
-            "Kop een\n\nBody een.\n\nKop twee\n\nBody twee.\n\nKop drie\n\nBody drie.\n\nKop vier\n\nBody vier.";
-
-        var result = HeadingLocator.Locate(
-            content,
-            [H("Kop een", 50), NoOffset("Kop twee"), NoOffset("Kop drie"), H("Kop vier", 900)],
-            OnePage(content));
-
-        CollectionAssert.AreEqual(
-            new[] { "Kop een", "Kop twee", "Kop drie", "Kop vier" },
-            result.Sections.Select(s => s.HeadingText).ToArray());
         Assert.AreEqual(2, result.HeadingsWithoutOffset);
+        Assert.AreEqual(0, result.HeadingsLocated);
+        Assert.AreEqual(1, result.Sections.Count);
+        Assert.IsNull(result.Sections[0].HeadingText);
     }
 
     [TestMethod]
-    public void EqualOffsets_AreBrokenByPageNumber()
+    public void HeadingsArrivingOutOfOrder_AreSortedByOffset()
     {
-        // Two headings that state the same offset are ordered by the page they were found on -
-        // the second independent key, and the one PageNumber is right for.
-        var content = "Kop op pagina een\n\nBody een.\n\nKop op pagina twee\n\nBody twee.";
-        var spans   = new PageSpan[]
-        {
-            new(1, 0, 30, null, false),
-            new(2, 30, content.Length - 30, null, false),
-        };
-
-        var result = HeadingLocator.Locate(
-            content,
-            [H("Kop op pagina twee", 500, page: 2), H("Kop op pagina een", 500, page: 1)],
-            spans);
-
-        CollectionAssert.AreEqual(
-            new[] { "Kop op pagina een", "Kop op pagina twee" },
-            result.Sections.Select(s => s.HeadingText).ToArray());
-    }
-
-    [TestMethod]
-    public void HeadingsArrivingOutOfOrder_AreSortedByOffsetBeforeAnythingIsLocated()
-    {
-        // The sort is a re-assertion, not a repair - GetHeadingsHelper's forward walk already
-        // delivers reading order, measured at 1,273 headings with zero out of order. It stays
-        // so the strategy does not depend on an upstream guarantee nothing states.
+        // CuOutlineHelper's forward walk already delivers reading order; the sort stays so the
+        // strategy does not depend on an upstream guarantee nothing states.
         var content = "Eerste kop\n\nBody een.\n\nTweede kop\n\nBody twee.";
 
         var result = HeadingLocator.Locate(
-            content, [H("Tweede kop", 900), H("Eerste kop", 100)], OnePage(content));
+            content, [At(content, "Tweede kop"), At(content, "Eerste kop")], OnePage(content));
 
         CollectionAssert.AreEqual(
             new[] { "Eerste kop", "Tweede kop" },
             result.Sections.Select(s => s.HeadingText).ToArray());
+    }
+
+    [TestMethod]
+    public void ThePreamblesPage_IsZeroWhenNoSpanContainsOffsetZero()
+    {
+        // The same "unknown = 0" answer CuPageHelper.PageAt and PageResolver give: no guess at
+        // the first span's page.
+        var content = "Cover.\n\nKop\n\nBody.";
+        var spans   = new PageSpan[] { new(3, content.IndexOf("Kop", StringComparison.Ordinal), 4, null) };
+
+        var result = HeadingLocator.Locate(content, [At(content, "Kop")], spans);
+
+        Assert.AreEqual(0, result.Sections[0].PageNumber);
     }
 
     // The 260819 breadcrumb residue. "Artikel 1:6" is vacant, so it has no body, and the
@@ -332,7 +278,7 @@ public class HeadingLocatorTests
         var content = "Artikel 1:6 (vacant)\n\nArtikel 1:7 Toepassing CAO op relatiepartner\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("Artikel 1:6 (vacant)", 0), H("Artikel 1:7 Toepassing CAO op relatiepartner", 22)],
+            [At(content, "Artikel 1:6 (vacant)"), At(content, "Artikel 1:7 Toepassing CAO op relatiepartner")],
             OnePage(content));
 
         Assert.AreEqual(0, result.PairedHeadingsMerged);
@@ -349,7 +295,7 @@ public class HeadingLocatorTests
         var content = "Artikel 8 Begrippen\n\nArtikel 9 Reikwijdte\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("Artikel 8 Begrippen", 0), H("Artikel 9 Reikwijdte", 21)],
+            [At(content, "Artikel 8 Begrippen"), At(content, "Artikel 9 Reikwijdte")],
             OnePage(content));
 
         Assert.AreEqual(0, result.PairedHeadingsMerged);
@@ -365,7 +311,7 @@ public class HeadingLocatorTests
         var content = "3.3 Wat moet je doen\n\n3.4 Wie is verantwoordelijk\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("3.3 Wat moet je doen", 0), H("3.4 Wie is verantwoordelijk", 22)],
+            [At(content, "3.3 Wat moet je doen"), At(content, "3.4 Wie is verantwoordelijk")],
             OnePage(content));
 
         Assert.AreEqual(0, result.PairedHeadingsMerged);
@@ -374,15 +320,15 @@ public class HeadingLocatorTests
 
     // The gate must not swallow the case the merge exists for. A heading and its continuation
     // are at DIFFERENT levels (or the continuation has no shape at all), so the pair still
-    // merges - this is PairedZeroBodyHeadings_AreMergedIntoOneSection's premise, restated here
-    // against a shaped first heading to prove the new check is what decides it.
+    // merges - PairedZeroBodyHeadings_AreMergedIntoOneSection's premise, restated here against
+    // a shaped first heading to prove the check is what decides it.
     [TestMethod]
     public void AShapedHeadingFollowedByAnUnshapedContinuation_StillMerges()
     {
         var content = "3.3 Wat moet je doen\n\nActies als het misgaat\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("3.3 Wat moet je doen", 0), H("Acties als het misgaat", 22)],
+            [At(content, "3.3 Wat moet je doen"), At(content, "Acties als het misgaat")],
             OnePage(content));
 
         Assert.AreEqual(1, result.PairedHeadingsMerged);
@@ -397,7 +343,7 @@ public class HeadingLocatorTests
         var content = "Hoofdstuk 1 De arbeidsovereenkomst\n\nArtikel 1 de arbeidsovereenkomst\n\nDe echte inhoud staat hier.";
         var result  = HeadingLocator.Locate(
             content,
-            [H("Hoofdstuk 1 De arbeidsovereenkomst", 0), H("Artikel 1 de arbeidsovereenkomst", 36)],
+            [At(content, "Hoofdstuk 1 De arbeidsovereenkomst"), At(content, "Artikel 1 de arbeidsovereenkomst")],
             OnePage(content));
 
         Assert.AreEqual(1, result.PairedHeadingsMerged);

@@ -288,7 +288,7 @@ public class PdfIndexingFunction
         try
         {
             await _indexService.EnsureIndexAsync();
-            // req.InstanceId threaded through so this run's validation/file-facts/diff/failure
+            // req.InstanceId threaded through so this run's file-facts/diff/failure
             // reports are named by instance, not just by wall clock - see StageReportPath.
             var (docs, stats) = await _extractionService.ExtractAsync(
                 req.ForceReindex, req.InstanceId, context.CancellationToken);

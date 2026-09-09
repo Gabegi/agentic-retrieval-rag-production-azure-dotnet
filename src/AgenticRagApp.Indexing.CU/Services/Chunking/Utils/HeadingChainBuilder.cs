@@ -3,28 +3,28 @@ using AgenticRagApp.Indexing.CU.Models;
 
 namespace AgenticRagApp.Indexing.CU.Utils;
 
-// Builds each heading's ancestor chain ("Hoofdstuk 3 > 3.2 Dosering") from Document
-// Intelligence's own nested section spans.
+// Builds each heading's ancestor chain ("Hoofdstuk 3 > 3.2 Dosering") from Content
+// Understanding, via its own nested section spans (DocumentContent.Sections).
 //
 // Why the section tree rather than Heading.Depth: Phase A measured that section starts and
 // heading offsets coincide EXACTLY (99.4-100%, both directions, at tolerance 0) on all four
-// big documents, and that DI's sections nest - each carries one span, and span lengths sum to
+// big documents, and that the service sections nest - each carries one span, and span lengths sum to
 // ~1.3M against a ~346k document, with the largest covering the whole file. So the section
 // list is a flattened tree, and containment gives the hierarchy directly.
 //
-// That matters because it needs nothing from Heading.Depth, which is unverified: the cached
-// corpus JSON predates that field, so nothing has yet checked whether DI's rendered "#" levels
-// are reliable on this corpus. Containment is measured; depth is assumed.
+// That matters because it needs nothing from Heading.Depth. Depth is exact since 2026-09-09 (the
+// "#" run CU rendered at the heading span, at the marker on 2,451/2,451 headings) - but it is a
+// LEVEL, not a parent pointer; containment is what says which heading sits under which.
 //
-// Everything here works in RAW offsets. Both inputs - section spans and heading offsets - are
-// raw-content coordinates, so they are directly comparable to each other even though neither
-// is comparable to the cleaned text the chunker cuts.
+// Both inputs - section spans and heading offsets - are CU utf16 offsets into the verbatim
+// markdown, the same string the chunker cuts: one coordinate system since the CU switch. The
+// measurements quoted in this file are DI-era (260818) and have not been re-run on the CU tree.
 public static partial class HeadingChainBuilder
 {
     // ── Sibling and vacant filtering ────────────────────────────────────────
     //
-    // Containment says WHERE a section sits; it says nothing about whether DI drew its span
-    // correctly. Measured on the 260818 run, DI reliably over-extends a section around empty
+    // Containment says WHERE a section sits; it says nothing about whether the service drew its span
+    // correctly. Measured on the 260818 run, the analyzer reliably over-extended a section around empty
     // "(vacant)" articles, so the preceding sibling swallows the articles after it and the
     // chain reads "Artikel 1 de arbeidsovereenkomst > Artikel 2 duur van de
     // arbeidsovereenkomst" - 479 of 2,963 heading paths carried two or more Artikel levels,
@@ -42,7 +42,7 @@ public static partial class HeadingChainBuilder
     //      one from the other end).
     //
     //   3. A document-spanning, shapeless, SLOGAN-STYLED section is COVER FURNITURE, not a
-    //      parent. DI opens a section on the cover page and runs its span to the end of the
+    //      parent. The analyzer opens a section on the cover page and runs its span to the end of the
     //      file, so the CAO VVT cover slogan "De client centraal DE MEDEWERKER OP EEN!" became
     //      the root of every VVT breadcrumb in the 260818 run - repeated into every VVT chunk's
     //      embedded text, diluting every VVT vector for nothing.
@@ -110,7 +110,7 @@ public static partial class HeadingChainBuilder
     // to anything measuring the path, carries a vacant article's number into a real article's
     // identity, and cannot be undone downstream because the two titles are now one string.
     //
-    // GetHeadingsHelper's BareNumberedLabelWithWord gate already refused this for the bare
+    // HeadingNumbering's BareNumberedLabelWithWord gate already refused this for the bare
     // "Artikel 8" / "Artikel 9" case; this is the same judgement made on shape rather than on
     // whether the label happens to be bare. 408 of the 260819 run's paths still carried two
     // Artikel levels and 13 still carried "(vacant)" for want of it.
@@ -123,7 +123,7 @@ public static partial class HeadingChainBuilder
 
     private static bool IsSibling(string ancestor, string leaf) => AreSameStructuralLevel(ancestor, leaf);
 
-    // Rule 3's span test. 0.9 rather than 1.0 because DI's cover section starts at the first
+    // Rule 3's span test. 0.9 rather than 1.0 because the cover section starts at the first
     // rendered glyph and ends at the last, which is a hair short of the document on both ends;
     // and far enough above any real chapter that a document would have to be almost entirely
     // one chapter to trip it - in which case that chapter's title is the document's title
@@ -144,7 +144,7 @@ public static partial class HeadingChainBuilder
 
     // Cover furniture: spans (nearly) the whole document, carries no structural numbering, AND
     // is styled as a slogan. documentLength is the widest extent seen, not doc.Content.Length -
-    // these are RAW coordinates and the cleaned content is a different, shorter space (see the
+    // the widest span the service drew is the extent of the document AS IT SECTIONED IT (see the
     // class note).
     private static bool IsCoverFurniture(string title, int start, int end, int documentLength) =>
         documentLength > 0
@@ -178,7 +178,7 @@ public static partial class HeadingChainBuilder
             .Select(e => (e.Start, e.End, Title: headingAt.GetValueOrDefault(e.Start)))
             .ToList();
 
-        // Rule 3's yardstick: the widest span DI drew, which for these documents IS the
+        // Rule 3's yardstick: the widest span the service drew, which for these documents IS the
         // document - the class note records span lengths summing to ~1.3M against a ~346k
         // file, with the largest covering the whole of it.
         var documentLength = extents.Count == 0 ? 0 : extents.Max(e => e.End - e.Start);
@@ -219,7 +219,7 @@ public static partial class HeadingChainBuilder
             return own;
 
         // Duplicates are dropped rather than repeated: a section whose span starts at its own
-        // heading can appear both as an ancestor and as the leaf depending on how DI nested
+        // heading can appear both as an ancestor and as the leaf depending on how the service nested
         // it, and "Hoofdstuk 3 > Hoofdstuk 3" reads as a structure error to anyone seeing it
         // in a citation.
         var parts = ancestors.Append(own)

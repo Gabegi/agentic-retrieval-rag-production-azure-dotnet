@@ -46,14 +46,15 @@ provider "azurerm" {
 }
 
 # Log Analytics/management subscription - a third subscription, owning the
-# workspace App Insights writes into. CURRENTLY UNUSED.
+# workspace the landing-zone team's App Insights component writes into. UNUSED, and as of
+# 2026-09-09 nothing is waiting on it: app_insights.tf creates this config's own workspace instead
+# of reading theirs, so no resource or data source here targets this subscription any more.
 #   - Confirmed 2026-08-07 by a real apply: the SP has zero access here - even provider
-#     initialization (Microsoft.Resources/subscriptions/providers/read) 403s.
-#   - app_insights_privatelink.tf dropped its Log Analytics scoped-service link rather than block on
-#     this; see that file.
-#   - Left declared for when the platform team grants subscription-scope Reader
-#     (docs/2608/260807/app-insights-private-link.md). The pipeline's 'VERIFY: App Insights
-#     private-link DNS zones + Log Analytics access' step checks for that grant on every Plan.
+#     initialization (Microsoft.Resources/subscriptions/providers/read) 403s. That 403 is what
+#     drove the decision to own the workspace (see app_insights.tf's header).
+#   - Safe to delete along with the pipeline's 'VERIFY: App Insights private-link DNS zones + Log
+#     Analytics access' step, which is already commented out. Kept only so the history in
+#     docs/2608/260807/app-insights-private-link.md still resolves against something.
 provider "azurerm" {
   alias           = "logmgmt"
   subscription_id = "00000000-0000-0000-0000-000000000000" # log analytics/management subscription

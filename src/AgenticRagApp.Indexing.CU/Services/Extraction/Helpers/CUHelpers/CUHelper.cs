@@ -6,12 +6,12 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // The typed-response structure mapper: one call in, the extraction stage's structure out. CU
 // classifies, the helpers map - no regex over the markdown, no "#"-counting. Replaces
 // MarkdownStructureMapper (2026-08-26); the plan and its decisions live in
-// docs/2608/260826/cuhelper-typed-structure-plan.md.
+// docs/2608/260826/cuhelper-typed-structure-plan.md, the 2026-09-09 review of the helpers in
+// docs/2609/260909/cu-helpers-review.md.
 //
-// The facade owns two things and nothing else:
-// - the ORDER of the helpers (page spans first - every other helper attributes pages off them),
-// - the JOIN of chart/mermaid payloads onto their figures (ownership rule: CuFigureHelper maps
-//   every figure's base fields, CuChartHelper/CuDiagramHelper only the subclass payload).
+// The facade owns one thing: the ORDER of the helpers (page spans first - every other helper
+// attributes pages off them). It used to also join chart/mermaid payloads onto their figures
+// from two payload-only helpers; those were folded into CuFigureHelper (2026-09-09).
 //
 // The markdown is returned VERBATIM - no stripping, no rewriting (user decision 2026-08-26,
 // "no heuristics anywhere": a PageFurnitureStripper was built here and deleted the same day).
@@ -20,7 +20,10 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //
 // Map-what's-there-and-warn throughout (decision 2026-08-26): a response missing a typed
 // collection degrades that one output and says so in Warnings - it never fails the file and
-// never falls back to markdown parsing.
+// never falls back to markdown parsing. The same bar applies to substitutes: a document with
+// no Role=Title paragraph has no title (null), not its first heading (fallback removed
+// 2026-09-09 - it fired on 12 of 51 documents and produced "Inleiding", "Inhoudsopgave" and a
+// copyright line as titles).
 internal static class CUHelper
 {
     internal sealed record MappedDocument(
@@ -71,30 +74,20 @@ internal static class CUHelper
         var boilerplate = CuPageHelper.BuildBoilerplate(document, pageSpans);
 
         // 3. The rest of the typed structure.
-        var figures = CuFigureHelper.Build(document, pageSpans, warnings);
-
-        // Chart/mermaid payloads join their figures on Id (decision: FigureInfo.Payload, no
-        // separate ChartInfo/DiagramInfo types).
-        var chartPayloads   = CuChartHelper.PayloadsOf(document);
-        var mermaidPayloads = CuDiagramHelper.PayloadsOf(document);
-        if (chartPayloads.Count > 0 || mermaidPayloads.Count > 0)
-            figures = [.. figures.Select(f =>
-                f.Id is not null &&
-                (chartPayloads.TryGetValue(f.Id, out var payload) || mermaidPayloads.TryGetValue(f.Id, out payload))
-                    ? f with { Payload = payload }
-                    : f)];
-
         var structure = new PdfDocumentStructure(
             Headings:       headings,
             Boilerplate:    boilerplate,
             Tables:         CuTableHelper.Build(document, pageSpans, warnings),
-            PageDimensions: CuPageHelper.BuildPageDimensions(document, unit),
-            SelectionMarks: [],   // no typed surface exists - dropped by decision 2026-08-26
-            Figures:        figures,
-            Lines:          CuPageHelper.BuildLines(document),
+            Figures:        CuFigureHelper.Build(document, pageSpans, warnings),
             Sections:       sections,
             Annotations:    CuAnnotationHelper.Build(document, pageSpans),
-            Hyperlinks:     CuHyperlinkHelper.Build(document, pageSpans));
+            Hyperlinks:     CuHyperlinkHelper.Build(document, pageSpans),
+            // Page-scoped and rare by nature; mapped so the corpus question ("do we have any,
+            // and are the 36 formulas still all euro misreads?") is answered by a report column
+            // instead of a hand-count of the raw capture.
+            Barcodes:       CuPageHelper.BuildBarcodes(document),
+            Formulas:       CuPageHelper.BuildFormulas(document),
+            LineCount:      CuPageHelper.CountLines(document));
 
         // No step 4. A furniture-stripping pass sat here for a few hours on 2026-08-26 and was
         // deleted the same day (user decision, "no heuristics anywhere") - see the class

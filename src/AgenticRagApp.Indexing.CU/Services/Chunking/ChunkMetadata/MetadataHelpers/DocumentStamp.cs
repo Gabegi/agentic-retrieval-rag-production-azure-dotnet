@@ -18,7 +18,6 @@ public sealed record DocumentStamp(
     string?               Language,
     string?               Author,
     string?               Route,
-    string?               SizeClass,
     string?               FamilyId,
     string?               DomainTag,
     IReadOnlyList<string> ConfusableWith,
@@ -31,8 +30,8 @@ public sealed record DocumentStamp(
     string?               Version)
 {
     // route is the strategy's own Name, passed in by ChunkingService - it is step 2's answer
-    // and this class has no way to re-derive it. SizeClass IS re-derived here, from the same
-    // classifier the rest of the pipeline uses, because the gate no longer computes one.
+    // and this class has no way to re-derive it. A size_class was stamped here too until
+    // 2026-09-08, re-derived from a DocumentProfile that nothing produced - see ChunkObject.
     public static DocumentStamp From(PdfExtractionDocument doc, string route)
     {
         // Parsed once - the title answers three fields and the regexes are not free.
@@ -44,7 +43,6 @@ public sealed record DocumentStamp(
             Language:         doc.Language,
             Author:           doc.Author,
             Route:            route,
-            SizeClass:        DocumentSizeClassifier.Classify(doc.Profile).ToString(),
 
             // All three ride in on doc.Family, attached by ChunkingService from step 1. Null
             // when the resolver produced no family - which is a real state (a document with
@@ -73,7 +71,6 @@ public sealed record DocumentStamp(
         metadata.Language         = Language;
         metadata.Author           = Author;
         metadata.Route            = Route;
-        metadata.SizeClass        = SizeClass;
 
         metadata.FamilyId         = FamilyId;
         metadata.DomainTag        = DomainTag;

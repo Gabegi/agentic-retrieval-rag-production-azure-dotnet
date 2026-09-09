@@ -24,7 +24,6 @@ public sealed record RunSummary
     // ── Sibling stage reports (best-effort) ─────────────────────────────────
     // Each null when not found. Absence is normal for some (a failure report only exists when
     // extraction crashed) and a real signal for others, so the footer lists which were found.
-    public ValidationReportFacts? Validation { get; init; }
     public FileFactsSummary?      FileFacts { get; init; }
     public ExtractionDiffFacts?   Diff { get; init; }
     public FailureReportFacts?    Failure { get; init; }
@@ -51,21 +50,12 @@ public sealed record RunSummary
         : "OK";
 }
 
-// The subset of PdfQualityGateResult worth carrying into the analysis. Deliberately a projection,
-// not the whole object: SpotCheckSample and Issues are unbounded and the full record would
-// dominate the blob.
-public sealed record ValidationReportFacts(
-    bool Passed,
-    int  ControlCharsStripped,
-    int  InvisibleCharsStripped,
-    int  LigaturesExpanded,
-    int  HyphenationJoinsRepaired,
-    int  TableConversionFallbacks,
-    int  MojibakeRepairedPages,
-    int  DetectedTableCount,
-    IReadOnlyList<string> MagnitudeWarnings,
-    IReadOnlyList<string> RedFlags,
-    IReadOnlyList<string> DocumentsNeedingFallbackChunking);
+// ValidationReportFacts, the projection of the PdfQualityGateResult blob, is gone with the
+// validation stage (2026-09-09). Of its eleven fields, six counted work no CU stage does
+// (the PdfCleaner character transforms and the table-conversion fallback) and four already
+// travel on ExtractionStageMetrics, where EvaluateExtraction reads them: ReconciliationProblems,
+// MojibakeRepairedPages, DetectedTableCount and RedFlags. Nothing was lost by dropping the
+// record except MagnitudeWarnings - see the note in FlagEvaluator where those flags were.
 
 // Aggregated, never per-file rows: a 900-document corpus would otherwise put 900 objects in the
 // blob.

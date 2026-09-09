@@ -16,10 +16,8 @@ namespace AgenticRagApp.Indexing.CU.Utils;
 // second line is also wrong: "Begrippen" is what the article is ABOUT, and it is the half a
 // query matches on.
 //
-// So: keep every line, join with a single space. Note this is deliberately NOT what
-// HeadingLocator matches on - locating a merged heading in the cleaned text still uses the FIRST
-// line, because that is the only part guaranteed contiguous there (the merged Offset covers the
-// first paragraph only). Matching and storing are different jobs and this is only the second.
+// So: keep every line, join with a single space. This is only about what is STORED and embedded -
+// HeadingLocator has not matched on text since 2026-09-09 (it cuts at the heading span).
 public static class HeadingTextNormalizer
 {
     private static readonly char[] LineBreaks = ['\n', '\r'];

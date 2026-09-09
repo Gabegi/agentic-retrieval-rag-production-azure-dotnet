@@ -116,12 +116,11 @@ public class ChunkingServiceTests
         IReadOnlyList<Heading>? boilerplate      = null,
         IReadOnlyList<TableInfo>? tables         = null,
         IReadOnlyList<FigureInfo>? figures       = null,
-        DocumentProfile?        profile          = null,
         string?                 language         = null) =>
         new(
             SourceId:         sourceId,
             Content:          content,
-            PageSpans:        [new PageSpan(page, 0, content.Length, null, IsPictureOnly: false)],
+            PageSpans:        [new PageSpan(page, 0, content.Length, null)],
             Title:            title,
             Author:           author,
             CreatedAt:        createdAt,
@@ -133,24 +132,14 @@ public class ChunkingServiceTests
             Headings:         headings ?? [],
             Boilerplate:      boilerplate ?? [],
             Tables:           tables ?? [],
-            SelectionMarks:   [],
             Figures:          figures ?? [],
-            Lines:            [],
             Annotations:      [],
             Hyperlinks:       [],
-            Profile:          profile,
             Language:         language);
 
     private static Heading H(string content, int offset, int page = 1, int depth = 1) =>
         new(content, "sectionHeading", offset, page, depth);
 
-    private static DocumentProfile Profile(bool hasContent) =>
-        new(ExtractedPageCount: 1, TotalChars: 100, FileSizeBytes: 1000,
-            CharsPerPage: 100, BytesPerChar: 10, FiguresPerPage: 0, EstimatedTokens: 30,
-            HasExtractableContent: hasContent, DocumentIsSafeReturnUnit: null,
-            NeedsNavigationSummary: false,
-            HeadingsPerThousandChars: 0, NumberedHeadingShare: 0, MaxSectionSizeChars: 100,
-            BoilerplateShare: 0, SelectionMarksPerPage: 0);
 
     // ── identity ─────────────────────────────────────────────────────────────
 
@@ -197,7 +186,7 @@ public class ChunkingServiceTests
     public async Task HeadingsCutTheDocumentIntoSections()
     {
         var content = "Eerste kop\n\nBody one.\n\nTweede kop\n\nBody two.";
-        var doc     = Doc("doc1", content, headings: [H("Eerste kop", 0), H("Tweede kop", 25)]);
+        var doc     = Doc("doc1", content, headings: [H("Eerste kop", 0), H("Tweede kop", content.IndexOf("Tweede kop", StringComparison.Ordinal))]);
 
         var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
@@ -209,12 +198,13 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task ContentBeforeTheFirstHeading_BecomesItsOwnSection()
     {
-        // The profile is not decoration here: with ONE heading, the gate's first clause (>= 2
-        // headings) fails, so the document reaches route 1 only through the small-document
-        // clause - and a null profile deliberately does not take it, because null < int is
-        // false and a missing measurement must never be read as "small".
+        // With ONE heading, the gate's first clause (>= 2 headings) fails, so the document
+        // reaches route 1 only through the small-document clause. That clause used to need a
+        // DocumentProfile to say the document was small, and passed a fixture profile here;
+        // since 2026-09-08 the gate counts the tokens itself, so a 31-character document is
+        // measurably small and no fixture is involved.
         var content = "Cover text.\n\nHoofdstuk 1\n\nBody.";
-        var doc     = Doc("doc1", content, headings: [H("Hoofdstuk 1", 0)], profile: Profile(hasContent: true));
+        var doc     = Doc("doc1", content, headings: [H("Hoofdstuk 1", content.IndexOf("Hoofdstuk 1", StringComparison.Ordinal))]);
 
         var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
@@ -297,11 +287,10 @@ public class ChunkingServiceTests
     [TestMethod]
     public async Task HeadingPath_IsPrependedAfterTheTitle()
     {
-        // Route 1 only - there is no heading path on the recursive route - so the profile is
-        // what gets this single-heading document onto that route at all.
+        // Route 1 only - there is no heading path on the recursive route - and it is the
+        // measured small-document clause that gets this single-heading document onto it.
         var content = "Hoofdstuk 1\n\nBody.";
-        var doc     = Doc("doc1", content, title: "Doc", headings: [H("Hoofdstuk 1", 0)],
-                          profile: Profile(hasContent: true));
+        var doc     = Doc("doc1", content, title: "Doc", headings: [H("Hoofdstuk 1", content.IndexOf("Hoofdstuk 1", StringComparison.Ordinal))]);
 
         var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
 
@@ -346,8 +335,8 @@ public class ChunkingServiceTests
         {
             PageSpans =
             [
-                new PageSpan(1, 0,  17, null, false),
-                new PageSpan(2, 17, 17, null, false),
+                new PageSpan(1, 0,  17, null),
+                new PageSpan(2, 17, 17, null),
             ],
         };
 
@@ -357,40 +346,22 @@ public class ChunkingServiceTests
         Assert.AreEqual(2, docs[0].PageEnd);
     }
 
-    [TestMethod]
-    public async Task PictureOnlyPage_FlagsTheChunkCoveringIt()
-    {
-        var doc = Doc("doc1", "text") with
-        {
-            PageSpans = [new PageSpan(1, 0, 4, null, IsPictureOnly: true)],
-        };
-
-        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
-
-        Assert.IsTrue(docs[0].PageExtractionFlag);
-    }
-
     // ── gates ────────────────────────────────────────────────────────────────
 
     [TestMethod]
-    public async Task ExtractionGateFailure_ProducesNoChunks_RatherThanVectorResidue()
+    public async Task ResidueOnlyContent_ProducesNoChunks_RatherThanVectorResidue()
     {
-        // A document with no extractable text produces vector-residue chunks (the corpus has a
+        // A document whose text is punctuation produces vector-residue chunks (the corpus has a
         // literal "£ £" 30-character chunk). Emitting those is worse than emitting nothing.
-        var doc = Doc("doc1", "£ £", profile: Profile(hasContent: false));
-
-        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
+        //
+        // This test used to pass a DocumentProfile with HasExtractableContent: false and read as
+        // if the EXTRACTION GATE dropped the document. It did not - nothing in chunking has read
+        // that flag since the gate was demoted on 260814. What actually drops this document is
+        // the minimum-content rule (MinChunkAlphanumericChars), which is why the assertion still
+        // holds with the profile deleted. Renamed to say what it tests.
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "£ £")]);
 
         Assert.AreEqual(0, docs.Count);
-    }
-
-    [TestMethod]
-    public async Task NoProfileComputed_IsTreatedAsHavingContent()
-    {
-        // A missing measurement must never silently drop a document.
-        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "body", profile: null)]);
-
-        Assert.AreEqual(1, docs.Count);
     }
 
     // ── carried fields ───────────────────────────────────────────────────────
@@ -421,12 +392,11 @@ public class ChunkingServiceTests
         Assert.AreEqual(1,       chunk.TableCount);
 
         // TableCount and HasTable answer DIFFERENT questions, deliberately. TableCount is
-        // page-scoped - extraction found a table on the pages this cut covers - and is stamped
-        // in step 4. HasTable is computed from Content and asks whether THIS chunk contains
-        // one, which is the narrower claim that survives a restore. A prose chunk sharing a
-        // page with a table has TableCount 1 and HasTable false, and that is not a
-        // disagreement.
-        Assert.IsFalse(chunk.HasTable, "the body carries no markdown table of its own");
+        // page-scoped - extraction found a table on the pages this cut covers. HasTable asks
+        // whether THIS chunk's range overlaps the table's typed span (2026-09-09; both stamped in
+        // step 4). A prose chunk sharing a page with a table has TableCount 1 and HasTable false,
+        // and that is not a disagreement - and a table with no span at all can overlap nothing.
+        Assert.IsFalse(chunk.HasTable, "the body overlaps no typed table span");
     }
 
     [TestMethod]
@@ -519,25 +489,28 @@ public class ChunkingServiceTests
     }
 
     [TestMethod]
-    public async Task RunReport_DocumentFailingTheExtractionGate_IsFlaggedButStillChunked()
+    public async Task RunReport_ReportsTextDensity_RatherThanAGateVerdict()
     {
-        // The gate was demoted from filter to flag on 260814: it used to drop the document,
-        // which is how 20 of 51 documents were absent from the index while every stage reported
-        // success (calibration-findings.md §1 measured all 20, several at 3,000+ chars/page -
-        // they were failing on bytes/char, not on being text-poor).
+        // What this row carried until 2026-09-08 was FailedExtractionGate, the gate's boolean
+        // verdict, demoted from filter to flag on 260814 (it used to DROP the document, which is
+        // how 20 of 51 documents were absent from the index while every stage reported success -
+        // calibration-findings.md §1 measured all 20, several at 3,000+ chars/page: they were
+        // failing on bytes/char, not on being text-poor).
         //
-        // The document now chunks, and the gate's verdict travels as a flag on its report row -
-        // still visible, no longer destructive.
+        // The flag came off DocumentProfile, which no longer exists, and under CU it had read
+        // false on every document anyway. The measurement replaces the verdict: chars/page is
+        // computed from the document itself and needs no threshold, and a reader comparing 380
+        // to 3,400 learns more than one reading "false".
         var (service, reports) = BuildWithReports();
-        var doc = Doc("gated", "body", profile: Profile(hasContent: false));
 
-        var (chunks, _, _) = await service.ChunkDocumentsAsync([doc], "instance-1");
+        var (chunks, _, _) = await service.ChunkDocumentsAsync([Doc("sparse", "body")], "instance-1");
 
-        Assert.IsTrue(chunks.Count > 0, "a gated document must still produce chunks");
+        Assert.IsTrue(chunks.Count > 0, "a sparse document must still produce chunks");
 
         var row = reports.Single().Documents.Single();
         Assert.AreEqual("chunked", row.Outcome);
-        Assert.IsTrue(row.FailedExtractionGate, "the gate's verdict must still be reported");
+        // One page, four characters of content - the fixture's own numbers, not a threshold.
+        Assert.AreEqual(4.0, row.CharsPerPage, 0.001);
         Assert.AreEqual(chunks.Count, row.ChunkCount);
     }
 

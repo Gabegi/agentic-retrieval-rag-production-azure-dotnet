@@ -65,14 +65,24 @@ public sealed record DocumentOutcome(
     //                             its null FamilyId is what says identity was skipped for it.
     // "not_reached"             - the stage threw before this document was processed
     // ("no_strategy" appears only in reports written before 260814, when the extraction gate
-    //  still dropped whole documents instead of flagging them - see FailedExtractionGate.)
+    //  still dropped whole documents instead of flagging them - see CharsPerPage below.)
     string   Outcome,
     string?  Reason,
 
-    // The extraction gate's verdict, demoted from filter to flag on 260814: true marks a
-    // document whose content likely lives in images (candidate for the Content Understanding
-    // branch, E6). It still chunks - this is why 20 of 51 documents stopped vanishing.
-    bool     FailedExtractionGate,
+    // Text density: this document's characters divided by the pages extraction reported.
+    //
+    // Replaces FailedExtractionGate (2026-09-08), which was the extraction gate's boolean
+    // verdict - "content likely lives in images" - computed from chars/page < 1,000 OR
+    // bytes/char >= 100. Under Content Understanding it read false on every document, because
+    // it came off DocumentProfile and nothing produced one; and CU is itself the answer that
+    // gate existed to point at (it describes figures rather than losing them), so restoring the
+    // verdict would have meant reviving a pre-CU routing question.
+    //
+    // The NUMBER survives instead of the verdict: it is measured from data the document
+    // already carries, needs no threshold, and a reader comparing 380 to 3,400 chars/page
+    // learns more than one reading "false". The bytes/char half is not reported - the file's
+    // byte length is not carried past extraction, and half a rule is worse than none.
+    double   CharsPerPage,
 
     // Units the minimum-content rule removed before indexing (vector residue like the corpus's
     // literal "£ £" chunk). Nonzero is normal on image-heavy documents; a document whose every
@@ -102,7 +112,10 @@ public sealed record DocumentOutcome(
 
     // The routing decision, recorded so "why did this document take this route" is answerable
     // from the report alone. Null on rows written before a route was picked (not_reached).
-    string?  SizeClass = null,
+    //
+    // SizeClass was here until 2026-09-08. It came off DocumentProfile, which has had no
+    // producer since the CU switch, so every row read "Medium" - a class name is only worth
+    // reporting if something measured it. CharsPerPage above is the measurement it stood in for.
     string?  Strategy  = null,
 
     // ── What the cut looks like, per document ───────────────────────────────
@@ -131,6 +144,11 @@ public sealed record DocumentOutcome(
     // Table-dominant. Kept as a reported signal after TableChecker stopped influencing routing:
     // atomicity is the splitter's job, not a route.
     bool     IsTableShaped      = false,
+    // The number behind that boolean: the fraction of this document's characters living in
+    // table blocks (2026-09-08). Reported because the verdict alone cannot be argued with - a
+    // document at 0.49 and one at 0.02 read identically as "false", and the first is the one
+    // worth looking at when the table work is re-judged.
+    double   TableCharShare     = 0,
     // On the recursive route the title is the ONLY prefix, so an empty title means chunks whose
     // embedded text is bare body with zero identity in the vector. Identity resolution only
     // drops documents with NEITHER title nor headings, so this case survives selection silently.
@@ -191,9 +209,11 @@ public sealed record FamilyMove(string SourceId, string? FromFamilyId, string To
 // Heading-dense documents are the driver: measured, ~19 tokens per heading.
 public sealed record IdentityTokenPressure(string SourceId, int Tokens);
 
-// The standing evidence for locating headings by string match rather than rewriting PdfCleaner
-// to emit an offset map: that call was made against a measured 1,273/1,273 exact-match rate
-// with an escalation threshold fixed in advance at >2%, so the rate is reported every run.
+// Heading location per run. Since 2026-09-09 a heading is "located" when its CU span offset
+// falls inside the markdown (HeadingLocator cuts there directly); an unlocated heading means
+// the service.s span and its markdown disagree, which is an upstream signal, so the rate is
+// still reported every run against the >2% escalation threshold fixed when this was measured
+// (1,273/1,273 on the DI-era string match).
 public sealed record HeadingLocationSummary(
     int    HeadingsTotal,
     int    HeadingsLocated,
@@ -201,9 +221,9 @@ public sealed record HeadingLocationSummary(
     bool   ExceedsEscalationThreshold,
     int    PairedZeroBodyHeadingsMerged,
 
-    // Headings that arrived with no DI offset and were ordered by arrival position instead
-    // (HeadingLocator.OrderByOffset). Distinct from the unlocated rate above: that one counts
-    // headings whose text could not be found in the cleaned content, this one counts headings
-    // extraction could not place in the RAW content either. Measured at 0 of 1,273 across the
-    // big four, so anything other than zero is a regression upstream, not a chunking result.
+    // Headings that arrived with no span offset at all and therefore opened no section
+    // (HeadingLocator, 2026-09-09: counted, never positioned by a guess). A subset of the
+    // unlocated rate above, which also counts offsets outside the markdown. Measured at 0 of
+    // 1,273 across the big four, so anything other than zero is a regression upstream, not a
+    // chunking result.
     int    HeadingsWithoutOffset = 0);

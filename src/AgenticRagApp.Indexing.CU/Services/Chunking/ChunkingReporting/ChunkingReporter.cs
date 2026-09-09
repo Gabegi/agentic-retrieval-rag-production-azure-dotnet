@@ -120,8 +120,9 @@ public sealed class ChunkingReporter
             .ToList();
     }
 
-    // The standing evidence for locating headings by string match rather than rewriting
-    // PdfCleaner to emit an offset map.
+    // Heading location per run. Since 2026-09-09 a heading locates when its CU span offset falls
+    // inside the markdown (HeadingLocator cuts there directly), so the unlocated rate is an
+    // upstream signal - the service span disagreeing with the service markdown.
     //
     // Zero total means no document took the declared-boundary route this run, so there is
     // nothing to report - not a 0% failure rate, no attempt.
@@ -149,16 +150,15 @@ public sealed class ChunkingReporter
     {
         foreach (var facts in state.DocumentFacts)
         {
-            // A heading whose paragraph carried no DI spans at all, so nothing said where in the
-            // raw content it sits. HeadingLocator kept it with its neighbours by carrying the
-            // previous offset forward, which is the best available answer but still a fallback -
-            // the section boundary it opens now rests on arrival order. Zero of 1,273 headings
-            // across the big four did this, so it is an extraction anomaly worth chasing
+            // A heading whose paragraph carried no span at all, so nothing said where in the
+            // document it sits. Since 2026-09-09 such a heading opens NO section (HeadingLocator
+            // counts it instead of guessing a position from its neighbours). Zero of 1,273
+            // headings across the big four did this, so it is an extraction anomaly worth chasing
             // upstream, not a routine input.
             if (facts.HeadingsWithoutOffset > 0)
                 _logger.LogWarning(
-                    "{Count} of {Total} headings in {SourceId} carried no DI offset and were ordered " +
-                    "by arrival position instead",
+                    "{Count} of {Total} headings in {SourceId} carried no span offset and opened " +
+                    "no section",
                     facts.HeadingsWithoutOffset, facts.HeadingsTotal, facts.SourceId);
 
             // The other half of the escalation rule: >2% corpus-wide OR >5% on any single

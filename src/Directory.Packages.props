@@ -11,7 +11,11 @@
     <PackageVersion Include="Azure.AI.ContentUnderstanding" Version="1.1.0" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
     <PackageVersion Include="Azure.AI.TextAnalytics" Version="5.3.0" />
-    <PackageVersion Include="Azure.Core" Version="1.60.0" />
+    <!-- Floor set by Azure.Monitor.OpenTelemetry.Exporter, which floats on 1.*: its 1.9.0
+         release requires Azure.Core >= 1.62.0, so a lower pin here restores as an NU1605
+         downgrade (warn-as-error) as soon as an agent with a cold cache picks up the newer
+         exporter. Raise this alongside the exporter's floor, not independently. -->
+    <PackageVersion Include="Azure.Core" Version="1.62.0" />
     <PackageVersion Include="Azure.Identity" Version="1.*" />
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.*" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.8.0-beta.1" />

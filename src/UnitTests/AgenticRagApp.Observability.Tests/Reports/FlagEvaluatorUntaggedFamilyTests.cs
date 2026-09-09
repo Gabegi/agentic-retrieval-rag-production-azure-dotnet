@@ -25,7 +25,7 @@ public class FlagEvaluatorUntaggedFamilyTests
     };
 
     private static IReadOnlyList<ReportFlag> Evaluate(PdfIndexRunReport report) =>
-        FlagEvaluator.Evaluate(report, validation: null, fileFacts: null, previous: null, calibrationMode: false);
+        FlagEvaluator.Evaluate(report, fileFacts: null, previous: null, calibrationMode: false);
 
     [TestMethod]
     public void RaisesAWarningNamingTheDocuments()
@@ -58,7 +58,7 @@ public class FlagEvaluatorUntaggedFamilyTests
         var report = ReportWith(["CAO GHZ (Versie 4).pdf"]);
 
         var flags = FlagEvaluator.Evaluate(
-            report, validation: null, fileFacts: null, previous: null, calibrationMode: true);
+            report, fileFacts: null, previous: null, calibrationMode: true);
 
         var flag = flags.SingleOrDefault(f => f.Metric == "Chunking.UntaggedFamilyMemberIds");
         Assert.IsNotNull(flag);

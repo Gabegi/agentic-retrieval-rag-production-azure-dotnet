@@ -4,8 +4,8 @@ using AgenticRagApp.Indexing.CU.Models;
 namespace AgenticRagApp.Indexing.CU.Services;
 
 // The document's outline from the typed response: Title and Headings from the Paragraphs CU
-// itself classified (Role = Title | SectionHeading - no "#"-counting), heading DEPTH from the
-// section tree's nesting (DocumentSection.Elements), and the SectionInfo list itself.
+// itself classified (Role = Title | SectionHeading), heading DEPTH as the level CU rendered
+// (the "#" count at the heading's own span), and the SectionInfo list itself.
 //
 // Ownership rule: this helper owns Title|SectionHeading; CuPageHelper owns the furniture roles.
 internal static class CuOutlineHelper
@@ -19,20 +19,13 @@ internal static class CuOutlineHelper
         if (paragraphs.Count == 0)
             warnings.Add("Typed Paragraphs missing from the CU response; headings and title are empty.");
 
-        // Paragraph index -> depth, from the section tree. Empty when there is no tree - every
-        // heading then defaults to depth 1, flattening DeclaredBoundaryStrategy's hierarchy but
-        // never dropping a boundary.
-        var depthByParagraph = DepthMap(sections);
-        if (sections.Count == 0 && paragraphs.Any(p => p.Role == SemanticRole.SectionHeading))
-            warnings.Add("Typed Sections missing from the CU response; heading depths default to 1.");
+        var headings    = new List<Heading>();
+        string? title   = null;
+        var misaligned  = 0;
+        var notAtMarker = 0;
 
-        var headings   = new List<Heading>();
-        string? title  = null;
-        var spotChecks = 0;
-
-        for (var i = 0; i < paragraphs.Count; i++)
+        foreach (var paragraph in paragraphs)
         {
-            var paragraph = paragraphs[i];
             // SemanticRole is an extensible enum (no constant patterns), hence == not switch.
             var role = paragraph.Role == SemanticRole.Title          ? "title"
                      : paragraph.Role == SemanticRole.SectionHeading ? "sectionHeading"
@@ -49,128 +42,72 @@ internal static class CuOutlineHelper
             if (text.Length == 0) continue;
 
             var offset = paragraph.Span?.Offset;
-            var depth  = role == "title"
-                ? 1
-                : Math.Clamp(depthByParagraph.GetValueOrDefault(i, 1), 1, 6);
+
+            // Span check, on EVERY heading (2026-09-09 - it used to sample the first three). Two
+            // things downstream relies on directly: the slice at the offset contains the heading's
+            // own text (utf16 encoding, hardcoded by the SDK's typed Analyze overload), and the span
+            // starts at the markdown marker - HeadingLocator cuts there instead of re-finding the
+            // text, and Depth below is read there. Measured on the 260827 artifact: 2,451 of 2,451
+            // headings start at "#". Counted, one aggregate warning each per document.
+            var atMarker = false;
+            if (offset is int o && paragraph.Span is { } span && o < markdown.Length)
+            {
+                var end   = Math.Min(o + Math.Max(span.Length, text.Length), markdown.Length);
+                var probe = text.Length > 20 ? text[..20] : text;
+
+                if (!markdown[o..end].Contains(probe, StringComparison.Ordinal)) misaligned++;
+                else if (markdown[o] != '#')                                    notAtMarker++;
+                else                                                             atMarker = true;
+            }
+
+            // DEPTH IS THE LEVEL CU RENDERED: the run of "#" at the heading's span. It used to be
+            // derived from the section tree's nesting (root section = 0, one per "/sections/N"
+            // hop); measured against the rendered markers on the 260827 artifact that derivation
+            // disagreed on 1,189 of 2,451 headings - always by exactly one, and only in documents
+            // that have a Title paragraph (557 agree / 1,186 disagree there; 666 / 3 without). The
+            // service's own rendering is the fact; reading it at a typed offset is not "#-counting"
+            // over the markdown, it is reading one attribute of an element whose position is typed.
+            // Not capped at 6: the corpus carries four 7-hash headings (CAO GGZ, Hygienecode), and
+            // 7 is what the service rendered. 0 = unknown, for a span that does not start at "#"
+            // (warned above) - never a default level.
+            var depth = atMarker ? MarkerRun(markdown, offset!.Value) : 0;
 
             headings.Add(new Heading(text, role, offset, CuPageHelper.PageAt(pageSpans, offset), depth));
 
-            title ??= role == "title" ? text : null;
-
-            // Span sanity: the typed offset should land on this heading's own text in the
-            // markdown (utf16 encoding, hardcoded by the SDK's typed Analyze overload). Checked on
-            // the first few headings only; a drift here is one warning, not N.
-            if (spotChecks < 3 && offset is int o && paragraph.Span is { } span)
-            {
-                spotChecks++;
-                var end   = Math.Min(o + Math.Max(span.Length, text.Length), markdown.Length);
-                var slice = o <= markdown.Length ? markdown[Math.Min(o, markdown.Length)..end] : "";
-                var probe = text.Length > 20 ? text[..20] : text;
-                if (!slice.Contains(probe, StringComparison.Ordinal))
-                    warnings.Add(
-                        $"Typed span misalignment: heading '{Truncate(text)}' not found at its reported offset {o} - " +
-                        "check AnalysisResult.StringEncoding.");
-            }
+            // The title is the Role=Title paragraph and nothing else. A fallback to the first
+            // section heading sat here until 2026-09-09; measured on the 260827 artifact it fired
+            // on 12 of 51 documents and produced "Inleiding", "INLEIDING", "Inhoudsopgave" and a
+            // copyright line as document titles - a plausible substitute is not the value
+            // (docs/2609/260909/cu-helpers-review.md). Null is the honest answer, and
+            // MissingTitleCount now measures exactly how often the service reports no title.
+            if (role == "title") title ??= text;
         }
 
-        // Title fallback: no Role=Title paragraph -> the first section heading, same order of
-        // preference the markdown mapper used (first H1, else first heading).
-        title ??= headings.FirstOrDefault()?.Content;
+        if (misaligned > 0)
+            warnings.Add(
+                $"Typed span misalignment: {misaligned} of {headings.Count} heading(s) not found at their reported offset - " +
+                "check AnalysisResult.StringEncoding.");
 
-        return (headings, title, BuildSections(document, sections, paragraphs));
+        if (notAtMarker > 0)
+            warnings.Add(
+                $"{notAtMarker} of {headings.Count} heading span(s) do not start at a markdown '#' marker; " +
+                "their Depth is 0 and the section boundary HeadingLocator opens there will leave the marker with the previous section.");
+
+        return (headings, title, BuildSections(sections));
     }
 
-    // Depth by nesting in the section tree: an UNREFERENCED section is a root at depth 0, a
-    // "/sections/N" child sits one deeper, and a "/paragraphs/N" ref gives paragraph N its
-    // section's depth. Root-level headings therefore land at depth 0 -> clamped to 1 by the
-    // caller, and each nesting level below adds one - which is the H1/H2/... shape
-    // DeclaredBoundaryStrategy routes on.
-    private static Dictionary<int, int> DepthMap(IReadOnlyList<DocumentSection> sections)
+    private static int MarkerRun(string markdown, int offset)
     {
-        var result = new Dictionary<int, int>();
-        if (sections.Count == 0) return result;
-
-        var referenced = new HashSet<int>(
-            sections.SelectMany(s => s.Elements ?? Enumerable.Empty<string>())
-                .Select(e => RefIndex(e, "sections"))
-                .Where(i => i >= 0));
-
-        var visited = new HashSet<int>();
-        var queue   = new Queue<(int Index, int Depth)>();
-
-        for (var i = 0; i < sections.Count; i++)
-            if (!referenced.Contains(i))
-                queue.Enqueue((i, 0));
-
-        // Every section referenced but never reached (a cycle, which the service should never
-        // produce) simply contributes no depths - map what's there.
-        while (queue.Count > 0)
-        {
-            var (index, depth) = queue.Dequeue();
-            if (index < 0 || index >= sections.Count || !visited.Add(index)) continue;
-
-            foreach (var element in sections[index].Elements ?? Enumerable.Empty<string>())
-            {
-                var child = RefIndex(element, "sections");
-                if (child >= 0) { queue.Enqueue((child, depth + 1)); continue; }
-
-                var paragraph = RefIndex(element, "paragraphs");
-                if (paragraph >= 0) result.TryAdd(paragraph, depth);
-            }
-        }
-
-        return result;
+        var n = 0;
+        while (offset + n < markdown.Length && markdown[offset + n] == '#') n++;
+        return n;
     }
 
-    // SectionInfo: the raw refs verbatim plus a resolved, human-scannable label per ref - the
-    // same record shape and label conventions the DI-era resolver produced, so downstream
-    // consumers and the reports read on unchanged.
-    private static List<SectionInfo> BuildSections(
-        DocumentContent document, IReadOnlyList<DocumentSection> sections, IReadOnlyList<DocumentParagraph> paragraphs)
-    {
-        var tables  = (document.Tables  ?? Enumerable.Empty<DocumentTable>()).ToList();
-        var figures = (document.Figures ?? Enumerable.Empty<DocumentFigure>()).ToList();
-
-        return [.. sections.Select(s =>
-        {
-            var elements = (s.Elements ?? Enumerable.Empty<string>()).ToList();
-            return new SectionInfo(
-                Spans:            s.Span is { } span ? [new SectionSpan(span.Offset, span.Length)] : [],
-                Elements:         elements,
-                ResolvedElements: [.. elements.Select(e => Resolve(e, paragraphs, tables, figures))]);
-        })];
-    }
-
-    private static SectionElementRef Resolve(
-        string pointer,
-        IReadOnlyList<DocumentParagraph> paragraphs,
-        IReadOnlyList<DocumentTable> tables,
-        IReadOnlyList<DocumentFigure> figures)
-    {
-        foreach (var kind in (string[])["paragraphs", "tables", "figures", "sections"])
-        {
-            var index = RefIndex(pointer, kind);
-            if (index < 0) continue;
-
-            var text = kind switch
-            {
-                "paragraphs" => index < paragraphs.Count ? Truncate(paragraphs[index].Content ?? "") : null,
-                "tables"     => index < tables.Count ? $"table {tables[index].RowCount}x{tables[index].ColumnCount}" : null,
-                "figures"    => index < figures.Count ? figures[index].Caption?.Content ?? figures[index].Id : null,
-                _            => $"section {index}",
-            };
-            return new SectionElementRef(kind, index, text);
-        }
-
-        // Unrecognized pointer shape: carried verbatim rather than silently dropped.
-        return new SectionElementRef(pointer, -1, null);
-    }
-
-    private static int RefIndex(string pointer, string collection) =>
-        pointer.StartsWith($"/{collection}/", StringComparison.Ordinal) &&
-        int.TryParse(pointer.AsSpan(collection.Length + 2), out var index) && index >= 0
-            ? index : -1;
-
-    private static string Truncate(string text) =>
-        text.Length <= 80 ? text : text[..80] + "…";
+    // SectionInfo: the service's span and its raw element refs, verbatim. A per-ref resolved
+    // label ("table 3x4", the first 80 chars of a paragraph) was built here until 2026-09-09;
+    // nothing read it. The tree is still what HeadingChainBuilder walks for ancestor chains.
+    private static List<SectionInfo> BuildSections(IReadOnlyList<DocumentSection> sections) =>
+        [.. sections.Select(s => new SectionInfo(
+            Spans:    s.Span is { } span ? [new SectionSpan(span.Offset, span.Length)] : [],
+            Elements: [.. s.Elements ?? Enumerable.Empty<string>()]))];
 }

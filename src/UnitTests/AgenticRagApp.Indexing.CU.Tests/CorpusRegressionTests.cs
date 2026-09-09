@@ -13,7 +13,7 @@ namespace RagApp.UnitTests.Indexing;
 // that measurement, and these tests keep the record internally consistent.
 //
 // BE HONEST ABOUT THE FAILURE MODE. The §1 tests read static fixtures, so the only thing that
-// can fail them is an edit to the fixtures - they do NOT guard PdfCleaner or GetHeadingsHelper,
+// can fail them is an edit to the fixtures - they do NOT guard PdfCleaner or CuOutlineHelper,
 // whose raw input (~132 MB of page JSON) is not checked in and cannot be. A regression in the
 // live extraction path shows up in the per-run chunking artifact and the run-log counters
 // (HardCut tripwire, boundary_level, heading counts), not here. What §1 buys is narrower: the
@@ -21,7 +21,7 @@ namespace RagApp.UnitTests.Indexing;
 // and nobody can quietly edit the record to match a regression without this file noticing.
 //
 // The §9.2 tests are different in kind: they run REAL code (HeadingTextNormalizer.Flatten,
-// GetHeadingsHelper's label regex) over real corpus pairs, and a change to either fails them.
+// HeadingNumbering's label regex) over real corpus pairs, and a change to either fails them.
 // Flatten's output feeds Prefix -> EmbeddingText -> ContentHash, so a change there silently
 // re-embeds the corpus - that is a genuine guard, not a record.
 //

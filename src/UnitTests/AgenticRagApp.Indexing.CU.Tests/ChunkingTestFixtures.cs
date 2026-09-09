@@ -45,10 +45,11 @@ internal static class ChunkingTestFixtures
         string title = "",
         string? domainTag = null,
         IReadOnlyList<LocatedSection>? sections = null,
-        string sourceId = "doc1.pdf") =>
+        string sourceId = "doc1.pdf",
+        IReadOnlyList<TableInfo>? tables = null) =>
         new(SourceId:         sourceId,
             Content:          content,
-            PageSpans:        [new PageSpan(1, 0, content.Length, null, IsPictureOnly: false)],
+            PageSpans:        [new PageSpan(1, 0, content.Length, null)],
             Title:            title,
             Author:           null,
             CreatedAt:        null,
@@ -59,18 +60,39 @@ internal static class ChunkingTestFixtures
             Sections:         [],
             Headings:         [],
             Boilerplate:      [],
-            Tables:           [],
-            SelectionMarks:   [],
+            // What CU would have typed for this content: one TableInfo per <table>...</table>,
+            // with the span the chunker takes its table blocks from (2026-09-09).
+            Tables:           tables ?? TablesIn(content),
             Figures:          [],
-            Lines:            [],
             Annotations:      [],
             Hyperlinks:       [],
-            Profile:          null,
             Language:         null,
             Family:           domainTag is null ? null : new DocumentFamily("fam-1", domainTag, []),
             LocatedSections:  sections);
 
-    // One heading section, in cleaned-content coordinates. Located true with a real source is
+    // The typed table spans a fixture's markdown implies: one TableInfo per <table>...</table>,
+    // Offset/Length as CU reports them (all 288 corpus tables start exactly at "<table"). Tests
+    // scan the fixture text because a fixture has no analyzer to type it; production never does.
+    public static List<TableInfo> TablesIn(string content)
+    {
+        var tables = new List<TableInfo>();
+        var from   = 0;
+        while (true)
+        {
+            var start = content.IndexOf("<table", from, StringComparison.Ordinal);
+            if (start < 0) break;
+            var close = content.IndexOf("</table>", start, StringComparison.Ordinal);
+            var end   = close < 0 ? content.Length : close + "</table>".Length;
+            tables.Add(new TableInfo(0, 0, [], start, 1, null, [], [], Length: end - start));
+            from = end;
+        }
+        return tables;
+    }
+
+    public static IReadOnlyList<(int Start, int End)> TableRangesIn(string content) =>
+        [.. TablesIn(content).Select(t => (t.Offset!.Value, t.Offset!.Value + t.Length!.Value))];
+
+    // One heading section, in doc.Content coordinates. Located true with a real source is
     // the ordinary case; a preamble is the same record with source None.
     public static LocatedSection Section(
         int index,
