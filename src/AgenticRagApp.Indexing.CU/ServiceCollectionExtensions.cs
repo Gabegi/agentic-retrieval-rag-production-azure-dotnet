@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
+using AgenticRagApp.Infrastructure.Clients.Language;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Indexing.CU.Services;
@@ -96,7 +97,11 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<ExtractionReporter>(),
             sp.GetRequiredService<ILogger<ExtractionService>>(),
-            cuDefaultsState: sp.GetRequiredService<ContentUnderstandingDefaultsState>()));
+            cuDefaultsState: sp.GetRequiredService<ContentUnderstandingDefaultsState>(),
+            // The index's `language` producer (2026-09-08). Registered by
+            // AddAgenticRagAppInfrastructure over the TextAnalyticsClient the query side
+            // already uses; CU itself reports no language - see IDocumentLanguageDetector.
+            languageDetector: sp.GetRequiredService<IDocumentLanguageDetector>()));
         services.AddSingleton<IEmbeddingService,       EmbeddingService>();
         services.AddSingleton<IUploadService,          UploadService>();
         // IIndexService/IIndexDocumentService are registered once by

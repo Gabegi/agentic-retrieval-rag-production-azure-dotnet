@@ -127,6 +127,7 @@ internal static class ExtractionOutputBuilder
             Usages                 = BuildUsages(files),
             WordConfidences        = BuildWordConfidences(files),
             Summaries              = BuildSummaries(files),
+            Languages              = BuildLanguages(files),
             BilledTokensByModel    = BuildTokensByModel(files),
         };
     }
@@ -168,6 +169,16 @@ internal static class ExtractionOutputBuilder
             .Where(f => f.Summary is not null)
             .OrderBy(f => f.BlobName, StringComparer.Ordinal)
             .Select(f => new DocumentSummaryEntry(f.BlobName, f.Summary!, f.Ok))];
+
+    // What AI Language said each document is written in, lifted the same way. Documents whose
+    // language could not be detected - or was never attempted, which is every failed
+    // extraction - are absent rather than present with a blank code.
+    internal static List<DocumentLanguageDetection> BuildLanguages(IReadOnlyList<ExtractedFile> files) =>
+        [.. files
+            .Where(f => !string.IsNullOrWhiteSpace(f.Language))
+            .OrderBy(f => f.BlobName, StringComparer.Ordinal)
+            .Select(f => new DocumentLanguageDetection(
+                f.BlobName, f.Language!, f.LanguageConfidence, f.Ok))];
 
     // The run's per-model token bill: every document's TokensByModel summed key-by-key, keys
     // verbatim as the service bills them. Ordered for the same diff-cleanly reason as the lists.

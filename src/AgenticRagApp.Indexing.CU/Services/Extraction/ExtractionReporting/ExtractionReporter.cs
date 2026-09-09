@@ -286,6 +286,11 @@ public sealed class ExtractionReporter
         var summaryByBlob = output.Summaries.ToDictionary(
             s => s.BlobName, s => s.Summary, StringComparer.Ordinal);
 
+        // And what it is written IN. Absent when nothing could be detected; see
+        // DocumentLanguageDetection for why the confidence rides along unjudged.
+        var languageByBlob = output.Languages.ToDictionary(
+            l => l.BlobName, l => l, StringComparer.Ordinal);
+
         var fileFacts = output.Docs.Select(d => new
         {
             BlobName  = d.SourceId,
@@ -380,6 +385,15 @@ public sealed class ExtractionReporter
             SummaryTruncated      = summaryByBlob.GetValueOrDefault(d.SourceId)?.TruncatedInReport,
             SummaryConfidence     = summaryByBlob.GetValueOrDefault(d.SourceId)?.Confidence,
             SummaryGroundingSpans = summaryByBlob.GetValueOrDefault(d.SourceId)?.GroundingSpanCount,
+
+            // What this document is written in (A9, 2026-09-08), and how sure AI Language was.
+            // The index field is filled from the same value; this column is what makes the
+            // corpus's one English document identifiable from a report - it is the document
+            // whose chars/token ratio is ~4 rather than ~3.2, which makes every
+            // character-derived ceiling wrong for it. Blank = not detected; no rule reads
+            // either column.
+            Language           = languageByBlob.GetValueOrDefault(d.SourceId)?.Iso6391Name,
+            LanguageConfidence = languageByBlob.GetValueOrDefault(d.SourceId)?.Confidence,
         }).ToList();
 
         await _reportWriter.WriteReportAsync(

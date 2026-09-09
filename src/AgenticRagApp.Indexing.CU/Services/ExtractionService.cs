@@ -441,6 +441,8 @@ public class ExtractionService : IExtractionService
         return new ExtractedFile(
             true, blobName, mapped.Markdown,
             PageSpans: mapped.PageSpans, Structure: mapped.Structure, Title: mapped.Title,
+            // Language: null is not the final answer - ExtractFileAsync's
+            // WithDetectedLanguageAsync fills it from AI Language, since CU reports none.
             Profile: null, Language: null,
             Usage: analysis.Usage, Error: null, Warnings: warnings)
         {

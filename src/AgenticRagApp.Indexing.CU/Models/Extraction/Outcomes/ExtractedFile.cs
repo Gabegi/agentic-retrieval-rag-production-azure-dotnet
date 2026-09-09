@@ -67,6 +67,13 @@ internal sealed record ExtractedFile(
     // means the response carried no Summary field, or one carrying no text.
     public DocumentSummary? Summary { get; init; }
 
+    // How sure AI Language was about Language (the positional field above). Report-only and
+    // deliberately separate from the value: Language feeds the index field, this feeds the
+    // facts report, and NO rule reads it - see IDocumentLanguageDetector for why no threshold
+    // is invented here. Null whenever Language is null, and also when a detection carried no
+    // score.
+    public double? LanguageConfidence { get; init; }
+
     // A factory rather than nine positional nulls repeated at every failure site.
     public static ExtractedFile Failed(
         string blobName, PipelineIssue error, IReadOnlyList<PipelineIssue>? warnings = null) =>

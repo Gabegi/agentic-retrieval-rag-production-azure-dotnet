@@ -46,6 +46,11 @@ public sealed record PdfExtractionOutput(IReadOnlyList<PdfExtractionDocument> Do
     // above; documents whose response carried no Summary field are absent.
     public IReadOnlyList<DocumentSummaryEntry> Summaries { get; init; } = [];
 
+    // The detected language per document, in blob-name order - see DocumentLanguageDetection.
+    // Report-only: the value the INDEX gets travels on PdfExtractionDocument.Language instead.
+    // Documents with no detected language are absent.
+    public IReadOnlyList<DocumentLanguageDetection> Languages { get; init; } = [];
+
     // The service's per-model token map summed across every document that reported one, keys
     // verbatim as billed (e.g. "gpt-4.1-mini-input") - see CuUsage.TokensByModel for why the
     // keys are not split. This is the number that maps to the AI-deployment bill; the two

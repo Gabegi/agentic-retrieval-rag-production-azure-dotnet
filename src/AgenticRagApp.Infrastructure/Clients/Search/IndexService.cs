@@ -229,9 +229,13 @@ public class IndexService : IIndexService
                 // Target population (LVB/MVB and similar). Distinct from domain_tag: sector
                 // and population are different axes. No producer yet.
                 new SimpleField("population",         SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
-                // "nl"/"en" from DI's own AnalyzeResult.Languages. The corpus is Dutch plus
+                // "nl"/"en" from IDocumentLanguageDetector (AI Language), since 2026-09-08.
+                // It used to say "from DI's own AnalyzeResult.Languages", which stopped being
+                // true at the CU switch: Content Understanding reports no detected language at
+                // all, so this field was null end to end for weeks. The corpus is Dutch plus
                 // one English document whose chars/token ratio is ~4, not ~3.2 - which makes
-                // every character-derived ceiling wrong for it.
+                // every character-derived ceiling wrong for it, and is why the field is worth
+                // filling rather than dropping.
                 new SimpleField("language",           SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
 
                 // ── Content Understanding structural signals ───────────────────────────

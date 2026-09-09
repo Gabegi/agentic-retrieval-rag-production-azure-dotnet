@@ -224,6 +224,30 @@ public class ExtractionOutputBuilderTests
     }
 
     [TestMethod]
+    public void BuildLanguages_SkipsUndetectedDocumentsAndKeepsBlobOrder()
+    {
+        // A document whose language could not be detected is absent, not a blank code: the
+        // index field is facetable, and an empty-string facet value reads as a language.
+        var files = new[]
+        {
+            Ok("b.pdf") with { Language = "en", LanguageConfidence = 0.95 },
+            Ok("a.pdf") with { Language = "nl", LanguageConfidence = null },
+            Ok("c.pdf") with { Language = null },
+            Ok("d.pdf") with { Language = "  " },
+        };
+
+        var languages = ExtractionOutputBuilder.BuildLanguages(files);
+
+        CollectionAssert.AreEqual(
+            new[] { "a.pdf", "b.pdf" },
+            languages.Select(l => l.BlobName).ToArray());
+        Assert.AreEqual("en", languages[1].Iso6391Name);
+        Assert.AreEqual(0.95, languages[1].Confidence!.Value, 1e-9);
+        // Detected, but the response carried no score - the code still counts.
+        Assert.IsNull(languages[0].Confidence);
+    }
+
+    [TestMethod]
     public void BuildTokensByModel_SumsKeyByKeyAndSkipsDocumentsWithoutUsage()
     {
         // Keys are the service's to define, so they are summed verbatim and never parsed. A
