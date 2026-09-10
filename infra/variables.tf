@@ -67,6 +67,15 @@ variable "knowledge_base_name" {
   default     = "zenya-knowledgebase"
 }
 
+variable "zenya_sync_ado_federated_credentials" {
+  type = map(object({
+    issuer  = string
+    subject = string
+  }))
+  description = "Federated credentials on the Zenya sync identity (zenya_sync_identity.tf), keyed by credential name. One entry per ADO workload-identity service connection that must run as that identity; issuer and subject are copied verbatim from ADO's new-service-connection dialog. Empty = no ADO connection can act as the identity (Track B only)."
+  default     = {}
+}
+
 variable "dev_allowed_ips" {
   type        = list(string)
   description = "Public IPs allowlisted for direct access to the function app, data storage account, and search service - development convenience only. Every usage site also gates on var.environment == \"development\", so this has no effect even if accidentally set in prod.tfvars."
