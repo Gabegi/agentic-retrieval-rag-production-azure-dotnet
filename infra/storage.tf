@@ -93,6 +93,7 @@ resource "azurerm_storage_account" "data" {
 locals {
   data_containers = toset([
     "documents",
+    "zenya-documents", # Zenya sync target (D185): pdf/ and docs/ prefixes, written only by the ZenyaSync tool
     "pipeline-reports",
     "pipeline-artifacts",
     "test-questions",

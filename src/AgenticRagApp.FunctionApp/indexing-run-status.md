@@ -131,7 +131,7 @@ you query the log. In particular, **a hung or dead run produces no signal at all
 "nothing has happened" is never proof that nothing went wrong; check
 `runtimeStatus` and `elapsed`.
 
-A separate design (`docs/2608/260806/pipeline-run-email-report.md`) covers emailing a
+A separate design (`docs/2608/260807/pipeline-run-email-report.md`) covers emailing a
 full report after each run. That is post-run analysis — what was produced, whether it
 looks healthy, what changed since last time — and it is complementary to this: it
 cannot tell you anything about a run that is still going, or one that never reached

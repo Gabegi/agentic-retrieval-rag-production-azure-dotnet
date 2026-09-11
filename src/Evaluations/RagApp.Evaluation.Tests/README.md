@@ -41,4 +41,4 @@ Re-run this suite after any restore/reindex.
 ## See also
 
 - [Rbac.md](Rbac.md) — which identity the eval suite runs as, what roles it needs, and known gaps
-- root [ReadMe.md](../../../ReadMe.md#post-deployment-steps) — post-deployment steps
+- root [ReadMe.md](../../../ReadMe.md#after-a-deployment) — post-deployment steps

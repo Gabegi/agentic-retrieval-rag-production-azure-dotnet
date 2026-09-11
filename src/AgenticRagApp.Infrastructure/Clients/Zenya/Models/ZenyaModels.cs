@@ -50,7 +50,10 @@ public sealed record ZenyaDocumentMetadata(
     [property: JsonPropertyName("revision")] int? Revision,
     [property: JsonPropertyName("title")] string? Title,
     [property: JsonPropertyName("type")] string? Type,
-    [property: JsonPropertyName("document_type")] string? DocumentType,
+    // An object, not a string: the first live payload (2026-09-11, D185 §5) rejected the string
+    // model; the public swagger confirms `document_type_mini` = { id, name }. The blob metadata
+    // carries the name.
+    [property: JsonPropertyName("document_type")] ZenyaDocumentTypeMini? DocumentType,
     [property: JsonPropertyName("mime_type")] string? MimeType,
     [property: JsonPropertyName("download_binary_extension")] string? DownloadBinaryExtension,
     [property: JsonPropertyName("download_as_pdf")] bool? DownloadAsPdf,
@@ -58,7 +61,14 @@ public sealed record ZenyaDocumentMetadata(
     [property: JsonPropertyName("can_download_content")] bool? CanDownloadContent,
     [property: JsonPropertyName("quick_code")] string? QuickCode,
     [property: JsonPropertyName("active")] bool? Active,
+    // Lifecycle state string (spec: `state`, e.g. published) - what zenya_status records.
+    [property: JsonPropertyName("state")] string? State,
     [property: JsonPropertyName("last_modified_datetime")] string? LastModifiedDateTime);
+
+// document_type on the legacy document DTO (swagger: Infoland.Suite.Api.Controllers.Legacy.document_type_mini).
+public sealed record ZenyaDocumentTypeMini(
+    [property: JsonPropertyName("id")] int? Id,
+    [property: JsonPropertyName("name")] string? Name);
 
 // GET /documents/{id}/v{version}/contents - the typed route (D173 §1, "Content retrieval").
 // `content` is a string whose shape (HTML, or JSON for modern_structured_document) is unknown

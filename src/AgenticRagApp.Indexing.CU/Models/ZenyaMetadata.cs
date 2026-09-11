@@ -3,10 +3,13 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // Zenya's own identity/lifecycle facts for a PDF - never present in the PDF's own bytes
 // (confirmed empirically: Zenya's Documentgegevens fields - Snelcode, Versie, etc. - don't
 // appear anywhere in a sample file's Info dictionary, content streams, or XMP packet).
-// Since there's no automated Zenya -> blob sync today (PDFs are uploaded manually), this can
-// only come from custom blob metadata that whoever uploads a PDF sets by hand, copying the
-// values shown on that document's Zenya page. Missing metadata is the expected default state
-// for every field, not an error - see IsActive below and ExtractionDocument's own comment.
+// Two sources write these keys: hand-set metadata on the manually uploaded "documents" corpus
+// (rare, optional) and - since 2026-09-11 - the ZenyaSync tool, which stamps every blob it
+// writes into the "zenya-documents" container (Infrastructure/Clients/Zenya/Sync/ZenyaBlobLayout,
+// D185). The indexer still reads "documents" today; when it is pointed at zenya-documents these
+// values become authoritative and this record should grow the extra keys ZenyaBlobLayout writes
+// (zenya_quick_code, zenya_title - percent-encoded, zenya_last_modified). Missing metadata stays
+// the expected default on the manual corpus - see IsActive below and ExtractionDocument.s comment.
 public record ZenyaMetadata(
     string? DocumentId,
     string? Version,

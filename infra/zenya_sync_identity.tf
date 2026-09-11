@@ -50,13 +50,14 @@ output "zenya_sync_identity_tenant_id" {
 resource "azurerm_federated_identity_credential" "zenya_sync_ado" {
   for_each = var.zenya_sync_ado_federated_credentials
 
-  # No resource_group_name: azurerm 4.81 reports it deprecated and unused (the parent identity's
-  # id carries the RG) - measured as a plan warning on the first apply, 2026-09-10.
-  name      = each.key
-  parent_id = azurerm_user_assigned_identity.zenya_sync.id
-  audience  = ["api://AzureADTokenExchange"]
-  issuer    = each.value.issuer
-  subject   = each.value.subject
+  # No resource_group_name: azurerm 4.81 reports it deprecated and unused (the identity id carries
+  # the RG) - plan warning on the first apply, 2026-09-10. user_assigned_identity_id replaced
+  # parent_id the same way (renamed, removed in v5) - plan warning 2026-09-11. Both pure renames.
+  name                       = each.key
+  user_assigned_identity_id  = azurerm_user_assigned_identity.zenya_sync.id
+  audience                   = ["api://AzureADTokenExchange"]
+  issuer                     = each.value.issuer
+  subject                    = each.value.subject
 }
 
 # ADO's "Verify" on the connection reads the subscription through ARM; any role assignment inside
@@ -74,6 +75,20 @@ resource "azurerm_role_assignment" "zenya_sync_reader_data_rg" {
 resource "azurerm_role_assignment" "zenya_sync_blob_contributor" {
   scope                = azurerm_storage_account.data.id
   role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.zenya_sync.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Track A only: the ADO agent has no VNet path to the data account (public access denied,
+# storage.tf), so zenya-document-sync.yml opens the account firewall for the runner IP and closes it
+# again. `az storage account update` / `network-rule add` need Microsoft.Storage/storageAccounts/write,
+# which neither Reader nor Storage Blob Data Contributor carries. Storage Account Contributor is the
+# narrowest built-in role that does; it also permits listKeys, which is why the scope is this one
+# account and not the resource group. Added 2026-09-11 when the Sync stage moved from con-cap-app-dev
+# (a connection we hold no role on) to con-cap-zenyasync-<env>. Track B never needs it.
+resource "azurerm_role_assignment" "zenya_sync_storage_account_contributor" {
+  scope                = azurerm_storage_account.data.id
+  role_definition_name = "Storage Account Contributor"
   principal_id         = azurerm_user_assigned_identity.zenya_sync.principal_id
   principal_type       = "ServicePrincipal"
 }

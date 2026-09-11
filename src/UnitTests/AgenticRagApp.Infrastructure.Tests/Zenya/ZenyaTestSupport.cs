@@ -81,7 +81,7 @@ internal static class ZenyaTestData
 
     public const string PdfMetadataJson = """
         { "document_id": "doc-1", "version": 3, "revision": 1, "title": "Hygiënecode",
-          "type": "file", "document_type": "Protocol", "mime_type": "application/pdf",
+          "type": "file", "document_type": { "id": 3, "name": "Protocol" }, "state": "published", "mime_type": "application/pdf",
           "download_binary_extension": "pdf", "download_as_pdf": true,
           "can_download_binary": true, "can_download_content": false,
           "quick_code": "HYG-001", "active": true, "last_modified_datetime": "20260315101500" }

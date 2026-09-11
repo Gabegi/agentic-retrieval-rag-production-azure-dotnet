@@ -45,6 +45,8 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.*" />
+    <!-- Generic host for the ZenyaSync console tool (Tools.ZenyaSync); brings console logging + env config. -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.*" />
