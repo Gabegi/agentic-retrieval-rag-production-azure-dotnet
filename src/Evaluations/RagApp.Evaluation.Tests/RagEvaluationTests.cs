@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure;
@@ -21,15 +22,16 @@ using AgenticRagApp.Querying.Services;
 using RagApp.Evaluation.Tests.Evaluation;
 using RagApp.Evaluation.Tests.Models;
 
-// Each golden-query test fires 1 real RAG query plus up to 5 concurrent judge calls
-// (RagEvaluator.cs). All of that is I/O-bound (waiting on Search/OpenAI latency, not CPU),
-// so more workers should cut wall-clock time close to linearly until a deployment's TPM or
-// Search's query rate is actually saturated - not before. Raised 5->10 (2026-07-30) now that
-// querying/evaluation both sit at 200K TPM with most of that unused (ai_deployments.tf).
-// Leans entirely on JudgeAsync's 429 retry/back-off (RagEvaluator.cs/RefusalEvaluator.cs) and
-// the per-call CallTimeout to absorb throttling/stalls rather than avoiding them. Revisit
-// (lower Workers, or add back staggering) after watching a real run for retry-exhaustion
-// failures or a jump in the 429 rate.
+// This attribute does NOT parallelize the golden rows, and never did - RunAllGoldenQueriesAsync
+// below is what runs them concurrently (see EvalConcurrency). MethodLevel scope schedules whole
+// test METHODS across workers, and the 56 golden rows are data rows of ONE [DynamicData] method,
+// so they all stay on a single worker and execute one after another regardless of Workers.
+// Measured on run 2026-09-11: 42 of 56 rows in 28 minutes at ~40s each, every gap between
+// consecutive progress lines equal to that row's own reported latency (effective concurrency
+// ~0.9), and the pipeline step's 30-minute timeout killed the remaining 14 rows.
+//
+// Kept at 10 because it still applies to what it can schedule - GoldenQuestionsDatasetTests'
+// methods, and the 56 assertion-only EvaluateGoldenQuery cases, all of which are instant.
 [assembly: Parallelize(Workers = 10, Scope = ExecutionScope.MethodLevel)]
 
 namespace RagApp.Evaluation.Tests;
@@ -40,6 +42,37 @@ public class RagEvaluationTests
     private static RagEvaluator _evaluator = null!;
     private static IRagQueryService _ragService = null!;
     private static EvalResultWriter _writer = null!;
+
+    // How many golden rows are in flight at once in RunAllGoldenQueriesAsync.
+    //
+    // Each one fires 1 real RAG query plus up to 5 concurrent judge calls (RagEvaluator.cs).
+    // All of that is I/O-bound (waiting on Search/OpenAI latency, not CPU), so this cuts
+    // wall-clock time close to linearly until a deployment's TPM is actually saturated - which
+    // is exactly what 10 did.
+    //
+    // 10 -> 4 (2026-09-14). 10 was chosen on 2026-07-30 against an [assembly: Parallelize] that
+    // was not in fact running the rows concurrently (see the attribute's comment); the fan-out
+    // in RunAllGoldenQueriesAsync made it real, and the first run at a true 10 lost 17 of 56
+    // rows to "Your requests to gpt-5.4 for gpt-4.1-query in westeurope have exceeded rate
+    // limit" (429) raised by the knowledge base's own retrieve call. Measured on that run
+    // (39 completed rows): 18.9 K tokens per row billed to the query deployment - EvalRow's
+    // in+out is KnowledgeBaseActivitySummary's sum over the agentic retrieval's model calls,
+    // not just the final answer - at 29.6 s per row, so ~38 K TPM per concurrent row.
+    // `querying` is 200 K TPM (ai_deployments.tf): 10 rows demand ~382 K TPM, 1.9x the
+    // deployment, and 4 rows demand ~153 K, 77% of it, leaving the remainder for the retries
+    // underneath rather than spending the whole budget on first attempts.
+    //
+    // The cost is wall clock: ~56/4 x 30 s = ~7 min of scoring against the step's 30-minute
+    // timeout (pipeline.yml), so there is room. Raising this again is a change to make together
+    // with `querying`'s capacity - the gpt-5.4 pool has ~300 K TPM unallocated - not on its own.
+    // Throttles are absorbed by RagCallAsync (the app call) and JudgeAsync (the judges) in
+    // RagEvaluator.cs, but retrying cannot create quota that was never there.
+    private const int EvalConcurrency = 4;
+
+    // Every golden row, scored once by RunAllGoldenQueriesAsync and asserted one row per test
+    // method below. Keyed by TestQuery.Name, which GoldenQuestionsDatasetTests.ScenarioNames_AreUnique
+    // guarantees is unique.
+    private static IReadOnlyDictionary<string, EvalRow> _rows = new Dictionary<string, EvalRow>();
 
     public TestContext TestContext { get; set; } = null!;
 
@@ -122,7 +155,7 @@ public class RagEvaluationTests
         // scores at the floor, which reads as a quality regression rather than what it
         // actually is: the eval isn't testing anything real. This exact failure mode happened
         // 2026-07-30 - indexing had been failing on every run ('id' not sortable, a schema-drift
-        // issue only a restore fixes - see docs/260730) so the index was empty/stale and every
+        // issue only a restore fixes - see docs/2607/260730) so the index was empty/stale and every
         // golden query came back empty, which the eval run reported as passing quality checks.
         var docCount = await WaitForIndexToSettleAsync(searchClient);
         Assert.IsTrue(docCount > 0,
@@ -149,7 +182,87 @@ public class RagEvaluationTests
         _writer = new EvalResultWriter(ResultsFilePath);
 
         await VerifyKnowledgeBaseAnswersAsync(config);
+
+        // The suite's actual work, run here rather than inside the test method, so it can run
+        // EvalConcurrency rows at a time instead of one - see RunAllGoldenQueriesAsync.
+        _rows = await RunAllGoldenQueriesAsync(LoadFile(GoldenQueriesPath));
     }
+
+    /// <summary>
+    /// Scores every golden row against the app and the judges, <see cref="EvalConcurrency"/> at a
+    /// time, and returns the rows keyed by scenario name.
+    /// </summary>
+    /// <remarks>
+    /// This exists because MSTest will not do it. The suite is one [DynamicData] test method, and
+    /// MSTest's MethodLevel parallelism schedules methods, not the data rows of a method - so
+    /// [assembly: Parallelize(Workers = 10)] left the rows running strictly one after another
+    /// (see the comment on that attribute for the measurement). Fanning out here is independent
+    /// of the test framework's scheduler, so the concurrency is the one thing it claims to be.
+    ///
+    /// Rows are written to the results file and the progress file as each one lands, not in a
+    /// batch at the end, so a run that is cancelled or times out still leaves every row it
+    /// finished - the pipeline's summary/upload steps run on succeededOrFailed() precisely to
+    /// salvage those.
+    /// </remarks>
+    private static async Task<IReadOnlyDictionary<string, EvalRow>> RunAllGoldenQueriesAsync(
+        IReadOnlyList<TestQuery> queries)
+    {
+        Console.WriteLine($"Scoring {queries.Count} golden rows, {EvalConcurrency} at a time...");
+
+        var rows = new ConcurrentDictionary<string, EvalRow>();
+        var gate = new SemaphoreSlim(EvalConcurrency, EvalConcurrency);
+        var completed = 0;
+
+        await Task.WhenAll(queries.Select(async query =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                // RunAsync never throws - every failure comes back as a row with Succeeded=false
+                // and Error set (its catch-all). That matters more here than it did in the test
+                // method: an exception escaping this loop would fail ClassInitialize and take
+                // every row's result with it, not just this one.
+                var row = await _evaluator.RunAsync(query, (q, ct) => _ragService.AskAsync(q, ct));
+                rows[query.Name] = row;
+
+                try
+                {
+                    await _writer.WriteAsync(row);
+                }
+                catch (Exception ex)
+                {
+                    // Persistence must never cost a scored row. A run on 2026-08-06 reported 79
+                    // quality regressions when the only thing that had failed was the write
+                    // (EvalResultWriter's remarks); the write is a local append now, but it
+                    // happens inside ClassInitialize, where throwing would fail the whole class.
+                    Console.WriteLine(
+                        $"[eval] WARNING: could not persist '{query.Name}' to the results file: {ex.Message}");
+                }
+
+                // Progress lines interleave now that rows overlap, so each carries its own
+                // position in the run - the pipeline tails this file as the suite's live log.
+                var summary = $"({Interlocked.Increment(ref completed)}/{queries.Count}) {Describe(row)}";
+                Console.WriteLine(summary);
+                AppendProgress(summary);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }));
+
+        return rows;
+    }
+
+    private static string Describe(EvalRow row) =>
+        $"[{row.ScenarioName}] ({row.Type}) G={row.Groundedness:F1} R={row.Relevance:F1} C={row.Coherence:F1} Eq={row.Equivalence:F1} " +
+        $"Ret={row.Retrieval:F1} F1={row.F1:F2} Cite={row.CitationMatch:F2} Refusal={row.RefusalScore:F1}  " +
+        // The agentic signal, on the live line rather than only in the JSONL: cap/subq
+        // says whether this question was even given the chance to benefit from planning
+        // (subq < need means it was not), and docs says how many documents the answer
+        // ended up standing on.
+        $"cap={row.Capability} subq={row.SubQueryCount}/{row.MinSubQueries} docs={row.DistinctDocumentsCited}  " +
+        $"{row.LatencyMs}ms  ${row.CostUsd:F4}  in={row.InputTokens} out={row.OutputTokens} ctx={row.ContextTokens}  ok={row.Succeeded}";
 
     // The knowledge source and base are pushed from THIS build on every run (the two
     // CreateOrUpdate calls above), so the suite always scores the definitions the code
@@ -318,25 +431,30 @@ public class RagEvaluationTests
             await Task.Delay(IndexSettleInterval);
         }
     }
+    // One test case per golden row, exactly as before - what changed is that the row was
+    // already scored by RunAllGoldenQueriesAsync (concurrently, with the other 55) and this
+    // only reads the verdict. The .trx therefore still carries a pass/fail/inconclusive per
+    // scenario; the per-test duration reported by the runner no longer means anything, since
+    // the call it used to time happened in ClassInitialize. The real latency is on the row
+    // (LatencyMs) and on the progress line.
     [TestMethod]
     [TestCategory("golden")]
     [DynamicData(nameof(GoldenQueries))]
-    public async Task EvaluateGoldenQuery(TestQuery testQuery)
+    public void EvaluateGoldenQuery(TestQuery testQuery)
     {
-        var row = await _evaluator.RunAsync(testQuery, (q, ct) => _ragService.AskAsync(q, ct));
-        await _writer.WriteAsync(row);
+        if (!_rows.TryGetValue(testQuery.Name, out var row))
+        {
+            // Reachable only if the run was cut short before this row was scored (a cancelled
+            // or timed-out step), or if two rows share a Name - which
+            // GoldenQuestionsDatasetTests.ScenarioNames_AreUnique fails on separately.
+            Assert.Fail(
+                $"No eval result was produced for '{testQuery.Name}'. The suite scores every row in " +
+                "ClassInitialize, so this means the run was cut short before reaching this one (check " +
+                "the step's timeout and the last progress line) rather than that the query failed.");
+            return;
+        }
 
-        var summary =
-            $"[{row.ScenarioName}] ({row.Type}) G={row.Groundedness:F1} R={row.Relevance:F1} C={row.Coherence:F1} Eq={row.Equivalence:F1} " +
-            $"Ret={row.Retrieval:F1} F1={row.F1:F2} Cite={row.CitationMatch:F2} Refusal={row.RefusalScore:F1}  " +
-            // The agentic signal, on the live line rather than only in the JSONL: cap/subq
-            // says whether this question was even given the chance to benefit from planning
-            // (subq < need means it was not), and docs says how many documents the answer
-            // ended up standing on.
-            $"cap={row.Capability} subq={row.SubQueryCount}/{row.MinSubQueries} docs={row.DistinctDocumentsCited}  " +
-            $"{row.LatencyMs}ms  ${row.CostUsd:F4}  in={row.InputTokens} out={row.OutputTokens} ctx={row.ContextTokens}  ok={row.Succeeded}";
-        Console.WriteLine(summary);
-        AppendProgress(summary);
+        Console.WriteLine(Describe(row));
 
         // A failed row whose error is an Azure OpenAI content-filter block (400) isn't a real
         // pass or fail - it's the platform rejecting the call before the app/judge could act,
@@ -381,14 +499,13 @@ public class RagEvaluationTests
         // shows every miss; the suite just doesn't fail the build over it anymore.
     }
 
-    public static IEnumerable<object[]> GoldenQueries
-    {
-        get
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, "testdata", "golden-questions.json");
-            return LoadFile(path).Select(q => new object[] { q });
-        }
-    }
+    private static string GoldenQueriesPath =>
+        Path.Combine(AppContext.BaseDirectory, "testdata", "golden-questions.json");
+
+    // Feeds [DynamicData] - i.e. which test cases exist. ClassInit reads the same file through
+    // LoadFile(GoldenQueriesPath) to decide which rows to score, so the two can't disagree.
+    public static IEnumerable<object[]> GoldenQueries =>
+        LoadFile(GoldenQueriesPath).Select(q => new object[] { q });
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

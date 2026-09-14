@@ -85,10 +85,9 @@ public class ChunkingServiceTests
             new Mock<IPipelineArtifactWriter>().Object);
     }
 
-    // The two routes HeadingSectionGate dispatches onto, exactly as DI wires them. Both are
-    // empty skeletons until step 3 of docs/2608/260818/chunking-service-refactor.md, so
-    // tokenCeiling has nothing to configure yet - it is kept because every test that sets it is
-    // asserting cutting behaviour that comes back with the strategies.
+    // The two routes ChunkingService's heading gate dispatches onto, exactly as DI wires them.
+    // tokenCeiling is accepted and unused - the ceiling is ChunkingBudget.TokenCeiling, a
+    // constant - and is kept only because every test still passes it.
     private static ChunkingService BuildChunkingService(
         int                      tokenCeiling,
         DocumentIdentityResolver resolver,

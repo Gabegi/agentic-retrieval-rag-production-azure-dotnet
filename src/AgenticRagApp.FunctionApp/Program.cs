@@ -43,7 +43,8 @@ var host = new HostBuilder()
     .ConfigureServices((ctx, services) =>
     {
         // Config validation, IndexerConfig, credential, and every Azure SDK client this
-        // app talks to (Blob, Search, OpenAI, Document Intelligence) are registered here.
+        // app talks to (Blob, Search, OpenAI, Content Understanding, Content Safety, AI Language)
+        // are registered here.
         var config = services.AddAgenticRagAppInfrastructure(ctx.Configuration);
 
         var appInsightsConnectionString = ctx.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]!;
@@ -59,7 +60,7 @@ var host = new HostBuilder()
                 tracing
                     .AddSource("Microsoft.Extensions.AI")
                     .AddSource(Instrumentation.ActivitySourceName)
-                    // Azure SDK clients (Blob, Search, OpenAI, Document Intelligence) emit their
+                    // Azure SDK clients (Blob, Search, OpenAI, Content Understanding) emit their
                     // own dependency spans under this source - without it, HTTP calls to those
                     // services (including failures like the 403s) never reach App Insights.
                     .AddSource("Azure.*")
@@ -107,7 +108,7 @@ var host = new HostBuilder()
                 sp.GetRequiredService<ILogger<SnapshotService>>()));
 
         // Index size telemetry + drift-check, source-scoped (see IIndexStatsMonitor) — one
-        // instance shared by PDF's and CSV's own UploadService.
+        // instance, called by UploadService after each upload.
         services.AddSingleton<IIndexStatsMonitor, IndexStatsMonitor>();
 
         // Querying — reads the one shared Search index, doc-type-agnostic. See

@@ -89,11 +89,8 @@ environment variable.
 | `OPENAI_MINI_DEPLOYMENT` | `gpt-4.1-mini` | The **deployment name** Content Understanding's prebuilt analyzer resolves its completion model against (serves gpt-5.4-mini since 2026-08-27; the name was kept stable). Used only by `ContentUnderstandingDefaultsSetup` |
 | `RunAnalysis__Enabled` | `true` | Master switch for the per-run `run-analysis` blob |
 | `RunAnalysis__CalibrationMode` | `true` | While true, flags with uncalibrated thresholds render their value but do not fire |
+| `GUARDS_LOG_ONLY` | `true` | Query-time guards (prompt injection, PII) log but do not block. Only an explicit `false` makes them block; anything unparsable counts as absent. `"true"` in `function_app.tf` — see the root README's [Known gaps](ReadMe.md#known-gaps-as-of-2026-09-11) |
 | `WEBSITE_TIME_ZONE` | — | Set to `W. Europe Standard Time` in `function_app.tf` so the 17:00 timer is Dutch wall-clock time |
-
-Not a setting: `IndexerConfig.GuardsLogOnly` (guards log but never block) is hard-coded `true`
-and is not read from `GUARDS_LOG_ONLY` despite the comment on the property — see the root
-README's [Known gaps](ReadMe.md#known-gaps-as-of-2026-09-11).
 
 ### Getting dev values
 
@@ -104,10 +101,9 @@ off the running app:
 az functionapp config appsettings list -g con-cap-data-dev-we-001 -n con-func-idx-cap-dev-we-001 -o table
 ```
 
-`local.settings.json` is **not** in `.gitignore` — keep it out of commits. The two
-`appsettings*.json` files in `AgenticRagApp.FunctionApp` are not added as a configuration
-source by `Program.cs` (it uses `new HostBuilder().ConfigureFunctionsWorkerDefaults()` with no
-`ConfigureAppConfiguration`); treat them as reference only.
+`local.settings.json` is gitignored. There is no `appsettings.json`: `Program.cs` uses
+`new HostBuilder().ConfigureFunctionsWorkerDefaults()` with no `ConfigureAppConfiguration`, so
+environment variables / `local.settings.json` are the only configuration source.
 
 ## Running the Functions host
 
@@ -127,7 +123,7 @@ It reads `ZENYA_BASE_URL`, `ZENYA_CLIENT_ID`, `ZENYA_ENTRA_SCOPE` (or `ZENYA_CLI
 `STORAGE_ACCOUNT_URL`, `STORAGE_CONTAINER` and `ZENYA_SYNC_DRY_RUN` (default `true`) from the
 environment. Zenya validates the caller's Entra token by tenant + **appid** of the trusted
 managed identity, so a developer's `az login` token is rejected (exit code 2). Run it through
-`.pipelines/base/zenya-document-sync.yml` (`runSync=true`, `dryRun=true` first). Locally the
+`.pipelines/base/zenya-document-sync.yml` (`dryRun` defaults to true — leave it on for the first run). Locally the
 tool is useful for its 14 unit tests (`AgenticRagApp.Infrastructure.Tests`), not for a live run.
 
 ## Sample data

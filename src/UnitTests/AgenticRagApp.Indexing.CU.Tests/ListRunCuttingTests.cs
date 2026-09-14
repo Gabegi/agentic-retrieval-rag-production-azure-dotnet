@@ -46,8 +46,9 @@ public class ListRunCuttingTests
         // form made one such line fail lines.All(IsItem), dropping the WHOLE block to the prose
         // ladder and losing whole-item cutting for every other item in the run.
         //
-        // PdfCleaner.OrphanedListMarker now rejoins these upstream, so this is the second line
-        // of defence rather than the fix.
+        // The DI-era PdfCleaner.OrphanedListMarker used to rejoin these upstream; the CU markdown
+        // is taken verbatim, so a stray marker can reach the detector and this exception is the
+        // only line of defence now (see ListRunDetector).
         Assert.IsTrue(ListRunDetector.IsItem("1."));
         Assert.IsTrue(ListRunDetector.IsItem("  3)"));
         Assert.IsTrue(ListRunDetector.IsListRun(Block("1.\n2. tweede regel", BlockKind.ListRun)));

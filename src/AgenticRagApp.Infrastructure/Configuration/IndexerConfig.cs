@@ -25,7 +25,7 @@ public class IndexerConfig
     public string StorageContainer             { get; init; } = "protocols";
     public string OpenAiExtractionDeployment    { get; init; } = "gpt-41-extraction";
     // Optional here, but required by the indexing side - the Content Understanding client is
-    // only registered when set, and AgenticRagApp.Indexing.CU's AddPdfIndexing throws without
+    // only registered when set, and AgenticRagApp.Indexing.CU's AddIndexing throws without
     // it. Optional at this level because the query-side host does no extraction and should not
     // need an extraction endpoint to start.
     //
@@ -51,8 +51,8 @@ public class IndexerConfig
     public string OpenAiMiniDeployment         { get; init; } = "gpt-4.1-mini";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
 
-    // TEMPORARY - set true 2026-08-12 by request, to be revisited once eval shows how often
-    // each guard actually fires (docs/2608/260812/guards-review.md).
+    // Log-only mode for the query-time guards. Set true on 2026-08-12 by request, to be revisited
+    // once eval shows how often each guard actually fires (docs/2608/260812/guards-review.md).
     //
     // true  = every guard in AgenticRagQueryService still runs and still logs, but no longer
     //         blocks. The user gets the knowledge base's answer regardless.
@@ -61,6 +61,9 @@ public class IndexerConfig
     // While this is true the app does NOT enforce acceptance criteria 4 (prompt injection) or
     // 5 (no personal data in question or answer). Those criteria exist precisely because model
     // instructions can be bypassed, so nothing else covers them - see AcceptatieCriteria.md:41-45.
-    // Set GUARDS_LOG_ONLY=false to restore enforcement; no code change needed.
+    //
+    // Read from the GUARDS_LOG_ONLY app setting (ServiceCollectionExtensions, wired 2026-09-11;
+    // set in infra/function_app.tf). Absent = true. Set it to "false" to restore enforcement -
+    // no code change needed.
     public bool   GuardsLogOnly                { get; init; } = true;
 }

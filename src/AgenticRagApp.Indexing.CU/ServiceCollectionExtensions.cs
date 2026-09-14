@@ -13,9 +13,9 @@ using AgenticRagApp.Observability.Reports;
 
 namespace AgenticRagApp.Indexing.CU;
 
-// All of PDF's DI registrations live here, self-contained, so the Functions host
-// (AgenticRagApp.FunctionApp/Program.cs) only ever needs one line —
-// services.AddPdfIndexing() — to wire the whole pipeline in. Assumes the host has
+// All of the indexing pipeline's DI registrations live here, self-contained, so the Functions
+// host (AgenticRagApp.FunctionApp/Program.cs) only ever needs one line —
+// services.AddIndexing(config) — to wire the whole pipeline in. Assumes the host has
 // already called AgenticRagApp.Infrastructure's AddAgenticRagAppInfrastructure()
 // (BlobServiceClient, IndexerConfig, SearchClient/SearchIndexClient, the
 // "pipeline-temp" keyed BlobContainerClient, IEmbeddingGenerator<string,
@@ -23,17 +23,14 @@ namespace AgenticRagApp.Indexing.CU;
 public static class ServiceCollectionExtensions
 {
     // Takes the IndexerConfig the host already built via AddAgenticRagAppInfrastructure()
-    // so the Document Intelligence conditional registration below doesn't need to
-    // resolve a temporary provider mid-registration.
+    // so the CONTENT_UNDERSTANDING_ENDPOINT check below doesn't need to resolve a
+    // temporary provider mid-registration.
     public static IServiceCollection AddIndexing(this IServiceCollection services, IndexerConfig config)
     {
-        // Two-axis chunking (docs/2608/260812/chunking_flow_summary.md).
-        //
-        // Axis 2 - the leaf splitter, chosen per block inside a section.
-
-        // Axis 1 - routing. HeadingSectionGate decides each document's route from its declared
-        // structure (a static read, nothing to register); ChunkingService dispatches that route
-        // onto one of two real strategies in Services/Chunking/ChunkingStrategies.
+        // Two-route chunking (docs/2608/260817/chunking-two-strategies.md, D113). ChunkingService's
+        // heading gate decides each document's route from its declared structure (a static read,
+        // nothing to register) and dispatches onto one of the two strategies in
+        // Services/Chunking/ChunkingStrategies.
         services.AddSingleton<DeclaredBoundaryStrategy>();
         services.AddSingleton<RecursiveStrategy>();
 
@@ -105,8 +102,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEmbeddingService,       EmbeddingService>();
         services.AddSingleton<IUploadService,          UploadService>();
         // IIndexService/IIndexDocumentService are registered once by
-        // AgenticRagApp.Infrastructure's AddAgenticRagAppInfrastructure() — shared with
-        // CSV, since both write into the same Search index.
+        // AgenticRagApp.Infrastructure's AddAgenticRagAppInfrastructure() — they are Search
+        // clients, not pipeline stages, and this project only consumes them.
 
         // Content-hash-keyed embedding vector cache — "pipeline-artifacts" container,
         // under its own vector-cache/ path prefix (see VectorCache).

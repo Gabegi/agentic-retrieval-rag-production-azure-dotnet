@@ -21,7 +21,7 @@ namespace AgenticRagApp.Indexing.CU.Models;
 //
 // Implements ISnapshotSource/IChunkStatsSource so Observability's SnapshotService and
 // ChunkingStageMetrics.Compute work generically, without referencing this (or any other
-// doc-type's) chunk type - see docs/260721 for why.
+// doc-type's) chunk type - see docs/2607/260721 for why.
 //
 // Mutable class, not a record: ContentVector is assigned onto an already-built chunk after the
 // embedding call, and step 4 writes metadata onto a chunk step 3 already produced.

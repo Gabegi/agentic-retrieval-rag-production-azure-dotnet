@@ -7,7 +7,8 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //
 // The rule is dominance, not count: at least half the document's characters live in tables. A
 // count is absolute where the property is relative - 3 tables in 10,000 pages is a prose ocean
-// with three islands, exactly the mistake SectionChecker's density rule fixes for headings.
+// with three islands, exactly the mistake the heading gate's density rule (ChunkingService)
+// avoids for headings.
 //
 // MEASURED OFF THE TYPED SPANS since 2026-09-09: the characters Content Understanding itself
 // says are tables (TableInfo.Offset/Length), which are the same characters BlockParser turns into

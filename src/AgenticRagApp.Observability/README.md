@@ -28,8 +28,7 @@ RunAnalysis/
 Models/
   PdfIndexRunReport, PdfRestoreRunReport, QueryRunReport, RunIdentity,
   ExtractionStageMetrics, ChunkingStageMetrics, EmbedUploadStageMetrics, ChunkSample
-  CsvIndexRunReport               dormant — the CSV pipeline is archived; kept only so old reports deserialize
-ReportEmail/IReportEmailSender.cs unused seam left from the removed email transport (no implementation, no consumer)
+  CsvIndexRunReport               dormant — the CSV pipeline is archived; no producer today
 ```
 
 The activity that ties run analysis together (`SaveRunAnalysisActivity`) lives in

@@ -45,7 +45,7 @@ public sealed record ChunkingStageMetrics(
     // Computed by the caller, not by Compute: residue is dropped between the strategy and the
     // metadata stage, so by the time the chunk list reaches here the dropped ones are already
     // gone and their count cannot be recovered from it. Optional for exactly that reason - a
-    // caller with no residue rule (CSV) leaves it at 0 and says nothing false.
+    // caller with no residue rule leaves it at 0 and says nothing false.
     //
     // It exists on this type rather than only on the run report because this is the value the
     // Durable activity returns: without it, the orchestrator cannot see that the corpus shed
@@ -73,7 +73,7 @@ public sealed record ChunkingStageMetrics(
     // to act on. Empty is the healthy state.
     //
     // Init property rather than a positional parameter, matching ExtractionStageMetrics' billed
-    // fields: a caller with no identity concept (CSV) never sets it and says nothing false.
+    // fields: a caller with no identity concept never sets it and says nothing false.
     public IReadOnlyList<string> UntaggedFamilyMemberIds { get; init; } = [];
 
     // Kept small deliberately - see ChunkSample's comment on the Durable row limit.
@@ -120,9 +120,9 @@ public sealed record ChunkingStageMetrics(
         // hash so the excerpt is available without a second pass; the hash is computed once,
         // only for the capped set actually reported.
         //
-        // StatsText, not Content: for CSV they are the same string, and for PDF the difference is
-        // the prefix, without which two sections with identical bodies under different headings
-        // count as duplicates of each other. See IChunkStatsSource.StatsText.
+        // StatsText, not Content: for ChunkObject the difference is the embedded prefix, without
+        // which two sections with identical bodies under different headings count as duplicates
+        // of each other. See IChunkStatsSource.StatsText.
         var byContent    = new Dictionary<string, (int Count, T First)>(StringComparer.Ordinal);
         int duplicates = 0, coherent = 0, headings = 0;
         int band0 = 0, band1 = 0, band2 = 0, band3 = 0;

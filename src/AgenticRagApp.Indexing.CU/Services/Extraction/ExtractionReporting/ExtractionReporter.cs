@@ -19,8 +19,8 @@ public sealed class ExtractionReporter
     private const string FailureReportName   = "pdf-failure";
     private const string RawCaptureName      = "cu-raw-response";
 
-    // See CsvExtractionOrchestrator.MaxLoggedIssues - same rationale (log volume/cost cap,
-    // separate from the returned-issues cap, which exists for Durable's row-size limit).
+    // Log volume/cost cap - separate from ExtractionOutputBuilder.MaxReturnedIssues, which caps
+    // the issues RETURNED across the activity boundary for Durable's row-size limit.
     private const int MaxLoggedIssues = 100;
 
     private readonly IRunReportWriter            _reportWriter;

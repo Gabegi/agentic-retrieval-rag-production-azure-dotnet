@@ -70,9 +70,9 @@ public class KnowledgeService : IKnowledgeService
                     new SearchIndexFieldReference("page_start"),
                     new SearchIndexFieldReference("page_end"),
                     new SearchIndexFieldReference("child_index"),
-                    // Native PDF metadata (PdfNativeMetadataExtractor) — page_count for
-                    // "page X of Y" citations, created_at/mod_date so a citation can show
-                    // how current a policy is. Null for CSV rows.
+                    // page_count (distinct Content Understanding page spans) for "page X of Y"
+                    // citations; created_at/mod_date so a citation could show how current a
+                    // policy is - declared but currently always null, see IndexService's header.
                     new SearchIndexFieldReference("page_count"),
                     new SearchIndexFieldReference("created_at"),
                     new SearchIndexFieldReference("mod_date"),

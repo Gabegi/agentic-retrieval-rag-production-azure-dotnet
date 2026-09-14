@@ -7,9 +7,8 @@ public sealed record Citation(
     string? Title,
     string? QuickCode,
     string? RelativePath,
-    // Native PDF metadata (PdfNativeMetadataExtractor) - null for CSV citations. ModDate
-    // is the real "is this policy current" signal (content last edited), distinct from
-    // any blob re-upload timing.
+    // PageCount / CreatedAt / ModDate come off the index fields of the same name - see
+    // DocumentReferenceBase for what each currently carries (CreatedAt/ModDate: always null).
     int?            Page       = null,
     int?            PageCount  = null,
     DateTimeOffset? CreatedAt  = null,

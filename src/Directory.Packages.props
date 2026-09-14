@@ -56,7 +56,6 @@
     <PackageVersion Include="MSTest.TestFramework" Version="3.*" />
     <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.*" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.*" />
-    <PackageVersion Include="PdfPig" Version="0.1.9" />
     <PackageVersion Include="System.Text.Encoding.CodePages" Version="9.0.*" />
   </ItemGroup>
 </Project>

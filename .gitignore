@@ -69,3 +69,5 @@ comparison-output/
 /.vs
 
 .fake
+# Azure Functions local settings - per-developer endpoints, never committed
+local.settings.json

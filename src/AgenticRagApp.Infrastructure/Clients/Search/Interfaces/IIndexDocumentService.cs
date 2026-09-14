@@ -1,9 +1,10 @@
 namespace AgenticRagApp.Infrastructure.Clients.Search;
 
-// Doc-type-agnostic document-level CRUD against the shared Search index, plus logging.
+// Doc-type-agnostic document-level CRUD against the Search index, plus logging.
 // No Instrumentation/drift-check (that's an Observability concern; see
-// AgenticRagApp.Observability.Reports.IIndexStatsMonitor). One shared instance, injected
-// by both PDF's and CSV's own UploadService — neither owns a copy of this CRUD logic.
+// AgenticRagApp.Observability.Reports.IIndexStatsMonitor). One shared instance — the pipeline
+// services that need it (UploadService, IndexDiffService) inject it rather than owning a copy
+// of this CRUD logic.
 public interface IIndexDocumentService
 {
     // Doc-type-specific mapping (which fields a chunk maps to) happens before documents

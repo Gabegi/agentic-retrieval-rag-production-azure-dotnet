@@ -11,8 +11,9 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // Kept separate from EmbeddingService so the two concerns can evolve independently.
 public class UploadService : IUploadService
 {
-    // Scopes the drift-baseline (IIndexStatsMonitor.RecordAndCheckDriftAsync) to this
-    // doc-type - PDF and CSV must never compare against each other's baseline.
+    // Scopes the drift-baseline (IIndexStatsMonitor.RecordAndCheckDriftAsync) to this doc-type.
+    // Only "pdf" exists today (the CSV pipeline is archived); the scoping stays so a second
+    // source can never compare against this one's baseline.
     private const string Source = "pdf";
 
     private readonly IIndexDocumentService      _indexDocumentService;

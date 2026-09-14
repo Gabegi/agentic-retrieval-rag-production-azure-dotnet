@@ -3,10 +3,10 @@ namespace AgenticRagApp.Observability.Reports;
 // Same composed shape as PdfIndexRunReport, plus three CSV-only fields that always have
 // real values for CSV, unlike PDF where they have no equivalent concept at all.
 //
-// CSV is dormant (see AgenticRagApp.FunctionApp.csproj - the ProjectReference is
-// commented out), so this type was carried across to the composed shape mechanically to
-// keep it compiling, not redesigned. Whether CSV keeps its own report type at all is a
-// question for whenever that pipeline is revived.
+// The CSV pipeline is archived (docs/archive/AgenticRagApp.Indexing.Csv - not in the solution,
+// does not build), so this type was carried across to the composed shape mechanically to keep
+// it compiling, not redesigned. It has no producer today; whether CSV keeps its own report type
+// at all is a question for whenever that pipeline is revived.
 public sealed record CsvIndexRunReport
 {
     public required RunIdentity Run { get; init; }

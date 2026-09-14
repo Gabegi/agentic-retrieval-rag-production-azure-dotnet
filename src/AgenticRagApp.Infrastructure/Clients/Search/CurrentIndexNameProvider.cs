@@ -6,9 +6,9 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 
 public class CurrentIndexNameProvider : ICurrentIndexNameProvider
 {
-    // Not source-scoped like RunReportWriter's "_last-stats-{source}" baselines - PDF and CSV
-    // chunks share the one index (see IndexService's own comment), so there is exactly one
-    // pointer for the whole app, not one per doc-type pipeline.
+    // Not source-scoped like RunReportWriter's "_last-stats-{source}" baselines - every chunk
+    // lands in the one index (see IndexService's own comment), so there is exactly one pointer
+    // for the whole app, not one per doc-type pipeline.
     private const string PointerPath = "indexing/_current-index-name.json";
 
     private readonly IBlobStore          _blobStore;

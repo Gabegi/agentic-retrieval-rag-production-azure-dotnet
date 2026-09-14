@@ -24,7 +24,7 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // Deliberately NOT deriving from ExtractionDocumentBase any more: that base is
 // (SourceId, Ordinal, Content), and Ordinal was the page number. A document has no
 // ordinal, and inheriting one that means nothing is worse than not sharing a base at all.
-// CSV keeps its own row-shaped record.
+// The archived CSV pipeline kept its own row-shaped record.
 public sealed record PdfExtractionDocument(
     // Grouping/chunking boundary - blobName. The chunker never blends across SourceIds.
     string SourceId,
@@ -44,9 +44,11 @@ public sealed record PdfExtractionDocument(
     // stand in and produced "Inleiding" and "Inhoudsopgave" as titles (removed 2026-09-09).
     string Title,
 
-    // Native PDF Info-dictionary facts (PdfNativeMetadataExtractor). ModDate is when the
-    // content was actually last edited - the real "is this policy current" signal, distinct
-    // from LastModifiedDate (blob re-upload timing).
+    // Author/CreatedAt/ModDate are the PDF Info-dictionary facts the PdfPig preflight used to
+    // read; since its removal ExtractionOutputBuilder writes null for all three (Content
+    // Understanding returns no equivalent). ModDate would be the real "is this policy current"
+    // signal, distinct from LastModifiedDate (blob re-upload timing). PageCount is the number
+    // of distinct pages in PageSpans.
     string?         Author,
     DateTimeOffset? CreatedAt,
     DateTimeOffset? ModDate,

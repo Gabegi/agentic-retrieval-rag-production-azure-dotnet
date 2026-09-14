@@ -15,7 +15,7 @@ namespace RagApp.UnitTests.PdfExtraction;
 [TestClass]
 public class ServiceCollectionExtensionsTests
 {
-    // Content Understanding is configured by default here, because AddPdfIndexing now throws
+    // Content Understanding is configured by default here, because AddIndexing now throws
     // without it - every test below needs a viable config, and the throw itself is asserted by
     // its own test rather than by every other one failing.
     private static IndexerConfig Config(string contentUnderstandingEndpoint = "https://cu.example.com") => new()
@@ -38,11 +38,11 @@ public class ServiceCollectionExtensionsTests
     // anything resolved the extractor. There is no second backend now, so an unset
     // endpoint is a deployment error and is reported as one, at registration, naming the setting.
     [TestMethod]
-    public void AddPdfIndexing_ContentUnderstandingNotConfigured_ThrowsNamingTheSetting()
+    public void AddIndexing_ContentUnderstandingNotConfigured_ThrowsNamingTheSetting()
     {
         var services = new ServiceCollection();
 
-        var ex = Assert.ThrowsException<InvalidOperationException>(
+        var ex = Assert.ThrowsExactly<InvalidOperationException>(
             () => services.AddIndexing(Config(contentUnderstandingEndpoint: "")));
 
         StringAssert.Contains(ex.Message, "CONTENT_UNDERSTANDING_ENDPOINT");
@@ -50,9 +50,9 @@ public class ServiceCollectionExtensionsTests
 
     // The analyzer wrapper this used to assert is gone: ExtractionService now calls
     // IContentAnalysisClient directly, and that client is registered by Infrastructure rather than
-    // here. What AddPdfIndexing still owns past the endpoint gate is the extraction stage itself.
+    // here. What AddIndexing still owns past the endpoint gate is the extraction stage itself.
     [TestMethod]
-    public void AddPdfIndexing_ContentUnderstandingConfigured_RegistersTheExtractionStage()
+    public void AddIndexing_ContentUnderstandingConfigured_RegistersTheExtractionStage()
     {
         var services = new ServiceCollection();
 
@@ -62,7 +62,7 @@ public class ServiceCollectionExtensionsTests
     }
 
     [TestMethod]
-    public void AddPdfIndexing_RegistersChunkingServices()
+    public void AddIndexing_RegistersChunkingServices()
     {
         var services = new ServiceCollection();
 
@@ -90,7 +90,7 @@ public class ServiceCollectionExtensionsTests
     // Resolving ChunkingService for real covers DocumentIdentityResolver and IDocumentIdentityStore
     // along with it.
     [TestMethod]
-    public void AddPdfIndexing_ChunkingServiceGraph_IsResolvable()
+    public void AddIndexing_ChunkingServiceGraph_IsResolvable()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -120,7 +120,7 @@ public class ServiceCollectionExtensionsTests
     // not getting a validation stage (2026-09-09, see ExtractionService).
 
     [TestMethod]
-    public void AddPdfIndexing_RegistersDiffEmbedUploadAndRecoveryPipeline()
+    public void AddIndexing_RegistersDiffEmbedUploadAndRecoveryPipeline()
     {
         var services = new ServiceCollection();
 
@@ -135,7 +135,7 @@ public class ServiceCollectionExtensionsTests
     }
 
     [TestMethod]
-    public void AddPdfIndexing_RegistersExtractionServiceViaFactory()
+    public void AddIndexing_RegistersExtractionServiceViaFactory()
     {
         var services = new ServiceCollection();
 
@@ -150,7 +150,7 @@ public class ServiceCollectionExtensionsTests
     }
 
     [TestMethod]
-    public void AddPdfIndexing_ReturnsSameServiceCollectionInstance_ForChaining()
+    public void AddIndexing_ReturnsSameServiceCollectionInstance_ForChaining()
     {
         var services = new ServiceCollection();
 

@@ -31,9 +31,9 @@ public record ExtractionStageMetrics(
 )
 {
     // What this run billed, in the units the service bills in (observability plan 1.5,
-    // 2026-08-26). Init properties rather than positional parameters so the CSV pipeline and
-    // every existing constructor call stay untouched - a source with no analyze call simply
-    // never sets them. Null = no usage was readable (blank), distinct from 0 (billed nothing).
+    // 2026-08-26). Init properties rather than positional parameters so every existing
+    // constructor call stays untouched - a source with no analyze call simply never sets them.
+    // Null = no usage was readable (blank), distinct from 0 (billed nothing).
     // Until these landed, the run totals existed only as a transient log line - the index-run
     // report, the one artifact reviewed after every run, carried no cost at all.
     public long? BilledPagesStandard           { get; init; }

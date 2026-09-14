@@ -2,7 +2,7 @@ using AgenticRagApp.Indexing.CU.Models;
 
 namespace AgenticRagApp.Indexing.CU.Services;
 
-// One strategy per document: the route HeadingSectionGate chose.
+// One strategy per document: the route ChunkingService's heading gate chose.
 //
 // Takes the whole document rather than a string - a boundary-aware strategy needs the headings,
 // the section tree and the page map, none of which fit through Chunk(string).

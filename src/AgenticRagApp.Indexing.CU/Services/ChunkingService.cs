@@ -372,14 +372,13 @@ public class ChunkingService : IChunkingService
     // the 260818 retrieved corpus had a body under 80 chars, and this is what most of them
     // were. Indexed, such a chunk matches the query its heading names and then answers nothing.
     //
-    // NOT LIVE YET, and the flag below is why. The 35 mislabelled salary chunks that verify
-    // TableCaptionSplitter ARE heading-only chunks: drop them first and the "35 -> 0" check
-    // passes whether or not the caption fix actually worked, because the rows it counts were
-    // removed by this rule instead of repaired by that one. Ordering stated in
-    // last-run-fixes.md as "step 9 must not precede step 6".
-    //
-    // Flip to true once a re-index has confirmed 35 -> 0. A field rather than a const so the
-    // disabled branch is not unreachable code in a zero-warning build.
+    // NOT LIVE YET. The flag was held at false so the "35 -> 0" check on the mislabelled salary
+    // chunks - the check that verified TableCaptionSplitter - could not be satisfied by this rule
+    // deleting those rows instead of that fix repairing them (docs/2608/260818/last-run-fixes.md:
+    // "step 9 must not precede step 6"). TableCaptionSplitter was removed on 2026-09-09, so that
+    // sequencing constraint is gone; whether to enable this rule is now an open decision on its
+    // own merits, not a question of ordering. A field rather than a const so the disabled branch
+    // is not unreachable code in a zero-warning build.
     private static readonly bool DropHeadingOnlyChunks = false;
 
     // The floor for what counts as a body UNDER a heading. Higher than

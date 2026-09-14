@@ -47,9 +47,9 @@ public sealed class EvalResultWriter
     {
         var line = JsonSerializer.Serialize(row, SerializerOptions) + "\n";
 
-        // MSTest runs test methods in parallel ([assembly: Parallelize] in
-        // RagEvaluationTests.cs), so appends have to be serialized to keep one
-        // whole JSON object per line.
+        // RagEvaluationTests.RunAllGoldenQueriesAsync scores EvalConcurrency rows at
+        // once and writes each as it lands, so appends have to be serialized to keep
+        // one whole JSON object per line.
         await _gate.WaitAsync(ct);
         try
         {

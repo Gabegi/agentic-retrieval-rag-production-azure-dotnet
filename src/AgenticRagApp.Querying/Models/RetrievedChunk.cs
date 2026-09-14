@@ -6,9 +6,10 @@ public sealed record RetrievedChunk(
     string Id, string DocumentId, int Page, int ChunkIndex,
     string? Title, string? Summary, string Content,
     string? QuickCode = null, string? RelativePath = null,
-    // Native PDF metadata (PdfNativeMetadataExtractor) - null for CSV rows and for
-    // neighbor-expanded chunks (ChunkNeighborExpander doesn't select these, since only
-    // the original matched chunk per document feeds a Citation - see AgenticRagQueryService).
+    // Off the index's page_count / created_at / mod_date (see DocumentReferenceBase for what each
+    // currently carries). Null for neighbor-expanded chunks: ChunkNeighborExpander doesn't select
+    // these, since only the original matched chunk per document feeds a Citation - see
+    // AgenticRagQueryService.
     int? PageCount = null, DateTimeOffset? CreatedAt = null, DateTimeOffset? ModDate = null,
     // The two identity fields the embedded prefix was built from (PrefixBuilder): the heading
     // chain and the sector tag. Null on neighbor-expanded chunks, like the fields above.

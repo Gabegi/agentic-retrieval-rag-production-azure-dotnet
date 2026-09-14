@@ -25,7 +25,8 @@ namespace AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 // account-global state, which is exactly what the read-then-write-if-needed design avoids.
 //
 // Runs under the Function App's managed identity, which already holds "Cognitive Services User"
-// on the account (infra/content_understanding.tf) - no human role assignment or manual PATCH.
+// on the account (infra/function_app.tf, azurerm_role_assignment.func["cognitive_services_user"])
+// - no human role assignment or manual PATCH.
 //
 // Failure here is logged, not thrown: this host also serves the query side, which must not be
 // taken down by a startup blip on an indexing prerequisite. If the mapping really is broken,

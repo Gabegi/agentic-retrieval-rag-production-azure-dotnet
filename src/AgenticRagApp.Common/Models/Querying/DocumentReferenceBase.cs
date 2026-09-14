@@ -14,8 +14,10 @@ public abstract record DocumentReferenceBase(
     string? Title,
     string? QuickCode,
     string? RelativePath,
-    // Native PDF metadata (PdfNativeMetadataExtractor) - null for CSV. ModDate is the
-    // real "is this policy current" signal (content last edited), distinct from any blob
+    // From the index's page_count / created_at / mod_date. PageCount is the number of pages
+    // Content Understanding extracted; CreatedAt/ModDate are declared on the index but currently
+    // always null (their PdfPig-era producer is gone - see IndexService's header). ModDate would
+    // be the real "is this policy current" signal (content last edited), distinct from any blob
     // re-upload timing.
     int?            PageCount = null,
     DateTimeOffset? CreatedAt = null,

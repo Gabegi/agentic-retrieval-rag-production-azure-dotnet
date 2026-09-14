@@ -70,6 +70,9 @@ public static class ServiceCollectionExtensions
             OpenAiEmbeddingModelName     = configuration["OPENAI_EMBEDDING_MODEL_NAME"] ?? "text-embedding-3-large",
             OpenAiMiniDeployment         = configuration["OPENAI_MINI_DEPLOYMENT"] ?? "gpt-4.1-mini",
             OpenAiEmbeddingDimensions    = int.TryParse(configuration["OPENAI_EMBEDDING_DIMENSIONS"], out var dims) ? dims : 3072,
+            // Absent or unparsable = true (log-only), the mode production has run in since
+            // 2026-08-12. Only an explicit "false" makes the guards block - see IndexerConfig.
+            GuardsLogOnly                = !bool.TryParse(configuration["GUARDS_LOG_ONLY"], out var logOnly) || logOnly,
         };
 
         // [Required]-annotated IndexerConfig properties, validated here rather than via the
@@ -132,7 +135,7 @@ public static class ServiceCollectionExtensions
         // Content Understanding - the document extraction backend. Gated on being configured
         // rather than required here, because this assembly is shared with hosts that do no
         // extraction at all (the query side); the indexing side fails fast on the same value in
-        // AgenticRagApp.Indexing.CU's AddPdfIndexing, which is where a missing endpoint is
+        // AgenticRagApp.Indexing.CU's AddIndexing, which is where a missing endpoint is
         // actually a deployment error.
         //
         // Document Intelligence used to sit here under an identical gate. It is gone: the DI
@@ -156,13 +159,13 @@ public static class ServiceCollectionExtensions
                 new ContentUnderstandingClient(new Uri(config.ContentUnderstandingEndpoint), credential));
             services.AddSingleton<IContentAnalysisClient, ContentAnalysisClient>();
             // Written by ContentUnderstandingDefaultsSetup (registered indexing-side, in
-            // AddPdfIndexing), read by the extraction stage into the run report's red flags.
+            // AddIndexing), read by the extraction stage into the run report's red flags.
             services.AddSingleton<ContentUnderstandingDefaultsState>();
         }
 
         // Prompt Shields has no .NET SDK wrapper (see PromptShieldClient's comment), so this
         // is a typed HttpClient instead of an Azure SDK client registration like the others
-        // here. Unlike Document Intelligence above, this one isn't optional - Querying's
+        // here. Unlike Content Understanding above, this one isn't optional - Querying's
         // AgenticRagQueryService requires IPromptInjectionGuard unconditionally.
         services.AddHttpClient<IPromptShieldClient, PromptShieldClient>(client =>
             client.BaseAddress = new Uri(config.ContentSafetyEndpoint));
@@ -191,8 +194,8 @@ public static class ServiceCollectionExtensions
             new DocumentIdentityStore(
                 sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-artifacts")));
 
-        // Shared Search index lifecycle + document CRUD — one instance for both PDF and
-        // CSV, since both write into the same index (see IndexService's own comment).
+        // Search index lifecycle + document CRUD — one instance each; the index schema they
+        // manage is IndexService's (see its header comment).
         services.AddSingleton<IIndexService, IndexService>();
         services.AddSingleton<IIndexDocumentService, IndexDocumentService>();
         services.AddSingleton<IKnowledgeService, KnowledgeService>();

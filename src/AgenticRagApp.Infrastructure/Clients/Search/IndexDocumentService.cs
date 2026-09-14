@@ -91,7 +91,7 @@ public class IndexDocumentService : IIndexDocumentService
     }
 
     // This is the "target" side of ExtractionService's new/updated/skipped diff - the one
-    // thing that decides whether we pay Document Intelligence to (re-)extract a document.
+    // thing that decides whether we pay Content Understanding to (re-)extract a document.
     // A flat Size=1000 with no paging silently truncated this to the first 1000 CHUNKS
     // (not documents), which at real chunk-per-document ratios is reached after a few dozen
     // documents. Everything past that window then looks "not indexed" on every run and is

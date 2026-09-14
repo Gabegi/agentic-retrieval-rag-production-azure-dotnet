@@ -2,9 +2,11 @@ using System.Text.Json.Serialization;
 
 namespace AgenticRagApp.Common.Models;
 
-// Implements IChunkStatsSource so Observability's ChunkingStageMetrics.Compute can work
-// generically without referencing this (or any other doc-type's) chunk type directly -
-// see docs/260721 for why. Not ISnapshotSource - CSV doesn't use the rolling snapshot today.
+// The archived CSV pipeline's chunk shape (docs/archive/AgenticRagApp.Indexing.Csv). No
+// production code constructs it any more; it stays as the second implementation of
+// IChunkStatsSource, so Observability's ChunkingStageMetrics.Compute is exercised generically
+// (AgenticRagApp.Common.Tests) rather than against ChunkObject alone - see docs/2607/260721 for
+// why the interface exists. Not ISnapshotSource - the CSV pipeline never used the rolling snapshot.
 public class ChunkStatsAdapter : IChunkStatsSource
 {
     [JsonPropertyName("id")]
@@ -40,9 +42,9 @@ public class ChunkStatsAdapter : IChunkStatsSource
     [JsonPropertyName("summary")]
     public string? Summary { get; set; }
 
-    // C# names follow IChunk's vocabulary (action-plan.md §4.6); the JSON names stay as
-    // CSV's own schema. PDF and CSV no longer share an index, so CSV's wire format is not
-    // affected by the PDF field rename - only the shared interface it implements is.
+    // C# names follow IChunk's vocabulary (action-plan.md §4.6); the JSON names stay as the CSV
+    // pipeline's own schema. PDF and CSV stopped sharing an index (B2), so the CSV wire format
+    // was not affected by the PDF field rename - only the shared interface it implements was.
     [JsonPropertyName("heading")]
     public string? HeadingText { get; set; }
 
@@ -75,16 +77,16 @@ public class ChunkStatsAdapter : IChunkStatsSource
     [JsonIgnore] public string EmbeddingText =>
         string.IsNullOrWhiteSpace(Summary) ? Content : $"{Summary}\n\n{Content}";
 
-    // IChunkStatsSource.StatsText. CSV has the same split the PDF pipeline does - Content is the
+    // IChunkStatsSource.StatsText. This shape has the same split ChunkObject does - Content is the
     // stored body, EmbeddingText folds in a field that is not in it - so it measures the same
     // side of that split, for the same two reasons: a size band that excludes the summary is not
     // the size that reaches the embedder, and two rows with identical bodies under different
     // summaries are not duplicates of each other, because they do not produce the same vector.
     //
-    // This does move CSV's own historical size bands, which the PDF change was careful not to do.
-    // It is acceptable here and not there: the CSV pipeline has no trigger and no DI registration
-    // in the FunctionApp (see IndexService's header), so there is no live series to break - and
-    // leaving it on Content would have meant indexer.chunk_size_band meaning one thing for PDF
-    // rows and another for CSV rows on a single shared dashboard, which is worse than either.
+    // This did move the CSV pipeline's historical size bands, which the PDF change was careful
+    // not to do. Acceptable here and not there: the CSV pipeline was already archived, so there
+    // was no live series to break - and leaving it on Content would have meant
+    // indexer.chunk_size_band meaning one thing for PDF rows and another for CSV rows on a single
+    // shared dashboard, which is worse than either.
     [JsonIgnore] public string StatsText => EmbeddingText;
 }

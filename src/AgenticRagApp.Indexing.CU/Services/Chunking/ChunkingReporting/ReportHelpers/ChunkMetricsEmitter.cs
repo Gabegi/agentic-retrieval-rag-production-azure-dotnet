@@ -5,16 +5,16 @@ using AgenticRagApp.Observability.Reports;
 namespace AgenticRagApp.Indexing.CU.Services;
 
 // The chunking stage's OpenTelemetry counters. Same instruments, same "strategy" tag and same
-// order as CsvChunkingService.EmitChunkMetrics - the two stages report into one dashboard, so a
-// divergence there reads as a pipeline difference rather than as what it would be.
+// order the dashboards were built on - originally shared with the archived CSV pipeline's
+// EmitChunkMetrics - so a divergence here reads as a pipeline difference rather than as what it
+// would be.
 //
 // The PDF path lost these when EmitChunkMetrics was deleted with the old dispatch machinery,
-// which is why chunk-size distribution and duplicate counts went blank for PDFs while CSV kept
-// reporting them.
+// which is why chunk-size distribution and duplicate counts went blank for PDFs for a while.
 //
-// ONE addition CSV does not have, and it is additive on purpose: the per-chunk instruments carry
-// a second "route" tag. Nothing that filters on "strategy" changes meaning or loses rows because
-// of it - see Emit.
+// ONE addition over that original set, and it is additive on purpose: the per-chunk instruments
+// carry a second "route" tag. Nothing that filters on "strategy" changes meaning or loses rows
+// because of it - see Emit.
 public static class ChunkMetricsEmitter
 {
     // Every instrument keeps "strategy" = stats.Strategy, exactly as before. The per-chunk ones
@@ -24,9 +24,8 @@ public static class ChunkMetricsEmitter
     // way a document went, so on its own it cannot answer "is route 2 producing worse chunks than
     // route 1" - the one question the two-strategy design exists to make askable. But replacing it
     // with the route would silently break every saved query and alert filtering
-    // strategy == "TwoAxisChunking", and would also make "strategy" mean a route for PDF and a
-    // pipeline for CSV on the same shared dashboard. Adding a dimension costs nothing and takes
-    // neither away.
+    // strategy == "TwoAxisChunking", and would change what the tag means from a pipeline to a
+    // route. Adding a dimension costs nothing and takes neither away.
     //
     // The route is already on every chunk as Metadata.Route, so the split is a GroupBy and no
     // change to what ChunkActivity returns. A chunk with no route stamped (metadata never ran)

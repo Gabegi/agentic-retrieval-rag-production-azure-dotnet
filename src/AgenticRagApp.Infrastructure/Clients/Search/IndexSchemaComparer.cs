@@ -9,7 +9,7 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 // build never reaches an existing index, only RecreateIndexAsync does that. Nothing else in
 // the system notices the gap - indexing keeps succeeding, queries keep returning documents,
 // and the only symptom is answers scored against a shape the code stopped declaring. The
-// 2026-07-30 incident ('id' not sortable, docs/260730) was exactly this, and was diagnosed
+// 2026-07-30 incident ('id' not sortable, docs/2607/260730) was exactly this, and was diagnosed
 // from failing indexing runs rather than from anything that compared the two definitions.
 //
 // Deliberately field-level only. Vector-search profiles, semantic configurations, analyzers

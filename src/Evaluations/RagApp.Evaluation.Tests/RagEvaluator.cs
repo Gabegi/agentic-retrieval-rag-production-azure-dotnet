@@ -1,6 +1,7 @@
 using System.ClientModel;
 using System.Diagnostics;
 using System.Text;
+using Azure;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.AI.Evaluation;
 using Microsoft.Extensions.AI.Evaluation.NLP;
@@ -64,7 +65,7 @@ public sealed class RagEvaluator
         var sw = Stopwatch.StartNew();
         try
         {
-            var result = await CallWithTimeoutAsync(t => ragCall(testQuery.Query, t), ct);
+            var result = await RagCallAsync(t => ragCall(testQuery.Query, t), ct);
 
             var costUsd = (result.InputTokens * InputUsdPerMToken + result.OutputTokens * OutputUsdPerMToken) / 1_000_000.0;
 
@@ -317,6 +318,50 @@ public sealed class RagEvaluator
         }
     }
 
+    // Retries the APP call on 429, which until 2026-09-14 nothing did - JudgeAsync covered the
+    // judges and the RAG call went through CallWithTimeoutAsync bare, so a throttled retrieve
+    // came straight back as a failed row ("RAG call failed for '<row>': ... exceeded rate
+    // limit"). That is what cost the 2026-09-14 run 17 of 56 rows.
+    //
+    // The Search SDK does retry 429 itself, and it is not enough: Azure.Core's default is 3
+    // attempts at 0.8 -> 1.6 -> 3.2 s, which is the right order of magnitude for a transient
+    // server error and the wrong one for a per-minute TPM window - all four attempts land
+    // inside the same exhausted minute. This backs off on the scale the limit actually resets
+    // on (4 -> 8 -> 16 -> 32 s), preferring the service's own retry-after header when it sends
+    // one.
+    //
+    // Only throttling is retried. A stuck call still surfaces as one attributable TimeoutException
+    // (CallWithTimeoutAsync) rather than being paid for repeatedly, and a content-filter 400 must
+    // reach RunAsync's catch unretried - for a Refusal row it is the scored outcome.
+    private static async Task<RagQueryResult> RagCallAsync(
+        Func<CancellationToken, Task<RagQueryResult>> call, CancellationToken ct)
+    {
+        const int maxAttempts = 5;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await CallWithTimeoutAsync(call, ct);
+            }
+            catch (Exception ex) when (IsThrottled(ex) && attempt < maxAttempts - 1)
+            {
+                var delay = ParseRetryAfter(ex) ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 2));
+                await Task.Delay(delay, ct);
+            }
+        }
+    }
+
+    // 429 arrives as two different exception types depending on which client raised it: the
+    // knowledge-base retrieve throws Azure.RequestFailedException (the model's throttle passed
+    // through Search, which is the shape the 2026-09-14 failures took), while the guards' and
+    // judges' OpenAI-side calls throw ClientResultException.
+    private static bool IsThrottled(Exception ex) => ex switch
+    {
+        RequestFailedException rfe  => rfe.Status == 429,
+        ClientResultException cre   => cre.Status == 429,
+        _ => false,
+    };
+
     // Races `call` against CallTimeout. A timeout surfaces as TimeoutException, distinct from
     // the caller's own ct being cancelled (propagated as-is, not retried/wrapped) - only a
     // stuck call should be treated as retriable, not a deliberate run cancellation.
@@ -336,15 +381,25 @@ public sealed class RagEvaluator
         }
     }
 
-    private static TimeSpan? ParseRetryAfter(ClientResultException ex)
+    // Takes Exception rather than one SDK's exception type because both throttle shapes reach
+    // it (see IsThrottled): System.ClientModel and Azure.Core expose the same two headers
+    // through different response objects.
+    private static TimeSpan? ParseRetryAfter(Exception ex)
     {
-        var raw = ex.GetRawResponse();
-        if (raw is null) return null;
+        Func<string, string?>? header = ex switch
+        {
+            ClientResultException cre when cre.GetRawResponse() is { } raw =>
+                name => raw.Headers.TryGetValue(name, out var value) ? value : null,
+            RequestFailedException rfe when rfe.GetRawResponse() is { } raw =>
+                name => raw.Headers.TryGetValue(name, out var value) ? value : null,
+            _ => null,
+        };
+        if (header is null) return null;
 
-        if (raw.Headers.TryGetValue("retry-after-ms", out var ms) && double.TryParse(ms, out var msVal))
+        if (double.TryParse(header("retry-after-ms"), out var msVal))
             return TimeSpan.FromMilliseconds(msVal + 250);
 
-        if (raw.Headers.TryGetValue("Retry-After", out var sec) && double.TryParse(sec, out var secVal))
+        if (double.TryParse(header("Retry-After"), out var secVal))
             return TimeSpan.FromSeconds(secVal + 1);
 
         return null;

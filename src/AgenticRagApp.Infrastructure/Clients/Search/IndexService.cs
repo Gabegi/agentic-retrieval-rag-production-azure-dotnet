@@ -23,6 +23,10 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 //                            domain_tag, and it needs a vocabulary nobody has settled yet.
 //   - grain                - stamped, but a constant "child": the parent/document grains it
 //                            distinguishes are not emitted by any route today.
+//   - created_at, mod_date - stamped, but always null: their only producer was the PdfPig
+//                            preflight's read of the PDF Info dictionary, removed with Document
+//                            Intelligence; ExtractionOutputBuilder writes null explicitly and
+//                            Content Understanding returns no equivalent.
 // section_id was on this list and is no longer - ChunkMetadataBuilder produces it.
 // page_extraction_flag left the schema on 2026-09-09: it had been a constant false since the CU
 // switch (CU has no typed picture-only signal), see docs/2609/260909/cu-helpers-review.md. Anything added here should be removed from it the moment that changes,
@@ -165,13 +169,14 @@ public class IndexService : IIndexService
                 new SimpleField("heading_source",     SearchFieldDataType.String)         { IsFilterable = true, IsFacetable = true },
                 // The blob's own storage LastModified.
                 new SimpleField("last_modified_date", SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
-                // PDF-only — the PDF's own native Info-dictionary CreationDate/ModDate
-                // (PdfNativeMetadataExtractor). ModDate is the real "is this policy current"
-                // signal (when the content was actually last edited), distinct from
-                // last_modified_date above (blob re-upload timing). Null for CSV rows.
+                // The PDF's own Info-dictionary CreationDate/ModDate. Declared, currently always
+                // null - see the producer-less list in the header. ModDate would be the real "is
+                // this policy current" signal (when the content was actually last edited),
+                // distinct from last_modified_date above (blob re-upload timing).
                 new SimpleField("created_at",         SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
                 new SimpleField("mod_date",           SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
-                // PDF-only — native page count (PdfNativeMetadataExtractor). Null for CSV rows.
+                // Distinct page numbers in the document's Content Understanding PageSpans
+                // (ExtractionOutputBuilder) - pages actually extracted, not a native PDF count.
                 new SimpleField("page_count",         SearchFieldDataType.Int32)         { IsFilterable = true },
 
                 // ── Pages ──────────────────────────────────────────────────────────────

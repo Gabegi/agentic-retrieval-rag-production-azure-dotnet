@@ -13,8 +13,9 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // and every reader distinguishes them on Ok alone.
 //
 // Content is the analyzer's raw markdown. PageSpans, Structure (headings + boilerplate) and
-// Title are derived from that markdown by MarkdownStructureMapper - one coordinate system, the
-// string chunking cuts. Language is filled by ExtractFileAsync from AI Language, since CU
+// Title are mapped from the typed response by CUHelper, every offset addressing that markdown -
+// one coordinate system, the string chunking cuts. Language is filled by ExtractFileAsync from
+// AI Language, since CU
 // reports none; the DocumentProfile that used to ride here was deleted 2026-09-08 with the
 // routing decisions it fed - see PdfExtractionDocument.
 // Usage is the analysis's billed cost, read off the LRO Operation via GetUsage() and carried

@@ -4,8 +4,8 @@ namespace AgenticRagApp.Observability.Reports;
 // not gated by IRunReportWriter.IsEnabled, since drift dashboards need data everywhere)
 // and flags a run-over-run doc-count swing beyond a threshold versus the last saved
 // baseline for this source, then saves these stats as the new baseline. Source-scoped
-// (IRunReportWriter.GetLastIndexStatsAsync/SaveLastIndexStatsAsync) so PDF and CSV never
-// compare against each other's baseline. One shared instance — each doc-type's own
+// (IRunReportWriter.GetLastIndexStatsAsync/SaveLastIndexStatsAsync) so two sources can never
+// compare against each other's baseline - only "pdf" exists today. One shared instance —
 // UploadService calls this after Infrastructure's IIndexDocumentService.GetStatisticsAsync,
 // instead of owning its own copy of this comparison logic.
 public interface IIndexStatsMonitor

@@ -6,8 +6,8 @@ public sealed record PdfExtractionOutput(IReadOnlyList<PdfExtractionDocument> Do
 {
     // What the extraction service says this run actually consumed, summed from Content
     // Understanding's own per-document usage. Carried on this record rather than
-    // ExtractionOutputBase because it is specific to this backend - the CSV pipeline has no
-    // analyze call and no usage to report.
+    // ExtractionOutputBase because it is specific to this backend - a source with no analyze
+    // call (the archived CSV pipeline, for one) has no usage to report.
     //
     // Reported in the units the service bills in, not converted to a currency figure: CU meters
     // standard pages and contextualization tokens separately, and the DI-era $0.01-per-page

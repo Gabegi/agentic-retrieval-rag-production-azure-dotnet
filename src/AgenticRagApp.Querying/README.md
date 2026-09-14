@@ -44,11 +44,11 @@ them. **They currently do not block.** `IndexerConfig.GuardsLogOnly` is `true`: 
 fires logs a warning and the knowledge base's answer is returned anyway. The fixed Dutch fallback
 texts (`PiiFallback`, `InjectionFallback`) are only returned when it is `false`.
 
-The property's comment says `GUARDS_LOG_ONLY=false` restores enforcement without a code change,
-but the setting is **not read from configuration** — `GuardsLogOnly` is absent from the
-`IndexerConfig` initializer in `Infrastructure/Clients/ServiceCollectionExtensions.cs`. Flipping
-it is a code change until that is wired. Set 2026-08-12 by request pending eval evidence of how
-often each guard fires: `docs/2608/260812/guards-review.md` (D091), `docs/2608/260814/guards-notes.md` (D108).
+The mode is the `GUARDS_LOG_ONLY` app setting (read in
+`Infrastructure/Clients/ServiceCollectionExtensions.cs`, set to `"true"` in `infra/function_app.tf`);
+absent counts as `true`, and only an explicit `"false"` makes the guards block. Chosen 2026-08-12
+by request pending eval evidence of how often each guard fires: `docs/2608/260812/guards-review.md`
+(D091), `docs/2608/260814/guards-notes.md` (D108).
 
 ## Acceptance criteria
 

@@ -27,7 +27,7 @@ public class EmbeddingService : IEmbeddingService
 
     // Cache reads/writes are just blob GETs/PUTs, not paid API calls - bounded concurrency
     // keeps them off the critical path without hammering the container. Same knob shape as
-    // PdfExtractionOrchestrator.MaxExtractionParallelism.
+    // ExtractionService.MaxExtractionParallelism.
     private const int MaxCacheParallelism = 8;
 
     public EmbeddingService(

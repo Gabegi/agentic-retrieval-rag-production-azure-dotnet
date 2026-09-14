@@ -4,9 +4,9 @@ namespace AgenticRagApp.Indexing.CU.Services;
 
 // Route 2: nothing trustworthy was declared, so compute a hypothesis.
 //
-// Reached when HeadingSectionGate said no. Flat by design: one section, N children, no heading
-// machinery at all. An empty heading list is NORMAL input here, not a defect - it is this
-// route's whole premise.
+// Reached when ChunkingService's heading gate said no. Flat by design: one section, N children,
+// no heading machinery at all. An empty heading list is NORMAL input here, not a defect - it is
+// this route's whole premise.
 //
 // An ORCHESTRATOR, same contract as DeclaredBoundaryStrategy: every step is one call into
 // StrategyHelpers. This class owns the ORDER of the steps and nothing else - no parsing, no

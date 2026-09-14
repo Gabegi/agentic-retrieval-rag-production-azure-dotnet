@@ -13,7 +13,7 @@ namespace RagApp.UnitTests.Indexing;
 // that measurement, and these tests keep the record internally consistent.
 //
 // BE HONEST ABOUT THE FAILURE MODE. The §1 tests read static fixtures, so the only thing that
-// can fail them is an edit to the fixtures - they do NOT guard PdfCleaner or CuOutlineHelper,
+// can fail them is an edit to the fixtures - they do NOT guard CuOutlineHelper,
 // whose raw input (~132 MB of page JSON) is not checked in and cannot be. A regression in the
 // live extraction path shows up in the per-run chunking artifact and the run-log counters
 // (HardCut tripwire, boundary_level, heading counts), not here. What §1 buys is narrower: the

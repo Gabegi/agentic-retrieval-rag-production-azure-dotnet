@@ -118,6 +118,42 @@ public class ServiceCollectionExtensionsTests
         Assert.AreEqual(3072, config.OpenAiEmbeddingDimensions);
     }
 
+    // GUARDS_LOG_ONLY was documented as the switch for guard enforcement long before it was read
+    // from configuration (wired 2026-09-11). Absent keeps the log-only mode production has run in
+    // since 2026-08-12; only an explicit "false" makes the guards block; garbage counts as absent.
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_GuardsLogOnlyAbsent_DefaultsToTrue()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration();
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.IsTrue(config.GuardsLogOnly);
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_GuardsLogOnlyFalse_EnablesEnforcement()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new() { ["GUARDS_LOG_ONLY"] = "false" });
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.IsFalse(config.GuardsLogOnly);
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_GuardsLogOnlyUnparsable_FallsBackToTrue()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new() { ["GUARDS_LOG_ONLY"] = "maybe" });
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.IsTrue(config.GuardsLogOnly);
+    }
+
     [TestMethod]
     public void AddAgenticRagAppInfrastructure_MissingRequiredSettings_ThrowsListingEachMissingKey()
     {

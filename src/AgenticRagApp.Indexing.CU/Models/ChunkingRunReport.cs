@@ -128,7 +128,7 @@ public sealed record DocumentOutcome(
     // same number the 512 ceiling is enforced against, not the prose-derived estimate.
     int      TokenP50           = 0,
     int      TokenP99           = 0,
-    // Above SectionSplitter.DefaultTokenCeiling. Non-zero is not automatically a defect:
+    // Above ChunkingBudget.TokenCeiling. Non-zero is not automatically a defect:
     // DegradedChunks says how many of them were breached deliberately, because the alternative
     // was splitting a table row or separating a value from its label.
     int      ChunksAboveCeiling = 0,
