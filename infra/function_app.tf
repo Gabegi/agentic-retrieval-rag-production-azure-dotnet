@@ -105,7 +105,7 @@ resource "azurerm_windows_function_app" "indexer" {
     "OPENAI_MINI_DEPLOYMENT" = var.openai_mini_deployment
     # Same account as OPENAI_ENDPOINT - Content Understanding is a data-plane path on it, not a
     # separate resource (see the cognitive_services_user grant below). The only extraction-backend
-    # setting since the Document Intelligence path was removed. Required: AddPdfIndexing throws at
+    # setting since the Document Intelligence path was removed. Required: AddIndexing throws at
     # startup without it.
     "CONTENT_UNDERSTANDING_ENDPOINT" = data.azurerm_cognitive_account.foundry.endpoint
     # Same account again: Content Safety (Prompt Shields) and AI Language (PII) both answer on it
@@ -116,6 +116,26 @@ resource "azurerm_windows_function_app" "indexer" {
     "SEARCH_INDEX_NAME"       = var.search_index_name
     "KNOWLEDGE_SOURCE_NAME"   = var.knowledge_source_name
     "KNOWLEDGE_BASE_NAME"     = var.knowledge_base_name
+    # Query-time guards (prompt injection, PII - acceptance criteria 4 and 5) log but do not
+    # block while this is "true", the mode production has run in since 2026-08-12
+    # (docs/2608/260812/guards-review.md). Read into IndexerConfig.GuardsLogOnly; "false"
+    # restores enforcement. Explicit here so the current behaviour is visible and flippable
+    # without a code change.
+    "GUARDS_LOG_ONLY" = "true"
+
+    # Embedding list price, USD per 1M input tokens, read into
+    # IndexerConfig.EmbeddingInputPriceUsdPer1MTokens. REPORTING INPUT ONLY: it turns the run
+    # report's measured token counts into dollars and is never billed from, so a wrong value
+    # makes a report's cost figures wrong and changes no behaviour.
+    #
+    # A setting rather than a constant because list price changes without a code change - which
+    # is the exact reason docs/report-schema.md originally kept money out of the report
+    # altogether. The rate is stamped into every report next to the cost it produced, so old
+    # reports stay comparable after a change here. Set to "0" to switch cost reporting off.
+    #
+    # No batch/standard switch: the indexing path embeds synchronously and submits no batch jobs,
+    # so this is whatever tier is actually in use. Default is text-embedding-3-large standard.
+    "EMBEDDING_INPUT_PRICE_USD_PER1M_TOKENS" = var.embedding_input_price_usd_per_1m_tokens
 
     # Windows-only: TimerTrigger crons (ScheduledIndexing's daily 17:00) follow Dutch wall-clock
     # across DST instead of drifting with UTC.

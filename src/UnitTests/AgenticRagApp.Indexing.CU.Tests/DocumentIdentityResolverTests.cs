@@ -52,6 +52,7 @@ public class DocumentIdentityResolverTests
             .Returns<IReadOnlyList<string>, CancellationToken>((texts, _) => Task.FromResult((
                 texts.Select(t => vectorByTitle.Single(kv => t.StartsWith(kv.Key)).Value).ToArray(),
                 0,
+                0,
                 (long?)null)));
 
         var store = new Mock<IDocumentIdentityStore>();
@@ -528,7 +529,7 @@ public class DocumentIdentityResolverTests
         var client = new Mock<IEmbeddingClient>();
         client
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new float[][] { [1f, 0f, 0f] }, 0, null));
+            .ReturnsAsync((new float[][] { [1f, 0f, 0f] }, 0, 0, null));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -562,7 +563,7 @@ public class DocumentIdentityResolverTests
         var client = new Mock<IEmbeddingClient>();
         client
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new float[][] { [1f, 0f] }, 0, null));
+            .ReturnsAsync((new float[][] { [1f, 0f] }, 0, 0, null));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);

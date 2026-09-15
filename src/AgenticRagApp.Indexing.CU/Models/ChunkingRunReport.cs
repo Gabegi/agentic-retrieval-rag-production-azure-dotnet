@@ -201,7 +201,14 @@ public sealed record IdentityResolutionDiagnostics(
     double   NearMissFloor,
     double   ConfusableWordThreshold,
     int      MaxConfusableEdits,
-    int      MinConfusableWordLength);
+    int      MinConfusableWordLength)
+{
+    // Sum of IdentityTokens over EVERY document this run resolved - fresh and reused vectors
+    // alike - i.e. what a full re-embed of this run's identity texts would send.
+    // TotalIdentityTokensEmbedded above is the fresh subset: what this run actually billed. Init
+    // property (2026-09-15) so the positional constructors stay untouched; 0 on the Empty path.
+    public int TotalIdentityTokensThisRun { get; init; }
+}
 
 public sealed record FamilyMove(string SourceId, string? FromFamilyId, string ToFamilyId);
 

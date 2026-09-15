@@ -38,11 +38,17 @@ public class AgenticRagQueryServiceTests
     // response-only models (no public constructor, read-only collections) - built via
     // ModelReaderWriter from JSON, the SDK's documented pattern for constructing them in tests.
     private static KnowledgeBaseRetrievalResponse RetrievalResponse(
-        IEnumerable<Dictionary<string, object?>> referenceSourceData, string answerText)
+        IEnumerable<Dictionary<string, object?>> referenceSourceData, string answerText, IReadOnlyList<float?>? rerankerScores = null)
     {
         var payload = new Dictionary<string, object?>
         {
-            ["references"] = referenceSourceData.Select(sd => new Dictionary<string, object?> { ["type"] = "searchIndex", ["sourceData"] = sd }).ToList(),
+            ["references"] = referenceSourceData.Select((sd, i) =>
+            {
+                var reference = new Dictionary<string, object?> { ["type"] = "searchIndex", ["sourceData"] = sd };
+                if (rerankerScores is not null && i < rerankerScores.Count && rerankerScores[i] is { } score)
+                    reference["rerankerScore"] = score;
+                return reference;
+            }).ToList(),
             ["response"]   = new[] { new Dictionary<string, object?> { ["role"] = "assistant", ["content"] = new[] { new Dictionary<string, object?> { ["type"] = "text", ["text"] = answerText } } } },
             ["activity"]   = Array.Empty<object>(),
         };
@@ -61,9 +67,9 @@ public class AgenticRagQueryServiceTests
     }
 
     private static Mock<IKnowledgeRetrievalClient> MockRetrievalClient(
-        IEnumerable<Dictionary<string, object?>> referenceSourceData, string answerText)
+        IEnumerable<Dictionary<string, object?>> referenceSourceData, string answerText, IReadOnlyList<float?>? rerankerScores = null)
     {
-        var response = RetrievalResponse(referenceSourceData, answerText);
+        var response = RetrievalResponse(referenceSourceData, answerText, rerankerScores);
         var mock = new Mock<IKnowledgeRetrievalClient>();
         mock.Setup(c => c.RetrieveAsync(It.IsAny<KnowledgeBaseRetrievalRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
@@ -187,6 +193,49 @@ public class AgenticRagQueryServiceTests
 
         Assert.AreEqual(2, result.Citations.Count);
         CollectionAssert.AreEquivalent(new[] { "doc1", "doc2" }, result.Citations.Select(c => c.DocumentId).ToList());
+    }
+
+    // ── retrieval ranking (2026-09-15) ───────────────────────────────────────
+
+    [TestMethod]
+    public async Task AskAsync_RanksTheRetrievedDocumentsByRerankerScore_TiesAndMissingKeepReturnOrder()
+    {
+        // Returned as doc2, doc1, doc3, doc4 with scores 0.5, 0.9, none, 0.5. Ranked: doc1 first
+        // (highest score), then doc2 and doc4 in return order (tied), then doc3 (no score) last.
+        var references = new[]
+        {
+            new Dictionary<string, object?> { ["id"] = "c1", ["document_id"] = "doc2", ["content"] = "a", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c2", ["document_id"] = "doc1", ["content"] = "b", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c3", ["document_id"] = "doc3", ["content"] = "c", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c4", ["document_id"] = "doc4", ["content"] = "d", ["page_start"] = 1 },
+        };
+        var client  = MockRetrievalClient(references, "answer", rerankerScores: [0.5f, 0.9f, null, 0.5f]);
+        var service = BuildService(client);
+
+        var result = await service.AskAsync("question");
+
+        CollectionAssert.AreEqual(new[] { "doc1", "doc2", "doc4", "doc3" }, result.RetrievedDocumentRanking!.ToList());
+        Assert.AreEqual(4, result.ReferencesRetrieved);
+    }
+
+    [TestMethod]
+    public async Task AskAsync_ReferencesRetrieved_IsThePreExpansionCount_OnePerReferenceNotPerCitation()
+    {
+        // Two references on the same page collapse into one Citation; the ranking keeps both,
+        // because rank is per retrieved reference.
+        var references = new[]
+        {
+            new Dictionary<string, object?> { ["id"] = "c1", ["document_id"] = "doc1", ["content"] = "chunk one", ["page_start"] = 3 },
+            new Dictionary<string, object?> { ["id"] = "c2", ["document_id"] = "doc1", ["content"] = "chunk two", ["page_start"] = 3 },
+        };
+        var client  = MockRetrievalClient(references, "answer");
+        var service = BuildService(client);
+
+        var result = await service.AskAsync("question");
+
+        Assert.AreEqual(1, result.Citations.Count);
+        Assert.AreEqual(2, result.ReferencesRetrieved);
+        Assert.AreEqual(2, result.RetrievedDocumentRanking!.Count);
     }
 
     [TestMethod]

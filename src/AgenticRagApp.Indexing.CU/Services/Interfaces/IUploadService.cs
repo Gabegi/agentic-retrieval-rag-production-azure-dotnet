@@ -34,4 +34,11 @@ public record UploadResult(
     // the stats snapshot itself failed. See IndexDriftCheck.
     long? PreviousIndexDocumentCount    = null,
     long? PreviousIndexStorageSizeBytes = null
-);
+)
+{
+    // The vector field plus its HNSW graph at snapshot time (2026-09-15) - what counts against
+    // the tier's vector quota, and the basis the run report's storage breakdown subtracts the raw
+    // vector bytes from to infer graph overhead. Init property so every existing construction
+    // site and test stays untouched. Null = the service did not report it, or stats failed.
+    public long? IndexVectorIndexSizeBytesSnapshot { get; init; }
+};

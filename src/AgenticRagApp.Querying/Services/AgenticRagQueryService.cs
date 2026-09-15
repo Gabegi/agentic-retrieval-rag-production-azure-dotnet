@@ -214,7 +214,16 @@ public class AgenticRagQueryService : IRagQueryService
             FrequencyPenalty:   null, PresencePenalty: null, Seed: null,
             ResponseFormat:     null, StopSequences: null,
             Citations:          citations,
-            SubQueries:         KnowledgeBaseActivitySummary.CollectSubQueries(result.Activity));
+            SubQueries:         KnowledgeBaseActivitySummary.CollectSubQueries(result.Activity))
+        {
+            ReferencesRetrieved      = initialChunks.Count,
+            // OrderBy is stable, so references without a score - or tied - keep the order the
+            // service returned them in. See RagQueryResult.RetrievedDocumentRanking.
+            RetrievedDocumentRanking = initialChunks
+                .OrderByDescending(c => c.RerankerScore ?? float.NegativeInfinity)
+                .Select(c => c.DocumentId)
+                .ToList(),
+        };
     }
 
     // Called only once a guard has already fired. Always logs; returns whether the caller

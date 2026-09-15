@@ -33,8 +33,10 @@ public class EmbeddingServiceTests
         Metadata = new ChunkMetadata { Id = id },
     };
 
+    // Non-zero on purpose: an all-zero vector is now a counted defect (EmptyVectors), so the
+    // "healthy response" fixture has to look like one.
     private static float[][] Vectors(int count, int dims = 4) =>
-        Enumerable.Range(0, count).Select(_ => new float[dims]).ToArray();
+        Enumerable.Range(0, count).Select(_ => Enumerable.Repeat(1f, dims).ToArray()).ToArray();
 
     private static Mock<IEmbeddingClient> MockEmbeddingClient() => new();
 
@@ -61,7 +63,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "content one"), Document("d2", "content two") };
 
@@ -69,6 +71,7 @@ public class EmbeddingServiceTests
 
         Assert.IsTrue(result.Documents.All(d => d.ContentVector != null));
         Assert.AreEqual(0, result.VectorDimErrors);
+        Assert.AreEqual(0, result.EmptyVectors);
         Assert.AreEqual(0, result.ChunksTruncated);
         Assert.AreEqual(0, result.EmbeddingRetries);
     }
@@ -79,13 +82,105 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 3), 0, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 3), 0, 0, null));
         var service = BuildService(embeddingClient, Config(dims: 4)); // expects 4, generator returns 3
         var docs = new[] { Document("d1", "content") };
 
         var result = await service.EmbedDocumentsAsync(docs);
 
         Assert.AreEqual(1, result.VectorDimErrors);
+    }
+
+    // The defect the dimension check cannot see: right length, no information. Search stores
+    // it without complaint and it never scores against any query.
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_AllZeroVector_CountedAsEmptyVector()
+    {
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
+                (texts.Select(_ => new float[4]).ToArray(), 0, 0, null));
+        var service = BuildService(embeddingClient);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", "content")]);
+
+        Assert.AreEqual(1, result.EmptyVectors);
+        Assert.AreEqual(0, result.VectorDimErrors, "right length - this is not a dimension error");
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_NonFiniteComponent_CountedAsEmptyVector()
+    {
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
+                (texts.Select(_ => new[] { 0.1f, float.NaN, 0.3f, 0.4f }).ToArray(), 0, 0, null));
+        var service = BuildService(embeddingClient);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", "content")]);
+
+        Assert.AreEqual(1, result.EmptyVectors);
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_WrongDimensionsAndAllZero_CountedOnce_AsDimError()
+    {
+        // One bad response is one defect. A zero vector of the wrong length is a dimension error
+        // and must not also be counted as empty.
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
+                (texts.Select(_ => new float[3]).ToArray(), 0, 0, null));
+        var service = BuildService(embeddingClient, Config(dims: 4));
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", "content")]);
+
+        Assert.AreEqual(1, result.VectorDimErrors);
+        Assert.AreEqual(0, result.EmptyVectors);
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_EmptyVector_IsNotWrittenToCache()
+    {
+        // Same rule as dimension errors: a result we already know is wrong must not become the
+        // next run's cache hit.
+        var vectorCache     = MockVectorCache();
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
+                (texts.Select(_ => new float[4]).ToArray(), 0, 0, null));
+        var service = BuildService(embeddingClient, vectorCache: vectorCache);
+
+        await service.EmbedDocumentsAsync([Document("d1", "content")]);
+
+        vectorCache.Verify(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_CachedEmptyVector_TreatedAsMissAndReEmbedded()
+    {
+        // A zero vector cached before this check existed would otherwise be trusted forever -
+        // the cache is keyed by content hash and the chunk never changes.
+        var vectorCache = new Mock<IVectorCache>();
+        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new float[4]);
+        vectorCache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
+        var service = BuildService(embeddingClient, Config(dims: 4), vectorCache);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", "content one")]);
+
+        Assert.AreEqual(0, result.CacheHits);
+        Assert.AreEqual(0, result.EmptyVectors, "the fresh vector is healthy; the cached one was only a miss");
+        embeddingClient.Verify(
+            c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [TestMethod]
@@ -99,7 +194,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 capturedTexts = texts;
-                return (Vectors(texts.Count), 0, null);
+                return (Vectors(texts.Count), 0, 0, null);
             });
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", oversized) };
@@ -129,7 +224,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 capturedTexts = texts;
-                return (Vectors(texts.Count), 0, null);
+                return (Vectors(texts.Count), 0, 0, null);
             });
         var service = BuildService(embeddingClient);
 
@@ -152,7 +247,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
         var service = BuildService(embeddingClient);
 
         var result = await service.EmbedDocumentsAsync([Document("d1", dense)]);
@@ -166,7 +261,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "short content") };
 
@@ -188,7 +283,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 capturedTexts = texts;
-                return (Vectors(texts.Count), 0, null);
+                return (Vectors(texts.Count), 0, 0, null);
             });
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "My Title\n\nbody") };
@@ -208,7 +303,7 @@ public class EmbeddingServiceTests
             .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
             {
                 lock (callSizes) callSizes.Add(texts.Count);
-                return (Vectors(texts.Count), 0, null);
+                return (Vectors(texts.Count), 0, 0, null);
             });
         var service = BuildService(embeddingClient);
         var docs = Enumerable.Range(0, 150).Select(i => Document($"d{i}", $"content {i}")).ToArray();
@@ -226,7 +321,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 1, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 1, 0, null));
         var service = BuildService(embeddingClient);
         var docs = new[] { Document("d1", "content") };
 
@@ -256,13 +351,49 @@ public class EmbeddingServiceTests
     }
 
     [TestMethod]
+    public async Task EmbedDocumentsAsync_CacheHits_ReportTheTokensTheCacheSaved()
+    {
+        // CacheHits says how many chunks; CacheHitTokens says how much they would have billed -
+        // the stored count of the exact text a fresh embed would have sent.
+        var vectorCache = new Mock<IVectorCache>();
+        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new float[] { 1, 2, 3, 4 });
+        var service = BuildService(MockEmbeddingClient(), vectorCache: vectorCache);
+        var docs    = new[]
+        {
+            new ChunkObject { Content = "one", Metadata = new ChunkMetadata { Id = "d1", TokenCount = 120 } },
+            new ChunkObject { Content = "two", Metadata = new ChunkMetadata { Id = "d2", TokenCount = 380 } },
+        };
+
+        var result = await service.EmbedDocumentsAsync(docs);
+
+        Assert.AreEqual(2,    result.CacheHits);
+        Assert.AreEqual(500L, result.CacheHitTokens);
+        Assert.AreEqual(0L,   result.ApiPhaseMs, "no batch ran, so the API phase is zero wall time");
+    }
+
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_FreshChunks_SaveNoCacheTokens()
+    {
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
+        var service = BuildService(embeddingClient);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", "content")]);
+
+        Assert.AreEqual(0L, result.CacheHitTokens);
+        Assert.IsTrue(result.ApiPhaseMs >= 0 && result.CachePhaseMs >= 0);
+    }
+
+    [TestMethod]
     public async Task EmbedDocumentsAsync_CacheMiss_EmbedsAndWritesResultToCache()
     {
         var vectorCache = MockVectorCache();
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
         var service = BuildService(embeddingClient, vectorCache: vectorCache);
         var docs    = new[] { Document("d1", "content one") };
 
@@ -283,7 +414,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 4), 0, null));
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count, dims: 4), 0, 0, null));
         var service = BuildService(embeddingClient, Config(dims: 4), vectorCache);
         var docs    = new[] { Document("d1", "content one") };
 

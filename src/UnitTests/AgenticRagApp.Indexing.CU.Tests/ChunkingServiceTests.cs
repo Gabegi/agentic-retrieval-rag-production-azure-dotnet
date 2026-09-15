@@ -28,7 +28,7 @@ public class ChunkingServiceTests
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
             .Returns<IReadOnlyList<string>, CancellationToken>((texts, _) =>
-                Task.FromResult((texts.Select(_ => new float[] { 1f, 0f, 0f }).ToArray(), 0, (long?)null)));
+                Task.FromResult((texts.Select(_ => new float[] { 1f, 0f, 0f }).ToArray(), 0, 0, (long?)null)));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -146,6 +146,72 @@ public class ChunkingServiceTests
     public async Task Name_ReportsTheTwoAxisModel()
     {
         Assert.AreEqual("TwoAxisChunking", BuildService().Name);
+    }
+
+    [TestMethod]
+    public async Task StageMetrics_CarryIdentityTokenPressure_FromStepOnesDiagnostics()
+    {
+        // The tripwire used to write only into the chunking artifact. The stage metrics are what
+        // the run report and its flags read, so the numbers have to arrive there (2026-09-15).
+        var (_, stats, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "Body text.", title: "CAO GGZ 2025")]);
+
+        var it = stats.IdentityTokens;
+        Assert.IsNotNull(it, "identity ran, so the pressure block must be present - null means 'not measured'");
+        Assert.AreEqual(DocumentIdentityBuilder.InputTokenLimit,      it!.Limit);
+        Assert.AreEqual(DocumentIdentityBuilder.TokenWarningThreshold, it.WarningThreshold);
+        Assert.IsTrue(it.Max > 0, "the title alone is a few tokens");
+        Assert.IsTrue(it.TotalThisRun >= it.Max, "the run total covers every document, so at least the largest");
+        Assert.AreEqual(0, it.NearingLimitCount);
+        Assert.AreEqual(0, it.NearingLimit.Count);
+    }
+
+    [TestMethod]
+    public async Task StageMetrics_CarryWordsPrefixAndFigureText_FromTheStampedChunks()
+    {
+        // The three "what is inside the vector" numbers D190/D192/D183 computed by hand: tokens
+        // per word, prefix share, and how much of a chunk is a header/footer logo's description.
+        var logo    = "The logo of Contoso";
+        var content = $"![{logo}](figures/1.1 \"logo\") Een korte alinea over het beleid.";
+        var figures = new[]
+        {
+            new FigureInfo(Caption: null, Offset: 0, PageNumber: 1, Id: "1.1", Elements: [],
+                           Description: logo, Role: "pageHeader"),
+        };
+
+        var (_, stats, _) = await BuildService().ChunkDocumentsAsync(
+            [Doc("doc1", content, title: "CAO GGZ 2025", figures: figures)]);
+
+        var t = stats.Tokens!;
+        Assert.IsTrue(t.Words > 0);
+        Assert.IsTrue(t.TokensPerWord > 0);
+        Assert.IsTrue(t.PrefixTokensTotal > 0, "the title line is a prefix, so every chunk carries prefix tokens");
+        Assert.IsTrue(t.PrefixShareOfTotal is > 0 and < 1);
+
+        var f = stats.FigureText!;
+        Assert.AreEqual(stats.ChunksProduced, f.Measured, "every chunk is stamped in step 4");
+        Assert.AreEqual(1, f.ChunksWithFigureText);
+        Assert.AreEqual(logo.Length, f.FigureTextChars);
+        Assert.AreEqual(1, f.ChunksWithHeaderFooterFigureText);
+        Assert.AreEqual(logo.Length, f.HeaderFooterFigureTextChars);
+    }
+
+    [TestMethod]
+    public async Task StageMetrics_NameTheDocumentWhoseIdentityTextNearsTheLimit()
+    {
+        // Same fixture as DocumentIdentityResolverTests: headings drive the identity text, so
+        // enough of them cross the 80% line. Here the assertion is that it reaches the metrics.
+        var headings = Enumerable.Range(0, 1200)
+            .Select(i => H($"Artikel {i} over arbeidsvoorwaarden en vergoedingen", offset: 0))
+            .ToList();
+
+        var (_, stats, _) = await BuildService().ChunkDocumentsAsync(
+            [Doc("cao-ggz.pdf", "Body text.", title: "CAO GGZ", headings: headings)]);
+
+        var it = stats.IdentityTokens!;
+        Assert.AreEqual(1, it.NearingLimitCount);
+        Assert.AreEqual("cao-ggz.pdf", it.NearingLimit.Single().SourceId);
+        Assert.AreEqual(it.Max, it.NearingLimit.Single().Tokens, "the largest document is the one over the line");
+        Assert.IsTrue(it.Max > it.WarningThreshold);
     }
 
     [TestMethod]
@@ -521,7 +587,7 @@ public class ChunkingServiceTests
         var client = new Mock<IEmbeddingClient>();
         client
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new float[][] { [1f, 0f] }, 0, null));
+            .ReturnsAsync((new float[][] { [1f, 0f] }, 0, 0, null));
 
         var store = new Mock<IDocumentIdentityStore>();
         store.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);

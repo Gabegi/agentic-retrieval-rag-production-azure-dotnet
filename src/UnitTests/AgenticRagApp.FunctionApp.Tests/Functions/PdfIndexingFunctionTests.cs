@@ -32,12 +32,15 @@ public class PdfIndexingFunctionTests
         public Mock<IVectorCache>            VectorCache       = new();
         public Mock<IDocumentIdentityStore>  IdentityStore     = new();
         public Mock<IIndexDocumentService>   IndexDocumentService = new();
+        // Reporting input only - the embedding list price the run report's cost figures use.
+        // Left at its default rate; tests that assert on cost set it explicitly.
+        public IndexerConfig                 IndexerConfig     = new();
 
         public PdfIndexingFunction Build() => new(
             ExtractionService.Object, ChunkingService.Object, EmbeddingService.Object, UploadService.Object,
             IndexService.Object, new Mock<BlobContainerClient>().Object, BlobStore.Object,
             ReportWriter.Object, ArtifactWriter.Object, SnapshotService.Object, VectorCache.Object,
-            IdentityStore.Object, IndexDocumentService.Object, NullLogger<PdfIndexingFunction>.Instance);
+            IdentityStore.Object, IndexDocumentService.Object, IndexerConfig, NullLogger<PdfIndexingFunction>.Instance);
     }
 
     private static Mock<TaskOrchestrationContext> MockOrchestrationContext(string instanceId = "instance-1")

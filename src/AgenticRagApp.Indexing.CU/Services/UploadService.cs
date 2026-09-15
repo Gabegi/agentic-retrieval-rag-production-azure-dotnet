@@ -77,12 +77,12 @@ public class UploadService : IUploadService
 
         // Stats snapshot taken after upload. Azure Search stats lag live writes by minutes —
         // use for corpus drift checks only, not for "did this run add N chunks" (use succeeded/failed).
-        long? indexDocCount = null, indexStorageBytes = null;
+        long? indexDocCount = null, indexStorageBytes = null, indexVectorBytes = null;
         var drift = IndexDriftCheck.None;
         try
         {
-            var (docCount, storageBytes) = await _indexDocumentService.GetStatisticsAsync(ct);
-            (indexDocCount, indexStorageBytes) = (docCount, storageBytes);
+            var (docCount, storageBytes, vectorBytes) = await _indexDocumentService.GetStatisticsAsync(ct);
+            (indexDocCount, indexStorageBytes, indexVectorBytes) = (docCount, storageBytes, vectorBytes);
             drift = await _indexStatsMonitor.RecordAndCheckDriftAsync(Source, docCount, storageBytes, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -100,7 +100,10 @@ public class UploadService : IUploadService
             IndexStorageSizeBytesSnapshot: indexStorageBytes,
             RedFlags:                      drift.RedFlags,
             PreviousIndexDocumentCount:    drift.PreviousDocumentCount,
-            PreviousIndexStorageSizeBytes: drift.PreviousStorageSizeBytes);
+            PreviousIndexStorageSizeBytes: drift.PreviousStorageSizeBytes)
+        {
+            IndexVectorIndexSizeBytesSnapshot = indexVectorBytes,
+        };
     }
 
     // Patches family_id onto the indexed rows of documents this run re-homed, without touching

@@ -62,6 +62,7 @@ public static class FlagEvaluator
         EvaluateExtraction(report.Extraction, flags, calibrationMode);
         EvaluateChunking(report.Chunking, flags, calibrationMode);
         EvaluateEmbedding(report.Embedding, report.Chunking, report.StatsReadback, flags);
+        EvaluateVectorConfig(report.VectorConfig, flags);
         EvaluateCost(fileFacts, previous, flags, calibrationMode);
         EvaluateRunHealth(report, flags);
 
@@ -173,6 +174,30 @@ public static class FlagEvaluator
                 "These documents sit in a multi-member family but carry no DomainTag — the near-duplicate set they belong to cannot be disambiguated by sector, so retrieval can answer from the wrong one.",
                 "Check IdentityTagger in the run logs: either the DomainClassifier call failed for these documents (retried automatically next run) or the model judged that no population applies — for a multi-member family the latter is worth a human look."));
 
+        // Identity text is title + every heading, embedded as ONE uncapped input - the only place
+        // the model's per-input limit is live, and the failure past it is a silent truncation of
+        // the document's structure (IdentityTokenMetrics). Sourced, not calibrated: the limit is
+        // the model's, the 80% line is DocumentIdentityBuilder's own tripwire, carried on the
+        // record. Null = the report predates the field (2026-09-15). Before this flag the tripwire
+        // wrote only into the chunking artifact and its crossing on 260909/1 was found by hand.
+        if (c.IdentityTokens is { } it)
+        {
+            if (it.Max > it.Limit)
+                flags.Add(new ReportFlag(FlagSeverity.Critical, "Chunking.IdentityTokens.Max",
+                    $"{it.Max} tokens", $"≤ {it.Limit}",
+                    "At least one document's identity text is over the model's per-input limit — the end of its heading list did not reach the vector its family is clustered on, and nothing else reports that.",
+                    "It is first in IdentityTokens.NearingLimit. Cap, sample or summarise its heading list — that changes every identity hash and forces a full re-cluster, so do it deliberately (D191 §4, D192 §5)."));
+            else if (it.NearingLimitCount > 0)
+            {
+                var names = string.Join(", ", it.NearingLimit.Take(5).Select(d => $"{d.SourceId} ({d.Tokens})"));
+                var pct   = it.Limit > 0 ? it.WarningThreshold / (double)it.Limit : 0;
+                flags.Add(new ReportFlag(FlagSeverity.Warning, "Chunking.IdentityTokens.NearingLimit",
+                    $"{it.NearingLimitCount} ({names})", $"none over {it.WarningThreshold} tokens ({pct:P0} of {it.Limit})",
+                    $"These documents' identity text is within {1 - pct:P0} of the per-input limit; headroom on the largest is {it.Limit - it.Max} tokens. Past the limit the tail of the heading list is dropped silently.",
+                    "Decide the cap before it is forced: capping, sampling or summarising the heading list changes every identity hash and forces a full re-cluster (D191 §4, D192 §5)."));
+            }
+        }
+
         if (c.ChunksProduced == 0) return; // nothing to compute ratios against
 
         var coherence = c.CoherentChunks / (double)c.ChunksProduced;
@@ -212,6 +237,49 @@ public static class FlagEvaluator
             { AwaitingCalibration = true });
     }
 
+    // The live index definition against configuration (2026-09-15). EnsureIndexAsync is
+    // get-or-create, so a configuration change after the index exists never reaches it: these
+    // are the three disagreements that produce wrong results without an error anywhere else.
+    // Sourced - equalities, and the model vendor's own documentation for the metric - so none
+    // await calibration. Null = the read failed or the report predates the field: no flags.
+    private static void EvaluateVectorConfig(AgenticRagApp.Infrastructure.Clients.Search.IndexVectorConfig? v, List<ReportFlag> flags)
+    {
+        if (v is null) return;
+
+        if (!v.FieldPresent)
+        {
+            flags.Add(new ReportFlag(FlagSeverity.Critical, "Index.VectorField",
+                "absent", v.FieldName,
+                "The live index has no field by the name the code uploads vectors into — every upload fails on it.",
+                "The index was created from a different schema; recreate it (RecreateIndexAsync) and re-embed."));
+            return;
+        }
+
+        // VectorDimErrors cannot see this one: it compares each vector against the same
+        // configuration value, so a config change without a re-index passes it and fails at upload.
+        if (v.Dimensions is { } dims && dims != v.ConfiguredDimensions)
+            flags.Add(new ReportFlag(FlagSeverity.Critical, "Index.VectorDimensions",
+                $"{dims} (index field)", $"{v.ConfiguredDimensions} (OPENAI_EMBEDDING_DIMENSIONS)",
+                "The index field was created at a different width than the configuration now says — every fresh vector is rejected at upload and surfaces as DocsFailed.",
+                "Either restore OPENAI_EMBEDDING_DIMENSIONS to the width the index was built with, or recreate the index and re-embed the corpus."));
+
+        // The vectorizer embeds QUERIES; the documents were embedded by the configured model. Two
+        // different models produce vectors that compare, but not meaningfully - nothing errors.
+        if (v.VectorizerModel is { } model && !string.Equals(model, v.ConfiguredModelName, StringComparison.OrdinalIgnoreCase))
+            flags.Add(new ReportFlag(FlagSeverity.Critical, "Index.VectorizerModel",
+                model, v.ConfiguredModelName,
+                "Queries are embedded by a different model than the documents were — retrieval degrades silently, with no error on either side.",
+                "The vectorizer is fixed at index creation: recreate the index with the configured model, or set OPENAI_EMBEDDING_MODEL back to the one the index was built with and re-embed if the documents changed."));
+
+        // text-embedding-3 returns unit-length vectors and its vendor documents cosine; the code
+        // sets no metric, so what is here is the service default - worth knowing if it ever is not.
+        if (v.Metric is { } metric && !string.Equals(metric, "cosine", StringComparison.OrdinalIgnoreCase))
+            flags.Add(new ReportFlag(FlagSeverity.Warning, "Index.VectorMetric",
+                metric, "cosine",
+                "The index compares vectors with a metric other than the one the embedding model is documented for; rankings differ for no gain.",
+                "BuildVectorSearch sets no metric, so this was set outside the code; recreating the index is the only way to change it."));
+    }
+
     private static void EvaluateEmbedding(EmbedUploadStageMetrics? e, ChunkingStageMetrics? c, IndexStatsReadback? readback, List<ReportFlag> flags)
     {
         if (e is null) return;
@@ -228,11 +296,29 @@ public static class FlagEvaluator
                 "A model/config dimension mismatch — vectors don't match the index schema.",
                 "Check OPENAI_EMBEDDING_DEPLOYMENT and the index's vector dimensions agree."));
 
+        // Null on reports that predate the counter (2026-09-15): not measured, no flag.
+        if (e.EmptyVectors > 0)
+            flags.Add(new ReportFlag(FlagSeverity.Critical, "Embedding.EmptyVectors",
+                e.EmptyVectors.Value.ToString(), "0",
+                "Right-length vectors that are all-zero or non-finite — indexed, but they can never match a query.",
+                "Find the chunk ids in the run's host log (\"Empty vector\"), check the deployment's responses for them, and re-index the affected documents."));
+
         if (e.ChunksTruncated > 0)
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Embedding.ChunksTruncated",
                 e.ChunksTruncated.ToString(), "0",
-                "Embedded with incomplete content — the vector covers only the first 24k chars.",
+                "Embedded with incomplete content — cut at the 24k-char pre-filter or the 8,191-token input limit before embedding.",
                 "These chunks retrieve on partial semantics; consider splitting them earlier."));
+
+        // Every chunk the chunker emitted goes to the uploader, and the uploader accounts for
+        // each one as succeeded or failed - so the two sides must add up. DocsFailed already
+        // has its own flag above; this one catches the case with NO error: chunks that went
+        // missing between the chunker and the index, or were counted twice. An identity, not
+        // a threshold, so nothing here awaits calibration.
+        if (c is not null && e.DocsUploaded + e.DocsFailed != c.ChunksProduced)
+            flags.Add(new ReportFlag(FlagSeverity.Critical, "Embedding.DocsUploaded",
+                $"{e.DocsUploaded} uploaded + {e.DocsFailed} failed", $"{c.ChunksProduced} (Chunking.ChunksProduced)",
+                "The uploader accounted for a different number of chunks than the chunker produced — chunks were lost or double-counted without an upload error.",
+                "Diff the chunk ids in the chunking artifact against the embedding artifact for this run; a shortfall with DocsFailed = 0 is a pipeline bug, not a Search problem."));
 
         if (c is { ChunksProduced: > 0 })
         {

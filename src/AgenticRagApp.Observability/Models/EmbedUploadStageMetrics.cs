@@ -45,4 +45,34 @@ public record EmbedUploadStageMetrics(
     // .TotalInputTokens - this is that value riding the report). Null = blank, not zero.
     // Identity-resolution embeddings (chunking stage) are metered but not in this field.
     public long? TotalEmbeddingTokens { get; init; }
+
+    // Fresh vectors of the right length whose values are all zero or non-finite. They pass the
+    // dimension check and upload cleanly, then never match a query - the one defect the two
+    // counts above cannot see (EmbeddingService.IsEmptyVector, 2026-09-15). Should always be 0.
+    // Null = the report predates the counter; not measured, not zero.
+    public int? EmptyVectors { get; init; }
+
+    // Cost and throughput split (2026-09-15). TotalEmbeddingDurationMs above is the whole embed
+    // step - cache reads, the batched API calls, cache writes (not upload). These two are its
+    // parts: the API phase is wall time of the 4-wide batches (what a full re-embed's duration
+    // scales from), the cache phase is the blob GET/PUT time around it. Null = predates the fields.
+    public long? EmbeddingApiDurationMs { get; init; }
+    public long? VectorCacheDurationMs  { get; init; }
+
+    // Stored token counts of the chunks served from the vector cache - what they would have
+    // billed. VectorCacheHits says how many chunks the cache saved; this says how many tokens.
+    // TotalEmbeddingTokens + this ≈ what the run would have billed with a cold cache.
+    public long? VectorCacheHitTokens { get; init; }
+
+    // The 429 subset of EmbeddingRetries (2026-09-15). EmbeddingRetries alone cannot answer "were
+    // we rate-limited" - it also counts 5xx, dropped connections and request timeouts, which call
+    // for different action (raise TPM / lower parallelism, versus wait for the service). On a full
+    // re-embed this and the duration fields are what the rebuild actually costs; the dollars are
+    // noise at this corpus size. Null = the report predates the counter, not zero throttling.
+    public int? RateLimitedRetries { get; init; }
+
+    // The vector field plus its HNSW graph, as the service reports it, sampled with the other two
+    // snapshots after upload. This is the figure that counts against the tier's VECTOR quota,
+    // which is the one that runs out before StorageSize does. Null = not reported.
+    public long? IndexVectorIndexSizeBytesSnapshot { get; init; }
 }

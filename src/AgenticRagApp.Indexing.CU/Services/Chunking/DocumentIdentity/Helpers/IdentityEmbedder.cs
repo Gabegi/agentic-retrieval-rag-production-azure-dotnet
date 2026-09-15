@@ -36,7 +36,10 @@ public static class IdentityEmbedder
         // One call for the whole run: identity texts are a title plus a heading list, so even
         // the full 51-document corpus is a single modest batch. If the corpus grows past what
         // one request accepts, batch here the way CsvEmbeddingService does.
-        var (embedded, retries, inputTokens) = await embeddingClient.EmbedWithRetryAsync(
+        // Throttling on this call is discarded deliberately: identity embedding is one small
+        // request per run, so it cannot move a throttling read, and folding it into the embed
+        // stage's counter would attribute it to a stage it did not happen in.
+        var (embedded, retries, _, inputTokens) = await embeddingClient.EmbedWithRetryAsync(
             toEmbed.Select(d => d.IdentityText).ToList(), ct);
 
         // Identity vectors are billed embedding tokens like any other (plan 1.6) - metered

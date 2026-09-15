@@ -12,14 +12,30 @@ public class KnowledgeBaseReferenceMapperTests
     // KnowledgeBaseReference is an Azure SDK response-only model (no public constructor) -
     // built via ModelReaderWriter from JSON, the SDK's documented pattern for constructing
     // these models in tests.
-    private static KnowledgeBaseReference Reference(Dictionary<string, object?>? sourceData = null)
+    private static KnowledgeBaseReference Reference(Dictionary<string, object?>? sourceData = null, float? rerankerScore = null)
     {
         var payload = new Dictionary<string, object?> { ["type"] = "searchIndex" };
         if (sourceData is not null)
             payload["sourceData"] = sourceData;
+        if (rerankerScore is not null)
+            payload["rerankerScore"] = rerankerScore;
 
         var json = JsonSerializer.Serialize(payload);
         return ModelReaderWriter.Read<KnowledgeBaseReference>(BinaryData.FromString(json))!;
+    }
+
+    [TestMethod]
+    public void Reference_CarriesTheServicesRerankerScore()
+    {
+        // The eval's rank metrics order the retrieved set by this; dropping it here would make
+        // "rank of the first right document" mean return order instead of relevance.
+        var chunks = KnowledgeBaseReferenceMapper.Map([
+            Reference(new() { ["id"] = "c1", ["document_id"] = "d1", ["content"] = "text" }, rerankerScore: 2.5f),
+            Reference(new() { ["id"] = "c2", ["document_id"] = "d2", ["content"] = "text" }),
+        ]);
+
+        Assert.AreEqual(2.5f, chunks[0].RerankerScore);
+        Assert.IsNull(chunks[1].RerankerScore, "absent on the wire stays null, not 0");
     }
 
     [TestMethod]

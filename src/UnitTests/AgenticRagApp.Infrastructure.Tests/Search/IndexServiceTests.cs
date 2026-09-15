@@ -46,6 +46,34 @@ public class IndexServiceTests
     }
 
     [TestMethod]
+    public async Task ReadVectorConfigAsync_ReadsTheLiveIndex_NotTheDeclaredDefinition()
+    {
+        // Get-or-create means the two can disagree; the report has to carry the live one with the
+        // configured value beside it, or the drift is invisible.
+        var (service, client) = BuildService();
+        var live = new SearchIndex("my-index");
+        live.Fields.Add(new VectorSearchField("content_vector", 1536, "vector-profile"));
+        live.VectorSearch = new VectorSearch();
+        live.VectorSearch.Algorithms.Add(new HnswAlgorithmConfiguration("hnsw-config")
+        {
+            Parameters = new HnswParameters { Metric = VectorSearchAlgorithmMetric.Euclidean },
+        });
+        live.VectorSearch.Profiles.Add(new VectorSearchProfile("vector-profile", "hnsw-config"));
+        client.Setup(c => c.GetIndexAsync("my-index", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Response.FromValue(live, Mock.Of<Response>()));
+
+        var v = await service.ReadVectorConfigAsync();
+
+        Assert.AreEqual("my-index",  v.IndexName);
+        Assert.AreEqual(1536,        v.Dimensions, "the live width");
+        Assert.AreEqual(Config().OpenAiEmbeddingDimensions, v.ConfiguredDimensions, "the configured width, stamped beside it");
+        Assert.AreEqual("euclidean", v.Metric);
+        Assert.AreEqual(Config().OpenAiEmbeddingModelName, v.ConfiguredModelName);
+        client.Verify(c => c.CreateOrUpdateIndexAsync(
+            It.IsAny<SearchIndex>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
     public async Task EnsureIndexAsync_IndexMissing_BuildsAndCreatesIndexForConfiguredName()
     {
         var (service, client) = BuildService();

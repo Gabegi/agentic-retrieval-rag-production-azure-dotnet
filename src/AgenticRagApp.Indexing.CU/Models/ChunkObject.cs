@@ -229,6 +229,30 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     // that reason, and read the drop as the measurement being repaired rather than the chunker
     // regressing.
     [JsonIgnore] public string StatsText => EmbeddingText;
+
+    // IChunkStatsSource.EmbeddedTokenCount - the cl100k count of EmbeddingText that step 4 stamps
+    // onto Metadata.TokenCount (ChunkMetadataBuilder). Null until then: TokenCounter.Count is 0
+    // only for empty text, so 0 here means "not stamped", and reporting it as a measured zero
+    // would file every unstamped chunk in the report's bottom token band.
+    [JsonIgnore] public int? EmbeddedTokenCount => Metadata.TokenCount > 0 ? Metadata.TokenCount : null;
+
+    // IChunkStatsSource.IsTableShaped - the cut overlaps a typed table span. The population that
+    // tokenizes at ~2x prose, and what the report's table/prose tokens-per-word split keys on.
+    [JsonIgnore] public bool IsTableShaped => Metadata.HasTable;
+
+    // IChunkStatsSource.PrefixTokenCount - tokens of the prefix alone. Counted on read rather
+    // than stamped: it is a statistic for the run report, not a row field, and Compute reads it
+    // once per chunk. Null until step 4 has stamped the prefix, by the same "TokenCount is 0
+    // only when unstamped" reasoning as EmbeddedTokenCount.
+    [JsonIgnore] public int? PrefixTokenCount =>
+        Metadata.TokenCount > 0 ? TokenCounter.Count(Metadata.Prefix) : null;
+
+    // IChunkStatsSource.FigureTextChars / HeaderFooterFigureTextChars - how much of Content is a
+    // figure's generated description, and how much of that describes a page-header/footer figure
+    // (a logo). Stamped by ChunkMetadataBuilder 3g, never serialized: the figure roles live on
+    // the page-scoped structure, which the stats pass does not see. Null = not stamped.
+    [JsonIgnore] public int? FigureTextChars             { get; set; }
+    [JsonIgnore] public int? HeaderFooterFigureTextChars { get; set; }
 }
 
 // Everything step 4 stamps onto a cut: what the DOCUMENT is (extracted once, copied onto every

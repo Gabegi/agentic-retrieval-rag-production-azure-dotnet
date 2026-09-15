@@ -5,6 +5,7 @@ RAG quality evaluation harness — runs golden queries against a live environmen
 - `RagEvaluationTests.cs` — golden-query test cases
 - `RagEvaluator.cs` — scores answer accuracy against expected results
 - `RefusalEvaluator.cs` — scores whether the app correctly refuses out-of-scope questions
+- `RetrievalRankMetrics.cs` — the deterministic retrieval metrics as pure functions (no judge, no knowledge base)
 - `GoldenQuestionsDatasetTests.cs` — lints `testdata/golden-questions.json` (no Azure, no model calls)
 - `EvalResultWriter.cs` — appends scoring results to `eval-results/{date}/{executionId}.jsonl` in blob storage
 - `testdata/` — golden query/answer fixtures
@@ -30,6 +31,35 @@ traps each row is built around.
 When adding a row, run `dotnet test --filter GoldenQuestionsDatasetTests` — it checks the
 labels are consistent and that every `ExpectedSources` entry is a real corpus filename, which
 `CitationMatch` silently scores as 0 otherwise.
+
+## Retrieval metrics
+
+`RetrievalRankMetrics` scores retrieval deterministically — no judge, so these move only when
+retrieval moves. All four are **document-level**: the golden set labels `ExpectedSources`
+(PDF filenames), not chunks, so a retrieved reference counts as relevant when its *document*
+is one of the expected ones. Scoring at chunk grain needs a span label set that does not exist
+yet (`docs/2608/260817/chunking-evaluations.md`).
+
+| Column | What it answers |
+|---|---|
+| `CitationMatch` | Of the expected documents, how many the answer actually **cited** — measured after synthesis |
+| `ReciprocalRank` | 1 / rank of the first expected document in the **retrieved** ranking; averaged over rows this is MRR |
+| `RecallAt5` | Expected documents found in the first 5 retrieved references |
+| `RecallAt50` | The same at k=50 — always ≥ `RecallAt5` |
+
+The pair is the point, and `eval-summary.jq` splits a run on it under *Retrieval reach — cut
+versus rank*: **R@50 > R@5** is ranking loss (the document was retrieved but sat below the
+window synthesis reads — a reranker problem), while **R@50 < 1.0** is reach loss (it never came
+back at all — a chunking/embedding/indexing problem no reranker fixes). The two have opposite
+fixes and neither headline number can tell them apart alone.
+
+One caveat that is expected rather than a bug: the production path sets no top-k — the
+knowledge base decides how many references to return — so on a run whose mean
+`ReferencesRetrieved` is under 50, `RecallAt50` is containment over the whole returned set
+rather than a rank cutoff. The summary prints that mean next to it for exactly this reason.
+
+`-1` means *not scorable* (a Refusal row, or a row with no ranking) and is excluded from every
+mean; `0` is a real miss and counts.
 
 ## Running
 

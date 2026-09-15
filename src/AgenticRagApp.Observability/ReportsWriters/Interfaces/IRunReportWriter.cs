@@ -20,4 +20,10 @@ public interface IRunReportWriter
     // never mixed in reporting, so each source gets its own baseline file, never a shared one.
     Task<(long DocumentCount, long StorageSizeBytes)?> GetLastIndexStatsAsync(string source, CancellationToken ct = default);
     Task SaveLastIndexStatsAsync(string source, long documentCount, long storageSizeBytes, CancellationToken ct = default);
+
+    // Carries the index-definition run counter across runs (2026-09-15). "How many runs on the
+    // current definition" is a fact about a SEQUENCE of runs, so it cannot live in one report -
+    // this is the only state that makes it answerable. Null = no counter recorded yet.
+    Task<IndexDefinitionCounter?> GetIndexDefinitionAsync(string source, CancellationToken ct = default);
+    Task SaveIndexDefinitionAsync(string source, IndexDefinitionCounter counter, CancellationToken ct = default);
 }

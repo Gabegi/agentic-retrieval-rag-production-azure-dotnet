@@ -21,7 +21,7 @@ public class UploadServiceTests
         int succeeded, int failed,
         IReadOnlyList<string>? existingChunkIds = null,
         int deletedCount = 0,
-        (long DocCount, long StorageBytes)? stats = null,
+        (long DocCount, long StorageBytes, long? VectorBytes)? stats = null,
         Exception? statsException = null)
     {
         var mock = new Mock<IIndexDocumentService>();
@@ -35,7 +35,7 @@ public class UploadServiceTests
         if (statsException is not null)
             mock.Setup(m => m.GetStatisticsAsync(It.IsAny<CancellationToken>())).ThrowsAsync(statsException);
         else
-            mock.Setup(m => m.GetStatisticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(stats ?? (0L, 0L));
+            mock.Setup(m => m.GetStatisticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(stats ?? (0L, 0L, (long?)null));
 
         return mock;
     }
@@ -247,7 +247,7 @@ public class UploadServiceTests
     [TestMethod]
     public async Task UploadDocumentsAsync_StatsSnapshotSucceeds_PopulatesSnapshotAndRedFlags()
     {
-        var indexService     = MockIndexDocumentService(succeeded: 1, failed: 0, stats: (100L, 2048L));
+        var indexService     = MockIndexDocumentService(succeeded: 1, failed: 0, stats: (100L, 2048L, 1024L));
         var indexStatsMonitor = MockIndexStatsMonitor(driftRedFlags: ["index_doc_count_drift:+50.0% (50 -> 100)"]);
         var service = BuildService(indexService, indexStatsMonitor);
 

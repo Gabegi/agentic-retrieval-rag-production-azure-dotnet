@@ -51,6 +51,26 @@ public class IndexerConfig
     public string OpenAiMiniDeployment         { get; init; } = "gpt-4.1-mini";
     public int    OpenAiEmbeddingDimensions    { get; init; } = 3072;
 
+    // List price of the embedding model's INPUT tokens, in USD per 1M, used to turn the run's
+    // measured token counts into the run report's cost figures (2026-09-15).
+    //
+    // Configuration and not a constant, deliberately: docs/report-schema.md refused to store
+    // money in the report at all on the grounds that list price "changes without a code change".
+    // That is exactly right, and it is an argument for a setting rather than for omission - a
+    // price change is an app-setting edit here, not a redeploy. The rate is written into every
+    // report next to the dollars it produced (EmbeddingCostMetrics.RateUsdPer1M), so a report
+    // from six months ago still says what rate produced its number and stays comparable.
+    //
+    // Nothing reads this at query time and nothing bills from it: it is a reporting input only,
+    // and a wrong value makes a report's dollars wrong while changing no behaviour.
+    //
+    // The default is text-embedding-3-large's standard-tier list rate. There is deliberately no
+    // batch/standard switch: the indexing path calls GenerateAsync synchronously and submits no
+    // batch jobs, so a "batch" label would describe something this code does not do. If the
+    // pipeline ever moves to the batch tier, set this to that tier's rate.
+    // Set to 0 to disable cost reporting entirely (the report's EmbeddingCost goes null).
+    public decimal EmbeddingInputPriceUsdPer1MTokens { get; init; } = 0.130m;
+
     // Log-only mode for the query-time guards. Set true on 2026-08-12 by request, to be revisited
     // once eval shows how often each guard actually fires (docs/2608/260812/guards-review.md).
     //

@@ -269,11 +269,13 @@ public class IndexDocumentServiceTests
     {
         var (service, _, indexClient) = BuildService();
         indexClient.Setup(c => c.GetIndexStatisticsAsync("index", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Response.FromValue(SearchModelFactory.SearchIndexStatistics(100, 2048), Mock.Of<Response>()));
+            .ReturnsAsync(Response.FromValue(SearchModelFactory.SearchIndexStatistics(100, 2048, 1024), Mock.Of<Response>()));
 
-        var (docCount, storageBytes) = await service.GetStatisticsAsync();
+        var (docCount, storageBytes, vectorBytes) = await service.GetStatisticsAsync();
 
         Assert.AreEqual(100L, docCount);
         Assert.AreEqual(2048L, storageBytes);
+        // The vector half of StorageSize, carried through for the run report's storage breakdown.
+        Assert.AreEqual(1024L, vectorBytes);
     }
 }

@@ -45,4 +45,19 @@ public record RagQueryResult(
     // single search, so this request got nothing a plain search could not have done; several
     // entries = it decomposed the question. Empty on a guard-blocked row, where no retrieval
     // quality is being measured anyway.
-    IReadOnlyList<string>? SubQueries = null);
+    IReadOnlyList<string>? SubQueries = null)
+{
+    // The retrieved set as a ranking, for the eval's rank metrics (2026-09-15).
+    //
+    // ReferencesRetrieved is k: the references the knowledge base returned and the mapper kept,
+    // BEFORE neighbor expansion - ChunksRetrieved is the count after it, i.e. what synthesis
+    // was handed. RetrievedDocumentRanking is one document id per reference, ordered by the
+    // service's reranker score (ties and missing scores keep return order), so "rank of the
+    // first expected document" is the service's own ranking, not ours. Citations are grouped
+    // per (document, page) and cannot carry this - two references from one page collapse.
+    //
+    // Init properties so the positional constructor - and every test building one - stays
+    // untouched. 0 / null on a guard-blocked row.
+    public int                    ReferencesRetrieved      { get; init; }
+    public IReadOnlyList<string>? RetrievedDocumentRanking { get; init; }
+}

@@ -51,7 +51,8 @@ public static class KnowledgeBaseReferenceMapper
                 CreatedAt:       AsDateTimeOffset(createdAtRaw),
                 ModDate:         AsDateTimeOffset(modDateRaw),
                 HeadingPath:     AsText(headingPathRaw),
-                DomainTag:       AsText(domainTagRaw)));
+                DomainTag:       AsText(domainTagRaw),
+                RerankerScore:   r.RerankerScore));
         }
         return chunks;
     }

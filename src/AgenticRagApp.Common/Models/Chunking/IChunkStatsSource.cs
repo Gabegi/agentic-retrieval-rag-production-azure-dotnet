@@ -24,4 +24,32 @@ public interface IChunkStatsSource : IChunk
     // NOT the same decision as IsCoherent, which stays on the bare body deliberately - see
     // ChunkObject.
     string StatsText => Content;
+
+    // The stored tokenizer count of StatsText - the text that gets embedded - or null when the
+    // chunk type has no real count. ChunkingStageMetrics.Compute reads it for the token
+    // distribution (2026-09-15); it never tokenizes anything itself.
+    //
+    // Defaults to null, not to a word-count proxy. A proxy in this field would be reported as if
+    // it were the model's count, in a way nothing flags - ChunkStatsAdapter.TokenEstimate is
+    // exactly such a proxy and stays out. Null reads as "not measured" on the report.
+    int? EmbeddedTokenCount => null;
+
+    // Whether the cut carries (part of) a typed table span. Splits tokens-per-word in two: table
+    // markup tokenizes at ~2x the rate of prose (chunk-token-metrics-260909-1.md §4), so one
+    // ratio over both populations is wrong for each. Defaults to false - a type with no table
+    // concept reports everything as prose, which is the honest answer for it.
+    bool IsTableShaped => false;
+
+    // Tokenizer count of the prefix prepended before embedding (title line, sector tag, heading
+    // chain), or null when the type has no prefix concept. Read once per chunk by Compute for
+    // the prefix-share figures - implementations may count on read.
+    int? PrefixTokenCount => null;
+
+    // Characters of Content that are figure description (CU writes each figure's generated
+    // description into the markdown as image alt text, so it rides inside the chunk), and the
+    // subset describing a pageHeader / pageFooter figure - a logo. Null = not measured: no
+    // figure concept, or not stamped. Measured against Content, not StatsText, to match
+    // cu-figures-demonstration.md §5's 341 / 117 / 23.
+    int? FigureTextChars => null;
+    int? HeaderFooterFigureTextChars => null;
 }

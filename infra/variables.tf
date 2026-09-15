@@ -25,6 +25,12 @@ variable "openai_embedding_deployment" {
   default     = "embedding-3-large"
 }
 
+variable "embedding_input_price_usd_per_1m_tokens" {
+  type        = string
+  description = "Embedding list price in USD per 1M input tokens, used ONLY to turn the indexing run report's measured token counts into cost figures - nothing bills from it. A setting rather than a code constant because list price changes without a code change; the rate is stamped into every report so older reports stay comparable. Default is text-embedding-3-large's standard-tier rate (there is no batch switch - the indexing path embeds synchronously). Set to \"0\" to disable cost reporting."
+  default     = "0.130"
+}
+
 variable "openai_gpt_deployment" {
   type        = string
   description = "Deployment name for the query API's GPT model - runs gpt-5.4 (ai_deployments.tf). The name still says gpt-4.1 on purpose: renaming a deployment forces destroy+recreate, so names are frozen and models move under them."

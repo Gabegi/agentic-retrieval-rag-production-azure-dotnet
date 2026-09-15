@@ -173,13 +173,19 @@ public static class Instrumentation
     public static readonly Counter<long> EmbeddingRetries =
         Meter.CreateCounter<long>("indexer.embedding_retries", description: "OpenAI 429 throttle retries during embedding");
 
-    // Chunks over 24k chars truncated before embedding. The model sees incomplete content — quality is degraded.
+    // Chunks cut before embedding — at the 24k-char pre-filter or the 8,191-token input limit
+    // (EmbeddingService.EmbedBatchAsync). The model sees incomplete content — quality is degraded.
     public static readonly Counter<long> ChunksTruncated =
-        Meter.CreateCounter<long>("indexer.chunks_truncated", description: "Chunks truncated to 24k chars before embedding — model saw incomplete content");
+        Meter.CreateCounter<long>("indexer.chunks_truncated", description: "Chunks cut before embedding (24k-char pre-filter or 8,191-token input limit) — model saw incomplete content");
 
     // Wrong vector dimensions — should always be zero. Non-zero means a model or config mismatch.
     public static readonly Counter<long> VectorDimErrors =
         Meter.CreateCounter<long>("indexer.vector_dim_errors", description: "Chunks with unexpected embedding vector dimensions");
+
+    // Right-length vectors that are all-zero or contain NaN/infinity — should always be zero.
+    // They pass the dimension check and upload without error, then never match a query.
+    public static readonly Counter<long> EmptyVectors =
+        Meter.CreateCounter<long>("indexer.empty_vectors", description: "Chunks whose embedding vector is all-zero or non-finite — indexed but unretrievable");
 
     // ── Upload ────────────────────────────────────────────────────────────────
 

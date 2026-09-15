@@ -37,6 +37,27 @@ public sealed record PdfIndexRunReport
     // is disabled; both samples zero is what the run-analysis snapshot_unverified flag keys on.
     public IndexStatsReadback? StatsReadback { get; init; }
 
+    // The vector side of the live index definition - metric, width, HNSW parameters,
+    // compression, vectorizer - read back at report time next to StatsReadback (2026-09-15).
+    // Get-and-verify: BuildVectorSearch never sets the HNSW parameters, so this is the only place
+    // the metric the index actually compares with is written down, and the Configured* fields on
+    // it are what the run analysis flags drift against. Null when the read failed or the report
+    // predates the field.
+    public AgenticRagApp.Infrastructure.Clients.Search.IndexVectorConfig? VectorConfig { get; init; }
+
+    // ── What the run cost (2026-09-15) ───────────────────────────────────────────────────────
+    // Derived at report time from the stage records above plus the live vector config, rather
+    // than measured again: every input already exists, split across stages because each stage
+    // owns its own number. These three are the rollups that answer the questions a stage record
+    // cannot - what did the whole run send to the API, what would a full rebuild cost, what are
+    // the vectors occupying, and how many runs has this index definition survived.
+    //
+    // Null when their inputs are absent: no chunking stage, no vector config read, or no
+    // configured rate. Null is "not derivable", never zero cost.
+    public EmbeddingCostMetrics?   EmbeddingCost { get; init; }
+    public VectorStorageMetrics?   VectorStorage { get; init; }
+    public IndexDefinitionCounter? IndexDefinition { get; init; }
+
     // Null since the Zenya metadata removal (2026-08-26): the mechanism this counted never
     // existed on any blob, so PDF now reports "no equivalent concept".
     //
@@ -54,4 +75,10 @@ public sealed record PdfIndexRunReport
 }
 
 // See PdfIndexRunReport.StatsReadback.
-public sealed record IndexStatsReadback(long DocumentCount, long StorageSizeBytes, DateTimeOffset ReadAtUtc);
+public sealed record IndexStatsReadback(long DocumentCount, long StorageSizeBytes, DateTimeOffset ReadAtUtc)
+{
+    // The vector field plus its HNSW graph (2026-09-15) - what counts against the tier's vector
+    // quota, which is the limit that binds before StorageSize does. Init property so the existing
+    // positional construction sites stay untouched. Null = the service did not report it.
+    public long? VectorIndexSizeBytes { get; init; }
+}

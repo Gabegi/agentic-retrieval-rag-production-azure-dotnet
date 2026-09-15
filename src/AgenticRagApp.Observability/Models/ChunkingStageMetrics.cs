@@ -76,6 +76,23 @@ public sealed record ChunkingStageMetrics(
     // fields: a caller with no identity concept never sets it and says nothing false.
     public IReadOnlyList<string> UntaggedFamilyMemberIds { get; init; } = [];
 
+    // Token distribution of the embedded text, from each chunk's own stored count - see
+    // ChunkTokenMetrics for why it exists and what the budget-relative counts are against.
+    // Null when no chunk carried a count: not measured, not zero. Init property, same
+    // reasoning as the field above; reports before 2026-09-15 read back as null.
+    public ChunkTokenMetrics? Tokens { get; init; }
+
+    // How much of the chunk text is figure description, and how much of that is a page-header /
+    // footer logo's - the "wasted vectors" D183 counted by hand. Null when no chunk carried the
+    // stamped counts. See FigureTextMetrics.
+    public FigureTextMetrics? FigureText { get; init; }
+
+    // Token pressure on the identity embeddings - the one place the model's per-input limit is
+    // live. Caller-stamped from step 1's diagnostics, like UntaggedFamilyMemberIds: Compute sees
+    // chunks, and this is a fact about the documents. Null = no identity concept, or a report
+    // from before 2026-09-15. See IdentityTokenMetrics.
+    public IdentityTokenMetrics? IdentityTokens { get; init; }
+
     // Kept small deliberately - see ChunkSample's comment on the Durable row limit.
     private const int MaxSamples        = 5;
     private const int MaxZeroChunkIds   = 20;
@@ -97,10 +114,18 @@ public sealed record ChunkingStageMetrics(
     /// contributes no chunk to derive its own ID from. Pass null only where the caller genuinely
     /// has no input list, and read DocsWithZeroChunks as "not measured" in that case.
     /// </param>
+    /// <param name="tokenCeiling">
+    /// The per-chunk token budget the cuts were made against (the PDF pipeline's
+    /// ChunkingBudget.TokenCeiling), so Tokens.AboveCeiling / UnderHalfCeiling name the ceiling
+    /// they were counted with. Null leaves those two counts null - see ChunkTokenMetrics.
+    /// </param>
+    /// <param name="minBodyTokenBudget">Same contract, for Tokens.UnderMinBodyBudget.</param>
     public static ChunkingStageMetrics Compute<T>(
         IReadOnlyList<T> chunks,
         string strategy,
-        IReadOnlyCollection<string>? sourceDocumentIds = null) where T : IChunkStatsSource
+        IReadOnlyCollection<string>? sourceDocumentIds = null,
+        int? tokenCeiling = null,
+        int? minBodyTokenBudget = null) where T : IChunkStatsSource
     {
         if (chunks.Count == 0)
         {
@@ -115,6 +140,10 @@ public sealed record ChunkingStageMetrics(
         }
 
         var sizes        = new List<long>(chunks.Count);
+        // Only chunks that carry a real count - a type without one contributes nothing rather
+        // than a zero, so Tokens.Measured / FigureText.Measured say how many did.
+        var tokens       = new List<ChunkTokenSample>(chunks.Count);
+        var figureText   = new List<FigureTextSample>(chunks.Count);
         var docsProduced = new HashSet<string>(StringComparer.Ordinal);
         // StatsText -> (occurrences, first chunk seen with it). Keyed on the text rather than a
         // hash so the excerpt is available without a second pass; the hash is computed once,
@@ -136,6 +165,18 @@ public sealed record ChunkingStageMetrics(
             var len       = (long)statsText.Length;
             sizes.Add(len);
             docsProduced.Add(chunk.DocumentId);
+            if (chunk.EmbeddedTokenCount is { } tokenCount)
+                tokens.Add(new ChunkTokenSample(
+                    Tokens:       tokenCount,
+                    // Whitespace-separated non-empty runs of the same text the tokens count.
+                    Words:        statsText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length,
+                    TableShaped:  chunk.IsTableShaped,
+                    PrefixTokens: chunk.PrefixTokenCount));
+            if (chunk.FigureTextChars is { } figureChars)
+                figureText.Add(new FigureTextSample(
+                    FigureChars:       figureChars,
+                    HeaderFooterChars: chunk.HeaderFooterFigureTextChars ?? 0,
+                    ContentLength:     chunk.Content.Length));
 
             if      (len < 100)  band0++;
             else if (len < 500)  band1++;
@@ -200,7 +241,11 @@ public sealed record ChunkingStageMetrics(
                                           Occurrences:    kv.Value.Count,
                                           ContentExcerpt: Excerpt(kv.Key),
                                           Truncated:      kv.Key.Length > MaxExcerptChars))
-                                      .ToList());
+                                      .ToList())
+        {
+            Tokens     = ChunkTokenMetrics.From(tokens, tokenCeiling, minBodyTokenBudget),
+            FigureText = FigureTextMetrics.From(figureText),
+        };
     }
 
     // One chunk per size band where that band is non-empty, then filled out from the largest

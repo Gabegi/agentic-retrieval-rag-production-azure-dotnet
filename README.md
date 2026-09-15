@@ -270,13 +270,16 @@ log line in App Insights summarizes a finished run. See
 
 ## Known gaps
 
-- **Guards do not block.** `IndexerConfig.GuardsLogOnly` is `true` and is **not** read from any
-  app setting (it is absent from the `IndexerConfig` initializer in
-  `AgenticRagApp.Infrastructure/Clients/ServiceCollectionExtensions.cs`), so the prompt-injection
-  and PII acceptance criteria are logged, not enforced, in every environment. Flipping it is a
-  code change today.
+- **Guards do not block.** `GUARDS_LOG_ONLY` is `"true"` in `infra/function_app.tf`, so the
+  prompt-injection and PII acceptance criteria are logged, not enforced, in every environment —
+  the mode chosen on 2026-08-12 pending eval evidence. Flipping it is an app-setting change
+  (`"false"`), applied through CI; only an explicit `false` enables blocking.
 - `infra/app_service.tf` provisions a Linux App Service (`con-app-api-*`) for a split-out query
   API, but nothing deploys to it; `/api/query` is served by the Function App.
+- `created_at` / `mod_date` are declared on the index but always null: their producer (the
+  PdfPig read of the PDF Info dictionary) went with Document Intelligence and Content
+  Understanding returns no equivalent. Listed with the other producer-less fields in
+  `Infrastructure/Clients/Search/IndexService.cs`.
 
 ## CI
 

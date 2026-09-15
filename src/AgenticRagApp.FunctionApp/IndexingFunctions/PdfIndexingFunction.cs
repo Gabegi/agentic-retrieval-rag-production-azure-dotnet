@@ -10,6 +10,7 @@ using AgenticRagApp.Indexing.CU.Services;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.DocumentIdentity;
 using AgenticRagApp.Infrastructure.Clients.Search;
+using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Functions.RunAnalysis;
 using AgenticRagApp.Observability.Reports;
@@ -48,6 +49,7 @@ public class PdfIndexingFunction
     private readonly IVectorCache              _vectorCache;
     private readonly IDocumentIdentityStore    _identityStore;
     private readonly IIndexDocumentService     _indexDocumentService;
+    private readonly IndexerConfig             _indexerConfig;
     private readonly ILogger<PdfIndexingFunction> _logger;
 
     public PdfIndexingFunction(
@@ -64,8 +66,12 @@ public class PdfIndexingFunction
         IVectorCache              vectorCache,
         IDocumentIdentityStore    identityStore,
         IIndexDocumentService     indexDocumentService,
+        // Reporting input only - the embedding list price the run report's cost figures are
+        // computed at. Nothing here bills from it; see IndexerConfig.
+        IndexerConfig             indexerConfig,
         ILogger<PdfIndexingFunction> logger)
     {
+        _indexerConfig     = indexerConfig;
         _extractionService = extractionService;
         _chunkingService   = chunkingService;
         _embeddingService  = embeddingService;
@@ -396,7 +402,11 @@ public class PdfIndexingFunction
                         embeddingResult.ChunksTruncated,
                         embeddingResult.EmbeddingRetries,
                         embeddingResult.VectorDimErrors,
+                        embeddingResult.EmptyVectors,
                         embeddingResult.CacheHits,
+                        embeddingResult.CacheHitTokens,
+                        embeddingResult.ApiPhaseMs,
+                        embeddingResult.CachePhaseMs,
                     },
                 },
                 context.CancellationToken);
@@ -448,7 +458,15 @@ public class PdfIndexingFunction
                 PreviousIndexDocumentCount:    uploadResult.PreviousIndexDocumentCount,
                 PreviousIndexStorageSizeBytes: uploadResult.PreviousIndexStorageSizeBytes)
             {
-                TotalEmbeddingTokens = embeddingResult.TotalInputTokens,
+                TotalEmbeddingTokens   = embeddingResult.TotalInputTokens,
+                EmptyVectors           = embeddingResult.EmptyVectors,
+                EmbeddingApiDurationMs = embeddingResult.ApiPhaseMs,
+                VectorCacheDurationMs  = embeddingResult.CachePhaseMs,
+                VectorCacheHitTokens   = embeddingResult.CacheHitTokens,
+                // The 429 subset of EmbeddingRetries: on a full re-embed this and the durations
+                // are what the rebuild actually costs, not the dollars.
+                RateLimitedRetries     = embeddingResult.ThrottledRetries,
+                IndexVectorIndexSizeBytesSnapshot = uploadResult.IndexVectorIndexSizeBytesSnapshot,
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -457,6 +475,14 @@ public class PdfIndexingFunction
             throw new InvalidOperationException($"EmbedAndUploadActivity failed: {ex}");
         }
     }
+
+    // Adds two optional token counts without letting a null blank the other out: null + 5 is 5,
+    // not null. Both null stays null - "neither stage reported usage", which is not zero tokens.
+    private static long? Sum(long? a, long? b) => (a, b) switch
+    {
+        (null, null) => null,
+        var (x, y)   => (x ?? 0) + (y ?? 0),
+    };
 
     [Function("SaveIndexReportActivity")]
     public async Task SaveIndexReportActivity([ActivityTrigger] PdfIndexRunReport report, FunctionContext context)
@@ -485,12 +511,91 @@ public class PdfIndexingFunction
         // must not lose the report.
         try
         {
-            var (docCount, storageBytes) = await _indexDocumentService.GetStatisticsAsync(context.CancellationToken);
-            report = report with { StatsReadback = new IndexStatsReadback(docCount, storageBytes, DateTimeOffset.UtcNow) };
+            var (docCount, storageBytes, vectorBytes) = await _indexDocumentService.GetStatisticsAsync(context.CancellationToken);
+            report = report with { StatsReadback = new IndexStatsReadback(docCount, storageBytes, DateTimeOffset.UtcNow) { VectorIndexSizeBytes = vectorBytes } };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Index stats readback failed — report saved without StatsReadback.");
+        }
+
+        // The live vector configuration, read back the same way (2026-09-15): which metric,
+        // width, HNSW parameters and vectorizer the index ACTUALLY has, as the service reports
+        // them - including the defaults the code never set (BuildVectorSearch passes no HNSW
+        // parameters, so "cosine" there is the service's default, not a decision anyone made).
+        // Get-and-verify: the run analysis compares it against configuration; nothing here
+        // changes the index. Best-effort for the same reason as the block above.
+        try
+        {
+            report = report with { VectorConfig = await _indexService.ReadVectorConfigAsync(context.CancellationToken) };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Index vector-config readback failed — report saved without VectorConfig.");
+        }
+
+        // Cost and storage rollups (2026-09-15). Derived here, after both readbacks, because this
+        // is the first point where the stage records, the live vector width and the vector index
+        // size all exist together - no stage owns that join. Nothing is re-measured: every input
+        // is a number an earlier stage already reported.
+        report = report with
+        {
+            EmbeddingCost = EmbeddingCostMetrics.From(
+                // What the API was actually sent, kept as its two parts: chunk embeddings bill
+                // on the embed stage, identity embeddings on the chunking stage, and
+                // report-schema.md deliberately does not fold one into the other.
+                chunkTokens:         report.Embedding?.TotalEmbeddingTokens,
+                identityTokens:      report.Chunking?.IdentityTokens?.TotalEmbedded,
+                // A cold-cache rebuild: every chunk and every identity text this run handled,
+                // cached or not. The number that matters for a chunker or model change, because
+                // such a change invalidates the vector cache by definition.
+                fullReEmbedTokens:   Sum(report.Chunking?.Tokens?.Total, report.Chunking?.IdentityTokens?.TotalThisRun),
+                prefixTokens:        report.Chunking?.Tokens?.PrefixTokensTotal,
+                prefixShareOfTokens: report.Chunking?.Tokens?.PrefixShareOfTotal,
+                rateUsdPer1M:        _indexerConfig.EmbeddingInputPriceUsdPer1MTokens),
+
+            VectorStorage = VectorStorageMetrics.From(
+                // The LIVE width, not the configured one: EnsureIndexAsync is get-or-create, so
+                // the index can be narrower than configuration says indefinitely, and the bytes
+                // on disk follow the index.
+                dimensions:            report.VectorConfig?.Dimensions,
+                compressionConfigured: report.VectorConfig?.Compression is not null,
+                chunksProduced:        report.ChunksProduced,
+                // Prefer the readback over the post-upload snapshot: the snapshot is taken
+                // seconds after writing, which is exactly when Azure Search's stats lag most.
+                vectorIndexSizeBytes:  report.StatsReadback?.VectorIndexSizeBytes
+                                       ?? report.Embedding?.IndexVectorIndexSizeBytesSnapshot,
+                // Dead weight from counts that already exist and mean something: below the
+                // chunking budget's own body floor, and content-hash duplicates. No invented
+                // "empty" threshold.
+                thinChunks:            report.Chunking?.Tokens?.UnderMinBodyBudget,
+                duplicateChunks:       report.Chunking?.DuplicateChunks ?? 0),
+        };
+
+        // Runs since the index's vector definition last changed. Best-effort and last: it is the
+        // only part of this activity that WRITES state, so a failure here must not cost the
+        // report everything derived above.
+        if (report.VectorConfig is { } vectorConfig)
+        {
+            try
+            {
+                var hash     = IndexDefinitionCounter.ComputeHash(vectorConfig);
+                var previous = await _reportWriter.GetIndexDefinitionAsync(Source, context.CancellationToken);
+                var counter  = IndexDefinitionCounter.Advance(previous, hash, DateTimeOffset.UtcNow);
+
+                await _reportWriter.SaveIndexDefinitionAsync(Source, counter, context.CancellationToken);
+                report = report with { IndexDefinition = counter };
+
+                if (counter.DefinitionChangedThisRun)
+                    _logger.LogWarning(
+                        "Index vector definition changed ({Previous} -> {Current}) — runs on the previous " +
+                        "definition are not comparable to this one.",
+                        counter.PreviousDefinitionHash, counter.DefinitionHash);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Index-definition counter failed — report saved without IndexDefinition.");
+            }
         }
 
         if (!_reportWriter.IsEnabled) return;

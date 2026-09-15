@@ -321,6 +321,9 @@ public sealed class RunReportAssembler
                 MeanCoherence:     Mean(rows, "Coherence"),
                 MeanEquivalence:   Mean(rows, "Equivalence"),
                 MeanCitationMatch: Mean(rows, "CitationMatch"),
+                MeanReciprocalRank: Mean(rows, "ReciprocalRank"),
+                MeanRecallAt5:      Mean(rows, "RecallAt5"),
+                MeanRecallAt50:     Mean(rows, "RecallAt50"),
                 MeanRefusalScore:  Mean(rows, "RefusalScore"),
                 TotalCostUsd:      rows.Sum(r => GetDouble(r, "CostUsd")));
         }

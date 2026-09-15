@@ -48,21 +48,31 @@ public class EmbeddingService : IEmbeddingService
     {
         var docList = documents.ToList();
 
+        // Two wall-clocks, so the report can say how much of the embed step was the paid API
+        // phase and how much was cache I/O (2026-09-15). The caller's TotalEmbeddingDurationMs
+        // wraps this whole method; these two are the split of it.
+        var cacheClock = System.Diagnostics.Stopwatch.StartNew();
+
         // A chunk whose content hash is already cached gets its vector back for free - no
         // embedding API call. Only genuinely new/changed chunks (within an updated document,
         // typically just the pages that actually changed) go on to EmbedBatchAsync below.
         var (cached, toEmbed) = await SplitByCacheAsync(docList, ct);
+        cacheClock.Stop();
 
         _logger.LogInformation(
             "Embedding {ToEmbed} of {Total} documents in batches of {BatchSize} ({CacheHits} reused from vector cache)",
             toEmbed.Count, docList.Count, BatchSize, cached.Count);
 
+        var apiClock     = System.Diagnostics.Stopwatch.StartNew();
         var semaphore    = new SemaphoreSlim(MaxParallelism);
         var tasks        = toEmbed.Chunk(BatchSize).Select(batch => EmbedBatchAsync(batch, semaphore, ct)).ToList();
         var batchResults = await Task.WhenAll(tasks);
+        apiClock.Stop();
         var freshResults = batchResults.SelectMany(b => b.Results).ToArray();
 
+        cacheClock.Start();
         await CacheFreshVectorsAsync(freshResults, ct);
+        cacheClock.Stop();
 
         _logger.LogInformation("Embedding complete — {Fresh} embedded, {Cached} reused", freshResults.Length, cached.Count);
 
@@ -78,12 +88,35 @@ public class EmbeddingService : IEmbeddingService
             // field say the same thing by construction.
             TotalInputTokens = batchResults.Any(b => b.InputTokens is not null)
                 ? batchResults.Sum(b => b.InputTokens ?? 0) : null,
+            EmptyVectors     = freshResults.Count(r => r.EmptyVector),
+            ThrottledRetries = batchResults.Sum(b => b.ThrottledRetries),
+            ApiPhaseMs   = apiClock.ElapsedMilliseconds,
+            CachePhaseMs = cacheClock.ElapsedMilliseconds,
+            // What the reused vectors would have billed: the stored count of the exact text a
+            // fresh embed would have sent. The tokens the cache saved, in the model's own unit.
+            CacheHitTokens = cached.Sum(d => (long)d.TokenCount),
         };
     }
 
+    // A vector of the right length that can never match anything: every component zero, or
+    // any component NaN/infinite. Both pass the dimension check and upload without error -
+    // Search stores them, and cosine similarity against them is undefined or zero - so the
+    // chunk sits in the index and is never retrieved. The dimension check cannot see this;
+    // it has to be a second check on the values.
+    private static bool IsEmptyVector(float[] vector)
+    {
+        var allZero = true;
+        foreach (var component in vector)
+        {
+            if (!float.IsFinite(component)) return true;
+            if (component != 0f) allZero = false;
+        }
+        return allZero;
+    }
+
     // Splits by vector-cache hit/miss. A cached vector whose length no longer matches the
-    // configured embedding dimensions (model/config changed since it was cached) is treated
-    // as a miss rather than trusted blindly.
+    // configured embedding dimensions (model/config changed since it was cached), or that is
+    // empty (see IsEmptyVector), is treated as a miss rather than trusted blindly.
     private async Task<(List<ChunkObject> Cached, List<ChunkObject> ToEmbed)> SplitByCacheAsync(
         List<ChunkObject> docs, CancellationToken ct)
     {
@@ -96,7 +129,7 @@ public class EmbeddingService : IEmbeddingService
             async (doc, token) =>
             {
                 var vector = await _vectorCache.TryGetAsync(doc.ContentHash, token);
-                if (vector is { } v && v.Length == _config.OpenAiEmbeddingDimensions)
+                if (vector is { } v && v.Length == _config.OpenAiEmbeddingDimensions && !IsEmptyVector(v))
                 {
                     doc.ContentVector = v;
                     cached.Add(doc);
@@ -113,11 +146,11 @@ public class EmbeddingService : IEmbeddingService
 
     // Writes every freshly-embedded chunk's vector back to the cache, keyed by content hash,
     // so the next run that touches an unchanged chunk with the same hash gets a cache hit
-    // instead of paying to re-embed it. Skips dimension-mismatched vectors - not worth
-    // caching a result we already know is wrong.
+    // instead of paying to re-embed it. Skips dimension-mismatched and empty vectors - not
+    // worth caching a result we already know is wrong.
     private Task CacheFreshVectorsAsync(IReadOnlyList<EmbedChunkResult> results, CancellationToken ct) =>
         Parallel.ForEachAsync(
-            results.Where(r => !r.DimError && r.Document.ContentVector is not null),
+            results.Where(r => !r.DimError && !r.EmptyVector && r.Document.ContentVector is not null),
             new ParallelOptions { MaxDegreeOfParallelism = MaxCacheParallelism, CancellationToken = ct },
             (r, token) => new ValueTask(_vectorCache.SetAsync(r.Document.ContentHash, r.Document.ContentVector!, token)));
 
@@ -186,7 +219,7 @@ public class EmbeddingService : IEmbeddingService
                 texts[i] = text;
             }
 
-            var (vectors, retries, inputTokens) = await _embeddingClient.EmbedWithRetryAsync(texts, ct);
+            var (vectors, retries, throttledRetries, inputTokens) = await _embeddingClient.EmbedWithRetryAsync(texts, ct);
             if (retries > 0)
                 Instrumentation.EmbeddingRetries.Add(retries);
             // Service-reported billed tokens (plan 1.6). Null = the response carried no usage;
@@ -207,10 +240,20 @@ public class EmbeddingService : IEmbeddingService
                     Instrumentation.VectorDimErrors.Add(1);
                 }
 
-                results.Add(new EmbedChunkResult(doc, truncated[i], dimError));
+                // Only checked on a vector of the right length: a wrong-length vector is
+                // already counted once, and a second count for the same vector would make
+                // one bad response read as two defects.
+                var emptyVector = !dimError && doc.ContentVector is { } cv && IsEmptyVector(cv);
+                if (emptyVector)
+                {
+                    _logger.LogError("Empty vector (all-zero or non-finite) for {Id} — it will never match a query", doc.Id);
+                    Instrumentation.EmptyVectors.Add(1);
+                }
+
+                results.Add(new EmbedChunkResult(doc, truncated[i], dimError, emptyVector));
             }
 
-            return new BatchResult(results, retries, inputTokens);
+            return new BatchResult(results, retries, throttledRetries, inputTokens);
         }
         finally
         {
@@ -218,6 +261,6 @@ public class EmbeddingService : IEmbeddingService
         }
     }
 
-    private record EmbedChunkResult(ChunkObject Document, bool Truncated, bool DimError);
-    private record BatchResult(List<EmbedChunkResult> Results, int Retries, long? InputTokens);
+    private record EmbedChunkResult(ChunkObject Document, bool Truncated, bool DimError, bool EmptyVector);
+    private record BatchResult(List<EmbedChunkResult> Results, int Retries, int ThrottledRetries, long? InputTokens);
 }

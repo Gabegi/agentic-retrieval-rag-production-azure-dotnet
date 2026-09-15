@@ -13,7 +13,12 @@ public sealed record RetrievedChunk(
     int? PageCount = null, DateTimeOffset? CreatedAt = null, DateTimeOffset? ModDate = null,
     // The two identity fields the embedded prefix was built from (PrefixBuilder): the heading
     // chain and the sector tag. Null on neighbor-expanded chunks, like the fields above.
-    string? HeadingPath = null, string? DomainTag = null)
+    string? HeadingPath = null, string? DomainTag = null,
+    // The knowledge base's own relevance score for this reference (KnowledgeBaseReference
+    // .RerankerScore, 2026-09-15). Carried so the eval can rank the retrieved set - MRR needs to
+    // know how HIGH the right document sat, which the citation list alone cannot say. Null on
+    // neighbor-expanded chunks and when the service sent none.
+    float? RerankerScore = null)
     : DocumentReferenceBase(DocumentId, Title, QuickCode, RelativePath, PageCount, CreatedAt, ModDate)
 {
     // Rebuilds the same composition the chunk was EMBEDDED with: "Title [tag]", heading path,

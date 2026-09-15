@@ -292,6 +292,195 @@ public class ChunkingStageMetricsTests
         Assert.AreEqual(2, stats.DuplicateSamples.Single().Occurrences);
     }
 
+    // ── Tokens ───────────────────────────────────────────────────────────────
+    // The char fields cannot answer "how full are the chunks against the ceiling" because
+    // chars/token is not constant; these pin that the token block comes from the chunks' own
+    // stored counts, names the budget it was measured against, and says nothing when there is
+    // no count to read.
+
+    private sealed record TokenChunk(
+        string Id, string DocumentId, string Content, int? Tokens,
+        bool Table = false, int? Prefix = null, int? FigChars = null, int? LogoChars = null) : IChunkStatsSource
+    {
+        public string? HeadingText                 => null;
+        public int     PageStart                   => 1;
+        public int     ChildIndex                  => 0;
+        public bool    IsCoherent                  => false;
+        public int?    EmbeddedTokenCount          => Tokens;
+        public bool    IsTableShaped               => Table;
+        public int?    PrefixTokenCount            => Prefix;
+        public int?    FigureTextChars             => FigChars;
+        public int?    HeaderFooterFigureTextChars => LogoChars;
+    }
+
+    private static TokenChunk[] TokenChunks(params int?[] counts) =>
+        counts.Select((t, i) => new TokenChunk($"a::{i}", "a.pdf", "body", t)).ToArray();
+
+    private static string WordsOf(int n) => string.Join(' ', Enumerable.Repeat("w", n));
+
+    [TestMethod]
+    public void Compute_ChunkTypeWithoutATokenCount_ReportsNoTokenBlock()
+    {
+        // TestChunk inherits the interface default (null): not measured, so no block - never a
+        // block full of zeros.
+        var stats = ChunkingStageMetrics.Compute([Chunk("a.pdf", "Alpha.")], "v1", ["a.pdf"], 512, 128);
+
+        Assert.IsNull(stats.Tokens);
+    }
+
+    [TestMethod]
+    public void Compute_TokenDistribution_ComesFromTheStoredCountsAgainstTheGivenBudget()
+    {
+        // 10 counts, sorted: 50 100 127 128 200 255 256 400 512 600.
+        var chunks = TokenChunks(600, 50, 512, 128, 255, 100, 400, 127, 256, 200);
+
+        var stats = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"], tokenCeiling: 512, minBodyTokenBudget: 128);
+
+        var t = stats.Tokens!;
+        Assert.AreEqual(10,    t.Measured);
+        Assert.AreEqual(2628L, t.Total);
+        Assert.AreEqual(262.8, t.Mean, 0.001);
+        Assert.AreEqual(255,   t.P50, "sorted[(int)(10 * 0.50)] = sorted[5]");
+        Assert.AreEqual(600,   t.P95, "sorted[(int)(10 * 0.95)] = sorted[9]");
+        Assert.AreEqual(600,   t.Max);
+        Assert.AreEqual(512,   t.Ceiling);
+        Assert.AreEqual(128,   t.MinBodyTokenBudget);
+        Assert.AreEqual(1,     t.AboveCeiling,       "strictly over 512: only 600 - 512 itself is at the ceiling, not over it");
+        Assert.AreEqual(6,     t.UnderHalfCeiling,   "strictly under 256: 50 100 127 128 200 255");
+        Assert.AreEqual(3,     t.UnderMinBodyBudget, "strictly under 128: 50 100 127");
+    }
+
+    [TestMethod]
+    public void Compute_NoBudgetSupplied_ReportsTheDistributionButNoBudgetRelativeCounts()
+    {
+        // A caller with no ceiling concept still gets the distribution; the counts that would
+        // need a ceiling stay null rather than being measured against a guessed one.
+        var stats = ChunkingStageMetrics.Compute(TokenChunks(100, 200, 300), "v1", ["a.pdf"]);
+
+        var t = stats.Tokens!;
+        Assert.AreEqual(3,   t.Measured);
+        Assert.AreEqual(300, t.Max);
+        Assert.IsNull(t.Ceiling);
+        Assert.IsNull(t.MinBodyTokenBudget);
+        Assert.IsNull(t.AboveCeiling);
+        Assert.IsNull(t.UnderHalfCeiling);
+        Assert.IsNull(t.UnderMinBodyBudget);
+    }
+
+    [TestMethod]
+    public void Compute_ChunksWithoutACount_AreLeftOutAndMeasuredSaysSo()
+    {
+        var stats = ChunkingStageMetrics.Compute(TokenChunks(100, null, 300), "v1", ["a.pdf"], 512, 128);
+
+        Assert.AreEqual(3,    stats.ChunksProduced);
+        Assert.AreEqual(2,    stats.Tokens!.Measured, "the gap between the two is visible, not averaged away");
+        Assert.AreEqual(400L, stats.Tokens.Total);
+    }
+
+    [TestMethod]
+    public void Empty_HasNoTokenBlock()
+    {
+        Assert.IsNull(ChunkingStageMetrics.Empty("v1").Tokens);
+        Assert.IsNull(ChunkingStageMetrics.Empty("v1").FigureText);
+    }
+
+    // ── Content per token / prefix share ─────────────────────────────────────
+    // The ratio is a cost number, not a quality one, and it is not a corpus constant: table
+    // markup tokenizes at ~2x prose, so the split has to travel with the overall figure.
+
+    [TestMethod]
+    public void Compute_TokensPerWord_OverallAndSplitByTableShape()
+    {
+        var chunks = new[]
+        {
+            new TokenChunk("a::0", "a.pdf", WordsOf(4), Tokens: 8),               // prose: 2.0
+            new TokenChunk("a::1", "a.pdf", WordsOf(2), Tokens: 8, Table: true),  // table: 4.0
+        };
+
+        var t = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"], 512, 128).Tokens!;
+
+        Assert.AreEqual(6L,    t.Words, "whitespace-separated non-empty runs of the measured text");
+        Assert.AreEqual(16.0 / 6, t.TokensPerWord, 1e-9);
+        Assert.AreEqual(1,     t.TableShapedChunks);
+        Assert.AreEqual(4.0,   t.TableTokensPerWord!.Value, 1e-9);
+        Assert.AreEqual(2.0,   t.ProseTokensPerWord!.Value, 1e-9);
+    }
+
+    [TestMethod]
+    public void Compute_NoTableShapedChunks_LeavesTheTableRatioNull()
+    {
+        var t = ChunkingStageMetrics.Compute([new TokenChunk("a::0", "a.pdf", WordsOf(3), Tokens: 6)], "v1", ["a.pdf"]).Tokens!;
+
+        Assert.IsNull(t.TableTokensPerWord, "an empty population has no ratio - null, not 0");
+        Assert.AreEqual(2.0, t.ProseTokensPerWord!.Value, 1e-9);
+    }
+
+    [TestMethod]
+    public void Compute_PrefixShare_TotalAndMedian()
+    {
+        // tokens 100/200/300 with prefixes 10/20/60: total share 90/600 = 15%; per-chunk shares
+        // 0.10 / 0.10 / 0.20, median sorted[(int)(3 * 0.5)] = 0.10; prefix p50 = 20.
+        var chunks = new[]
+        {
+            new TokenChunk("a::0", "a.pdf", "body", Tokens: 100, Prefix: 10),
+            new TokenChunk("a::1", "a.pdf", "body", Tokens: 200, Prefix: 20),
+            new TokenChunk("a::2", "a.pdf", "body", Tokens: 300, Prefix: 60),
+        };
+
+        var t = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"], 512, 128).Tokens!;
+
+        Assert.AreEqual(20,   t.PrefixTokensP50);
+        Assert.AreEqual(90L,  t.PrefixTokensTotal);
+        Assert.AreEqual(0.15, t.PrefixShareOfTotal!.Value, 1e-9);
+        Assert.AreEqual(0.10, t.PrefixShareP50!.Value, 1e-9);
+    }
+
+    [TestMethod]
+    public void Compute_NoPrefixCounts_LeavesThePrefixFieldsNull()
+    {
+        var t = ChunkingStageMetrics.Compute(TokenChunks(100, 200), "v1", ["a.pdf"]).Tokens!;
+
+        Assert.IsNull(t.PrefixTokensP50);
+        Assert.IsNull(t.PrefixTokensTotal);
+        Assert.IsNull(t.PrefixShareOfTotal);
+        Assert.IsNull(t.PrefixShareP50);
+    }
+
+    // ── Figure text ──────────────────────────────────────────────────────────
+    // D183's 341 / 117 / 23 and its 97 near-empty logo chunks, as a per-run count. Shares are
+    // over Content length, cuts at 50% and 90% - D183's own.
+
+    [TestMethod]
+    public void Compute_FigureText_CountsChunksAndSharesAtTheTwoCuts()
+    {
+        var body = new string('x', 100);
+        var chunks = new[]
+        {
+            new TokenChunk("a::0", "a.pdf", body, Tokens: 1, FigChars: 60, LogoChars: 60), // >= 50% figure, >= 50% logo
+            new TokenChunk("a::1", "a.pdf", body, Tokens: 1, FigChars: 95, LogoChars: 0),  // >= 90% figure, body figure
+            new TokenChunk("a::2", "a.pdf", body, Tokens: 1, FigChars: 0,  LogoChars: 0),  // no figure text
+            new TokenChunk("a::3", "a.pdf", body, Tokens: 1),                              // not measured
+        };
+
+        var f = ChunkingStageMetrics.Compute(chunks, "v1", ["a.pdf"]).FigureText!;
+
+        Assert.AreEqual(3,    f.Measured, "the unstamped chunk is left out, not counted as zero");
+        Assert.AreEqual(2,    f.ChunksWithFigureText);
+        Assert.AreEqual(155L, f.FigureTextChars);
+        Assert.AreEqual(2,    f.ChunksOver50PctFigureText);
+        Assert.AreEqual(1,    f.ChunksOver90PctFigureText);
+        Assert.AreEqual(1,    f.ChunksWithHeaderFooterFigureText);
+        Assert.AreEqual(60L,  f.HeaderFooterFigureTextChars);
+        Assert.AreEqual(1,    f.ChunksOver50PctHeaderFooterFigureText);
+        Assert.AreEqual(0,    f.ChunksOver90PctHeaderFooterFigureText);
+    }
+
+    [TestMethod]
+    public void Compute_NoFigureCounts_ReportsNoFigureBlock()
+    {
+        Assert.IsNull(ChunkingStageMetrics.Compute(TokenChunks(100), "v1", ["a.pdf"]).FigureText);
+    }
+
     // ── ResidueChunksDropped ─────────────────────────────────────────────────
 
     [TestMethod]

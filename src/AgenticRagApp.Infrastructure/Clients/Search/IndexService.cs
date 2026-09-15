@@ -69,6 +69,16 @@ public class IndexService : IIndexService
     public SearchIndex BuildDefinition() =>
         BuildIndexDefinition(BuildVectorSearch(), BuildSemanticSearch());
 
+    // See IIndexService.ReadVectorConfigAsync. One GET; the field name is the one
+    // BuildIndexDefinition declares, so a renamed field reads back as "not present" rather than
+    // silently reporting some other field's width.
+    public async Task<IndexVectorConfig> ReadVectorConfigAsync(CancellationToken ct = default)
+    {
+        var live = await _client.GetIndexAsync(_config.SearchIndexName, ct);
+        return IndexVectorConfig.From(
+            live.Value, "content_vector", _config.OpenAiEmbeddingDimensions, _config.OpenAiEmbeddingModelName, DateTimeOffset.UtcNow);
+    }
+
     // Get-or-create only — never updates an existing index (avoids a code-driven push
     // silently overwriting portal-side customisation). Returns true if it was created,
     // false if it already existed.

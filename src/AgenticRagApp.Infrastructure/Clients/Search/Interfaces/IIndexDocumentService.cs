@@ -35,8 +35,12 @@ public interface IIndexDocumentService
     Task<IReadOnlyList<string>> GetChunkIdsForDocumentsAsync(IEnumerable<string> documentIds, CancellationToken ct = default);
     Task<int> DeleteChunksByIdAsync(IEnumerable<string> chunkIds, CancellationToken ct = default);
 
-    // Whole-index aggregates (document count, storage size). Callers that also need
-    // Instrumentation recording + drift-check should follow this with
+    // Whole-index aggregates (document count, storage size, vector index size). Callers that
+    // also need Instrumentation recording + drift-check should follow this with
     // IIndexStatsMonitor.RecordAndCheckDriftAsync.
-    Task<(long DocumentCount, long StorageSizeBytes)> GetStatisticsAsync(CancellationToken ct = default);
+    //
+    // VectorIndexSizeBytes is the vector field plus its HNSW graph - the figure that counts
+    // against the tier's vector quota, and the only one the service reports for the vector side.
+    // Null = not reported by the service, never 0.
+    Task<(long DocumentCount, long StorageSizeBytes, long? VectorIndexSizeBytes)> GetStatisticsAsync(CancellationToken ct = default);
 }

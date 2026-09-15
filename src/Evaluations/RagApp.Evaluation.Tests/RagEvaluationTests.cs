@@ -256,7 +256,10 @@ public class RagEvaluationTests
 
     private static string Describe(EvalRow row) =>
         $"[{row.ScenarioName}] ({row.Type}) G={row.Groundedness:F1} R={row.Relevance:F1} C={row.Coherence:F1} Eq={row.Equivalence:F1} " +
-        $"Ret={row.Retrieval:F1} F1={row.F1:F2} Cite={row.CitationMatch:F2} Refusal={row.RefusalScore:F1}  " +
+        $"Ret={row.Retrieval:F1} F1={row.F1:F2} Cite={row.CitationMatch:F2} MRR={row.ReciprocalRank:F2} " +
+        // R@5 < R@50 on a row means the document was retrieved but ranked out of reach; equal and
+        // low means it was never retrieved. k is how many references there were to rank at all.
+        $"R@5={row.RecallAt5:F2} R@50={row.RecallAt50:F2} k={row.ReferencesRetrieved} Refusal={row.RefusalScore:F1}  " +
         // The agentic signal, on the live line rather than only in the JSONL: cap/subq
         // says whether this question was even given the chance to benefit from planning
         // (subq < need means it was not), and docs says how many documents the answer

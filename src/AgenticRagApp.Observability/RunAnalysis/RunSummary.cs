@@ -120,6 +120,15 @@ public sealed record EvalBaseline(
     double?        MeanCoherence,
     double?        MeanEquivalence,
     double?        MeanCitationMatch,
+    // Mean reciprocal rank of the first expected document in the retrieved set (EvalRow
+    // .ReciprocalRank, 2026-09-15). Null when no row carries the field - evals before that date.
+    double?        MeanReciprocalRank,
+    // Document-level recall at the two cutoffs (EvalRow.RecallAt5/RecallAt50, 2026-09-15). The
+    // pair is what makes a drop diagnosable from the run report alone: @5 falling while @50
+    // holds is ranking, both falling is reach - i.e. chunking or indexing, which is what this
+    // report is about. Null on evals from before that date.
+    double?        MeanRecallAt5,
+    double?        MeanRecallAt50,
     double?        MeanRefusalScore,
     double         TotalCostUsd);
 

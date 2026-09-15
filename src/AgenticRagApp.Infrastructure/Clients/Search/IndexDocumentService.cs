@@ -212,9 +212,14 @@ public class IndexDocumentService : IIndexDocumentService
 
     // Whole-index aggregate — lives on SearchIndexClient, not the per-document SearchClient
     // this class otherwise talks to.
-    public async Task<(long DocumentCount, long StorageSizeBytes)> GetStatisticsAsync(CancellationToken ct = default)
+    public async Task<(long DocumentCount, long StorageSizeBytes, long? VectorIndexSizeBytes)> GetStatisticsAsync(CancellationToken ct = default)
     {
         var response = await _indexClient.GetIndexStatisticsAsync(_config.SearchIndexName, ct);
-        return (response.Value.DocumentCount, response.Value.StorageSize);
+        // VectorIndexSize is the vector field and its HNSW graph together, and it is the half of
+        // StorageSize that counts against the tier's own vector quota - the one that runs out
+        // first. Nullable because the service has only reported it since the vector-quota
+        // release: null is "not reported", never 0, or an index with no vectors and an index on
+        // an older service version would read identically.
+        return (response.Value.DocumentCount, response.Value.StorageSize, response.Value.VectorIndexSize);
     }
 }

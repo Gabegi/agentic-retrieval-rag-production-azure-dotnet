@@ -148,6 +148,14 @@ public sealed class ChunkMetadataBuilder
             // fields above - both are index fields.
             metadata.Hyperlinks     = StructureFilter.HyperlinksOf(structure);
             metadata.Annotations    = StructureFilter.AnnotationsOf(structure);
+
+            // 3g. Stats-only, never persisted (2026-09-15): how much of this cut is figure
+            //     description, and how much of that is a page-header/footer logo's. Counted here
+            //     rather than in the stats pass because the roles live on the page-scoped
+            //     structure just built, which ChunkingStageMetrics.Compute never sees. See
+            //     FigureTextCounter for what D183 measured by hand and this now reports per run.
+            chunk.FigureTextChars             = FigureTextCounter.AltTextChars(chunk.Content);
+            chunk.HeaderFooterFigureTextChars = FigureTextCounter.HeaderFooterDescriptionChars(chunk.Content, structure.Figures);
         }
     }
 }

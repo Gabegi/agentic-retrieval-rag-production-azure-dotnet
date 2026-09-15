@@ -55,7 +55,10 @@ public static class IdentityDiagnosticsBuilder
             NearMissFloor:                    CosineSimilarityClusterer.NearMissFloor,
             ConfusableWordThreshold:          ConfusableTitleDetector.ConfusableWordThreshold,
             MaxConfusableEdits:               ConfusableTitleDetector.MaxConfusableEdits,
-            MinConfusableWordLength:          ConfusableTitleDetector.MinConfusableWordLength);
+            MinConfusableWordLength:          ConfusableTitleDetector.MinConfusableWordLength)
+        {
+            TotalIdentityTokensThisRun = thisRun.Sum(d => d.IdentityTokens),
+        };
     }
 
     // No identities, or none that survived to the comparison set: still returns diagnostics so

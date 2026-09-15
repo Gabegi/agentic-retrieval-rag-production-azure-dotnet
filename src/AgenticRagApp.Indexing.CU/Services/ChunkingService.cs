@@ -35,6 +35,8 @@ public class ChunkingService : IChunkingService
     // type uses for ZeroChunkDocumentIds, for the same Durable row-size reason. A corpus with
     // more than 20 of these has a systemic tagging problem, which the first 20 already say.
     private const int MaxUntaggedFamilyIdsReported = 20;
+    // Same cap, same reason, for the identity-token pressure list on the stage metrics.
+    private const int MaxIdentityPressureIdsReported = 20;
 
     public ChunkingService(
         DeclaredBoundaryStrategy declaredBoundary,
@@ -249,12 +251,35 @@ public class ChunkingService : IChunkingService
                 .Take(MaxUntaggedFamilyIdsReported)
                 .ToList();
 
+            // Identity token pressure, from step 1's diagnostics (2026-09-15). Until now it lived
+            // only in the chunking artifact, so a firing tripwire was visible to nobody who did
+            // not open that file - D191 §4 found the 86.8% on 260909/1 by hand. The limit and
+            // the 80% line ride along so the row stays self-describing if either is tuned.
+            var identity       = resolved.Diagnostics;
+            var identityTokens = new IdentityTokenMetrics(
+                Limit:             identity.IdentityTokenLimit,
+                WarningThreshold:  DocumentIdentityBuilder.TokenWarningThreshold,
+                Max:               identity.MaxIdentityTokens,
+                TotalEmbedded:     identity.TotalIdentityTokensEmbedded,
+                TotalThisRun:      identity.TotalIdentityTokensThisRun,
+                NearingLimitCount: identity.NearingTokenLimit.Count,
+                NearingLimit:      identity.NearingTokenLimit
+                                       .Take(MaxIdentityPressureIdsReported)
+                                       .Select(p => new IdentityDocTokens(p.SourceId, p.Tokens))
+                                       .ToList());
+
             // ResidueChunksDropped is stamped here rather than inside Compute: the dropped chunks
             // are not in allChunks by this point, so the count only exists on the state.
-            var stats             = ChunkingStageMetrics.Compute(allChunks, Name, sourceDocumentIds)
+            //
+            // The budget goes in so the report's token counts name the ceiling they were measured
+            // against (ChunkTokenMetrics) - Observability cannot see ChunkingBudget itself.
+            var stats             = ChunkingStageMetrics.Compute(
+                                        allChunks, Name, sourceDocumentIds,
+                                        ChunkingBudget.TokenCeiling, ChunkingBudget.MinBodyTokenBudget)
                                     with { ResidueChunksDropped = state.ResidueDropped,
                                            TocChunksDropped     = state.TocDropped,
-                                           UntaggedFamilyMemberIds = untaggedFamilyMembers };
+                                           UntaggedFamilyMemberIds = untaggedFamilyMembers,
+                                           IdentityTokens = identityTokens };
 
             state.Stats = stats;
 

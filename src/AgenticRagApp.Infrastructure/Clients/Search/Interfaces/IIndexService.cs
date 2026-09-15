@@ -24,4 +24,10 @@ public interface IIndexService
     // this against the live definition - see IndexSchemaComparer, and the drift check in the
     // eval suite's ClassInit, which is what stops a run scoring the app against the old shape.
     SearchIndex BuildDefinition();
+
+    // The vector side of the LIVE definition - metric, width, HNSW parameters, compression,
+    // vectorizer - as the service reports it, with the configured width and model stamped
+    // beside them (2026-09-15). Read-only. What the run report carries as VectorConfig, and what
+    // the run analysis flags dimension / model / metric drift from. See IndexVectorConfig.
+    Task<IndexVectorConfig> ReadVectorConfigAsync(CancellationToken ct = default);
 }

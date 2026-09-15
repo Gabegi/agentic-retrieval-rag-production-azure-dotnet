@@ -61,6 +61,30 @@ public class RunReportWriter : IRunReportWriter
 
     private record LastIndexStats(long DocumentCount, long StorageSizeBytes);
 
+    // The definition counter's blob, beside the stats baseline and read/written on the same
+    // once-per-run schedule (2026-09-15). Separate from _last-stats because the two answer
+    // different questions and fail independently: a lagging stats read deliberately skips its
+    // save (see IndexStatsMonitor), and that must not also stall the run counter.
+    private static string IndexDefinitionPath(string source) => $"indexing/_index-definition-{source}.json";
+
+    public async Task<IndexDefinitionCounter?> GetIndexDefinitionAsync(string source, CancellationToken ct = default)
+    {
+        try
+        {
+            var (counter, _) = await _blobStore.TryReadJsonWithETagAsync<IndexDefinitionCounter>(_container, IndexDefinitionPath(source), ct);
+            return counter;
+        }
+        catch
+        {
+            // Same contract as the stats baseline: a missing or corrupt counter means this run
+            // starts the count over, never that the run fails.
+            return null;
+        }
+    }
+
+    public Task SaveIndexDefinitionAsync(string source, IndexDefinitionCounter counter, CancellationToken ct = default) =>
+        WriteAsync(IndexDefinitionPath(source), counter, ct);
+
     private async Task WriteAsync<T>(string path, T data, CancellationToken ct)
     {
         await _blobStore.AssertContainerExistsAsync(_container, ct);
