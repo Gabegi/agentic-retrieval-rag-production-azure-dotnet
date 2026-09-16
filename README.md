@@ -64,9 +64,10 @@ production projects, NuGet restore runs in locked mode (`packages.lock.json` per
 | `AgenticRagApp.Querying` | Query-time pipeline: knowledge-base retrieval, neighbour expansion, guards, citations | [README](src/AgenticRagApp.Querying/README.md) · [AcceptatieCriteria.md](src/AgenticRagApp.Querying/AcceptatieCriteria.md) |
 | `AgenticRagApp.Observability` | Run reports, stage artifacts, snapshots, run analysis, OpenTelemetry instrumentation | [README](src/AgenticRagApp.Observability/README.md) · [Reports.md](src/AgenticRagApp.Observability/Reports.md) |
 | `AgenticRagApp.FunctionApp` | The deployable Azure Functions host (Durable orchestrations + HTTP endpoints) | [README](src/AgenticRagApp.FunctionApp/README.md) · [indexing-run-status.md](src/AgenticRagApp.FunctionApp/indexing-run-status.md) |
-| `AgenticRagApp.Tools.ZenyaSync` | Console host that runs the Zenya → blob document sync | see [Zenya document sync](#zenya-document-sync) |
+| `AgenticRagApp.Api` | The App Service host for the query side (ASP.NET Core minimal API): `POST /api/query` over the same `IRagQueryService` as the Function, plus an OpenAPI document and a health check. Deployed to `infra/app_service.tf`'s `con-app-api-*` by the app-deploy workflow (first run pending); no auth in code yet | [README](src/AgenticRagApp.Api/README.md) |
+| `src/Tools/ZenyaSync.cs` | Console host (a .NET 10 file-based app, not a project) that runs the Zenya → blob document sync | see [Zenya document sync](#zenya-document-sync) |
 | `Evaluations/RagApp.Evaluation.Tests` | Golden-questions eval harness against a live environment (MSTest; not part of the unit-test run) | [README](src/Evaluations/RagApp.Evaluation.Tests/README.md) · [Rbac.md](src/Evaluations/RagApp.Evaluation.Tests/Rbac.md) |
-| `UnitTests/*.Tests` | One MSTest project per production project (six projects) | — |
+| `UnitTests/*.Tests` | One MSTest project per production project (seven projects) | — |
 
 Retired projects live in root [`archive/`](archive/) — `AgenticRagApp.Indexing.Csv` (+ its tests,
 CSV indexing was never wired to a Function) and `AgenticRagApp.Indexing.DI` (the old Document
@@ -76,6 +77,9 @@ solution and are not built.
 ## Endpoints
 
 All HTTP functions use function-key auth (`AuthorizationLevel.Function`). Everything lives in `src/AgenticRagApp.FunctionApp`.
+`POST /api/query` is also served by `AgenticRagApp.Api` (same route, body and response — the shape
+is one shared `QueryResponse`), the host meant for the OutSystems frontend; deployed by the
+app-deploy workflow, private-endpoint + deny-by-default like the Function, no auth in code yet.
 
 | Endpoint | Function | What it does |
 | --- | --- | --- |
@@ -127,7 +131,8 @@ See [Operations](#operations) for the scheduled rebuild and the full recovery pr
 ## Zenya document sync
 
 Zenya (iProva) is a document management system and an intended source of the corpus.
-`src/AgenticRagApp.Tools.ZenyaSync` is a console host that mirrors Zenya's published document
+`src/Tools/ZenyaSync.cs` is a console host (a .NET 10 file-based app, not a project) that mirrors
+Zenya's published document
 listing into the `zenya-documents` container: `pdf/{document_id}.pdf`,
 `docs/{document_id}.{ext}`, with `zenya_*` blob metadata (`zenya_document_id`, `zenya_version`,
 `zenya_status`, `zenya_title`, `zenya_mime_type`, `zenya_last_modified`, `zenya_synced_at`, …).
@@ -183,7 +188,8 @@ list of missing keys. The full table (required, indexing-only, optional with def
 │   ├── AgenticRagApp.Querying/
 │   ├── AgenticRagApp.Observability/
 │   ├── AgenticRagApp.FunctionApp/
-│   ├── AgenticRagApp.Tools.ZenyaSync/
+│   ├── AgenticRagApp.Api/           # App Service host for /api/query — first deploy pending
+│   ├── Tools/ZenyaSync.cs           # Zenya sync launcher — file-based app, not a project
 │   ├── Evaluations/
 │   ├── UnitTests/
 │   └── AgenticRagApplication.sln   # the solution to build/test
@@ -199,7 +205,7 @@ Terraform in [`infra/`](infra/), one file per resource area. Environments (dev/p
 | Resource | Name (dev) | File |
 | --- | --- | --- |
 | Function App (indexing + query host) | `con-func-idx-cap-dev-we-001` (Windows, EP1) | `function_app.tf` |
-| Linux App Service (future query API) | `con-app-api-cap-dev-we-001` (P1v3) | `app_service.tf` |
+| Linux App Service (query API host) | `con-app-api-cap-dev-we-001` (P1v3) | `app_service.tf` |
 | Azure AI Search | `con-srch-cap-dev-we-001` (S3 + semantic search) | `search.tf` |
 | Storage (documents, reports, snapshots) | `constdatacapdevwe` | `storage.tf` |
 | Storage (Functions runtime) | `constfunccapdevwe` | `storage.tf` |
@@ -274,8 +280,11 @@ log line in App Insights summarizes a finished run. See
   prompt-injection and PII acceptance criteria are logged, not enforced, in every environment —
   the mode chosen on 2026-08-12 pending eval evidence. Flipping it is an app-setting change
   (`"false"`), applied through CI; only an explicit `false` enables blocking.
-- `infra/app_service.tf` provisions a Linux App Service (`con-app-api-*`) for a split-out query
-  API, but nothing deploys to it; `/api/query` is served by the Function App.
+- `infra/app_service.tf`'s Linux App Service (`con-app-api-*`) has its code since 2026-09-16
+  (`src/AgenticRagApp.Api`, for the OutSystems frontend) and an app-deploy workflow job, both
+  waiting for their first run; `/api/query` is served by the Function App until then. Still
+  undecided: how OutSystems (outside Azure) reaches a private-endpoint, deny-by-default host,
+  and which auth layer sits in front.
 - `created_at` / `mod_date` are declared on the index but always null: their producer (the
   PdfPig read of the PDF Info dictionary) went with Document Intelligence and Content
   Understanding returns no equivalent. Listed with the other producer-less fields in

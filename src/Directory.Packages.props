@@ -23,6 +23,9 @@
     <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="coverlet.collector" Version="6.*" />
+    <!-- OpenAPI document for the query API host (AgenticRagApp.Api) - the OutSystems import
+         reads it. Floats with the framework like the Microsoft.Extensions.* packages below. -->
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.*" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="2.52.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.DurableTask" Version="1.18.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
@@ -45,7 +48,7 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.*" />
-    <!-- Generic host for the ZenyaSync console tool (Tools.ZenyaSync); brings console logging + env config. -->
+    <!-- Generic host for the ZenyaSync console tool (src/Tools/ZenyaSync.cs); brings console logging + env config. -->
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.*" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.*" />
@@ -56,6 +59,9 @@
     <PackageVersion Include="MSTest.TestFramework" Version="3.*" />
     <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.*" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.*" />
+    <!-- Request spans/metrics for AgenticRagApp.Api - what UseFunctionsWorkerDefaults gives the
+         Functions host, for an ASP.NET Core host. -->
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.*" />
     <PackageVersion Include="System.Text.Encoding.CodePages" Version="9.0.*" />
   </ItemGroup>
 </Project>

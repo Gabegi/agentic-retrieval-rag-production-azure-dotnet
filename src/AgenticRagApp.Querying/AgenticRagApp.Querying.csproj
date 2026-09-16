@@ -9,5 +9,9 @@
   <ItemGroup>
     <ProjectReference Include="..\AgenticRagApp.Common\AgenticRagApp.Common.csproj" />
     <ProjectReference Include="..\AgenticRagApp.Infrastructure\AgenticRagApp.Infrastructure.csproj" />
+    <!-- For QueryRunReportFactory (QueryRunReport): the per-query report is built here, once,
+         for both hosts that serve /api/query. Same direction as Indexing.CU -> Observability:
+         the producer references the report models. -->
+    <ProjectReference Include="..\AgenticRagApp.Observability\AgenticRagApp.Observability.csproj" />
   </ItemGroup>
 </Project>

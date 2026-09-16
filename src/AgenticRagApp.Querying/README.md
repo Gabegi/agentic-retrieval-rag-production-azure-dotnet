@@ -16,6 +16,7 @@ Services/
   KnowledgeBaseReferenceMapper.cs  knowledge-base references → RetrievedChunk / Citation ([Title] - p.N)
   KnowledgeBaseActivitySummary.cs  sub-query count, sub-queries, token accounting off the retrieval activity log
   ContextTokenEstimator.cs         chars/3.1 estimate of the context handed to the model; shared with the eval harness
+  QueryRunReportFactory.cs         blob path + field mapping of the per-query QueryRunReport - one mapping for both hosts
   Interfaces/IRagQueryService.cs
 Guards/
   PromptInjectionGuard.cs          IPromptInjectionGuard — local regex short-circuit, then Prompt Shields (IPromptShieldClient),
@@ -23,7 +24,8 @@ Guards/
   PiiGuard.cs                      IPiiGuard — BSN (elfproef) + Dutch postcode regexes, then Azure AI Language PII detection
   NumericGroundingGuard.cs         static — numeric claims in the answer that appear nowhere in the retrieved context
                                    (detection only; logged here, scored per scenario by the eval)
-Models/                            RagQueryResult, RetrievedChunk, Citation
+Models/                            RagQueryResult, RetrievedChunk, Citation,
+                                   QueryResponse (the /api/query wire shape, JSON names pinned; both hosts serialize it)
 ServiceCollectionExtensions.cs     AddQuerying()
 ```
 
@@ -34,7 +36,9 @@ ServiceCollectionExtensions.cs     AddQuerying()
 3. `IKnowledgeRetrievalClient.RetrieveAsync` — the knowledge base searches and synthesizes.
 4. Map references to chunks and citations; expand neighbouring pages; estimate context tokens.
 5. PII guard on the answer; numeric-grounding check; prompt-injection guard over retrieved text.
-6. Return `RagQueryResult`; `QueryingFunction` writes a `QueryRunReport`.
+6. Return `RagQueryResult`; the host — `QueryingFunction` (Functions) or `AgenticRagApp.Api`'s
+   `QueryEndpoint` (App Service) — writes the `QueryRunReport` built by `QueryRunReportFactory`
+   and answers with `QueryResponse.From(result)`. Two hosts, one contract, one report shape.
 
 ## Guard enforcement mode — read this
 

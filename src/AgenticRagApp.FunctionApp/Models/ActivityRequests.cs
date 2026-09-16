@@ -18,7 +18,7 @@ namespace AgenticRagApp.Functions;
 // empty before extraction starts, rather than indexing into whatever is already there.
 // Optional with a false default deliberately: an orchestration queued by an earlier
 // deployment has no such property in its persisted JSON input, and must still deserialize.
-public record PdfIndexRequest(bool ForceReindex, bool RecreateIndex = false);
-public record PdfExtractRequest(bool ForceReindex, string OutputBlob, string StaleIdsBlob, string InstanceId, DateTimeOffset StartedAt);
-public record PdfChunkRequest(string InputBlob, string OutputBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
-public record PdfEmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
+public record IndexRequest(bool ForceReindex, bool RecreateIndex = false);
+public record ExtractRequest(bool ForceReindex, string OutputBlob, string StaleIdsBlob, string InstanceId, DateTimeOffset StartedAt);
+public record ChunkRequest(string InputBlob, string OutputBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
+public record EmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);

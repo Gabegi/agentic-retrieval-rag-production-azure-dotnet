@@ -33,7 +33,7 @@ Unit tests are MSTest, one project per production project. Run them per project 
 Azure:
 
 ```
-for p in Common Infrastructure Observability Querying Indexing.CU FunctionApp; do
+for p in Common Infrastructure Observability Querying Indexing.CU FunctionApp Api; do
   dotnet test src/UnitTests/AgenticRagApp.$p.Tests -c Release --no-build
 done
 ```
@@ -116,9 +116,28 @@ Then `POST http://localhost:7071/api/index?force=true` etc. — see the endpoint
 [root README](ReadMe.md#endpoints). A local run writes real reports to the configured
 `pipeline-reports` container and real Content Understanding calls are billed per page.
 
+## Running the query API
+
+`src/AgenticRagApp.Api` is the App Service host for `POST /api/query` (same route, body and
+response as the Function; see its [README](src/AgenticRagApp.Api/README.md)). It reads the same
+environment variables as the Functions host minus the indexing-only and Functions-only ones
+(`CONTENT_UNDERSTANDING_ENDPOINT`, `AzureWebJobsStorage__*`, `FUNCTIONS_WORKER_RUNTIME`);
+everything `IndexerConfig` marks required still has to be set. `ASPNETCORE_ENVIRONMENT=Development`
+(set by `Properties/launchSettings.json`) turns on the console exporters.
+
+```
+dotnet run --project src/AgenticRagApp.Api
+curl -s http://localhost:5080/health
+curl -s http://localhost:5080/openapi/v1.json
+curl -s -X POST http://localhost:5080/api/query -H "Content-Type: application/json" -d '{"question":"..."}'
+```
+
+A local query is a real knowledge-base call and writes a real `queries/…` report to
+`pipeline-reports`, exactly like the Function.
+
 ## Running the Zenya sync tool
 
-`src/AgenticRagApp.Tools.ZenyaSync` is a console host over `Infrastructure/Clients/Zenya/Sync`.
+`src/Tools/ZenyaSync.cs` is a console host (a .NET 10 file-based app, not a project) over `Infrastructure/Clients/Zenya/Sync`.
 It reads `ZENYA_BASE_URL`, `ZENYA_CLIENT_ID`, `ZENYA_ENTRA_SCOPE` (or `ZENYA_CLIENT_SECRET`),
 `STORAGE_ACCOUNT_URL`, `STORAGE_CONTAINER` and `ZENYA_SYNC_DRY_RUN` (default `true`) from the
 environment. Zenya validates the caller's Entra token by tenant + **appid** of the trusted

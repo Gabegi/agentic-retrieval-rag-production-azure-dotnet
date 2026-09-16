@@ -855,6 +855,7 @@
         "dependencies": {
           "AgenticRagApp.Common": "[1.0.0, )",
           "AgenticRagApp.Infrastructure": "[1.0.0, )",
+          "AgenticRagApp.Observability": "[1.0.0, )",
           "Azure.AI.TextAnalytics": "[5.3.0, )",
           "Azure.Core": "[1.62.0, )",
           "Azure.Identity": "[1.*, )",

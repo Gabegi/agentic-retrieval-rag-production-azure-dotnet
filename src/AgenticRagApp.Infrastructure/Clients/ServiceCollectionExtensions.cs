@@ -33,23 +33,27 @@ public static class ServiceCollectionExtensions
     // Returns the built IndexerConfig so the host can still branch on it for its own
     // conditional registrations (e.g. PDF extraction backend), without re-reading
     // configuration a second time.
-    public static IndexerConfig AddAgenticRagAppInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    //
+    // functionsHost: true for the Functions host (AgenticRagApp.FunctionApp), which needs
+    // AzureWebJobsStorage - Durable's storage account, also where the "pipeline-temp" container
+    // lives - so that key is required and the keyed container is registered. The App Service
+    // host (AgenticRagApp.Api, 2026-09-16) has no host storage account and nothing on the query
+    // side reads pipeline-temp, so it passes false and neither happens. Everything else here is
+    // identical on both hosts.
+    public static IndexerConfig AddAgenticRagAppInfrastructure(this IServiceCollection services, IConfiguration configuration, bool functionsHost = true)
     {
         // Fail fast with a named list of missing settings, rather than letting a missing
         // value surface later as an obscure NullReferenceException or UriFormatException.
-        // Two keys below (APPLICATIONINSIGHTS_CONNECTION_STRING, AzureWebJobsStorage:accountName)
-        // are Azure Functions host settings, not IndexerConfig fields, so they're checked
+        // The keys below are host settings, not IndexerConfig fields, so they're checked
         // here rather than via [Required] on the config object below.
-        var requiredHostKeys = new[]
-        {
-            "APPLICATIONINSIGHTS_CONNECTION_STRING",
-            "AzureWebJobsStorage:accountName",
-        };
+        var requiredHostKeys = functionsHost
+            ? new[] { "APPLICATIONINSIGHTS_CONNECTION_STRING", "AzureWebJobsStorage:accountName" }
+            : new[] { "APPLICATIONINSIGHTS_CONNECTION_STRING" };
         var missingHostKeys = requiredHostKeys.Where(k => string.IsNullOrWhiteSpace(configuration[k])).ToList();
         if (missingHostKeys.Count > 0)
             throw new InvalidOperationException(
                 $"Missing required app setting(s): {string.Join(", ", missingHostKeys)}. " +
-                "Set these in local.settings.json (local) or the Function App configuration (deployed).");
+                "Set these in local.settings.json / the environment (local) or the app's configuration (deployed).");
 
         var config = new IndexerConfig
         {
@@ -98,15 +102,17 @@ public static class ServiceCollectionExtensions
             new BlobServiceClient(new Uri(config.StorageAccountUrl), credential));
 
         // Pipeline temp storage — passes large payloads between Durable activities via blob
-        // rather than through Durable Table Storage (64KB row-size limit).
-        services.AddKeyedSingleton<BlobContainerClient>("pipeline-temp", (_, _) =>
-        {
-            var accountName = configuration["AzureWebJobsStorage:accountName"]!;
-            return new BlobServiceClient(
-                new Uri($"https://{accountName}.blob.core.windows.net"),
-                credential)
-                .GetBlobContainerClient("indexing-pipeline");
-        });
+        // rather than through Durable Table Storage (64KB row-size limit). Functions host only -
+        // see the functionsHost parameter.
+        if (functionsHost)
+            services.AddKeyedSingleton<BlobContainerClient>("pipeline-temp", (_, _) =>
+            {
+                var accountName = configuration["AzureWebJobsStorage:accountName"]!;
+                return new BlobServiceClient(
+                    new Uri($"https://{accountName}.blob.core.windows.net"),
+                    credential)
+                    .GetBlobContainerClient("indexing-pipeline");
+            });
 
         services.AddSingleton(_ =>
             new AzureOpenAIClient(new Uri(config.OpenAiEndpoint), credential));

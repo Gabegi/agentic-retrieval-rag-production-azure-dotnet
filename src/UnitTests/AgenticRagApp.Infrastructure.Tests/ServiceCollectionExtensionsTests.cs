@@ -1,4 +1,5 @@
 using Azure.AI.ContentUnderstanding;
+using Azure.Storage.Blobs;
 using AgenticRagApp.Infrastructure.Clients.ContentUnderstanding;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -231,6 +232,50 @@ public class ServiceCollectionExtensionsTests
 
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(ContentUnderstandingClient)));
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IContentAnalysisClient)));
+    }
+
+    // functionsHost (2026-09-16): the Functions host needs AzureWebJobsStorage (Durable's account,
+    // where pipeline-temp lives); the App Service host (AgenticRagApp.Api) has no such account.
+    // functionsHost: false drops that one requirement and the keyed container with it, and must
+    // change nothing else.
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_FunctionsHost_MissingWebJobsStorage_ThrowsNamingTheKey()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new() { ["AzureWebJobsStorage:accountName"] = null });
+
+        var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            services.AddAgenticRagAppInfrastructure(configuration));
+
+        StringAssert.Contains(ex.Message, "AzureWebJobsStorage:accountName");
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_FunctionsHost_RegistersThePipelineTempContainer()
+    {
+        var services = new ServiceCollection();
+
+        services.AddAgenticRagAppInfrastructure(BuildConfiguration());
+
+        Assert.IsTrue(services.Any(d =>
+            d.IsKeyedService && "pipeline-temp".Equals(d.ServiceKey) && d.ServiceType == typeof(BlobContainerClient)));
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_NotFunctionsHost_NeitherRequiresWebJobsStorageNorRegistersPipelineTemp()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new() { ["AzureWebJobsStorage:accountName"] = null });
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration, functionsHost: false);
+
+        Assert.AreEqual("https://search.example.com", config.SearchEndpoint);
+        Assert.IsFalse(services.Any(d => d.IsKeyedService && "pipeline-temp".Equals(d.ServiceKey)));
+        // The query side's clients are still all there.
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(BlobServiceClient)));
+        Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IKnowledgeRetrievalClient"));
+        Assert.IsTrue(services.Any(d => d.ServiceType.Name == "IPromptShieldClient"));
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IndexerConfig)));
     }
 
     // CONTENT_UNDERSTANDING_ENDPOINT is the main Content Understanding setting. The analyzer id

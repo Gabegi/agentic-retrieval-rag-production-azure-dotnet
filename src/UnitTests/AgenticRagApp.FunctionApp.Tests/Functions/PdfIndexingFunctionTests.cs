@@ -36,11 +36,11 @@ public class PdfIndexingFunctionTests
         // Left at its default rate; tests that assert on cost set it explicitly.
         public IndexerConfig                 IndexerConfig     = new();
 
-        public PdfIndexingFunction Build() => new(
+        public IndexingFunction Build() => new(
             ExtractionService.Object, ChunkingService.Object, EmbeddingService.Object, UploadService.Object,
             IndexService.Object, new Mock<BlobContainerClient>().Object, BlobStore.Object,
             ReportWriter.Object, ArtifactWriter.Object, SnapshotService.Object, VectorCache.Object,
-            IdentityStore.Object, IndexDocumentService.Object, IndexerConfig, NullLogger<PdfIndexingFunction>.Instance);
+            IdentityStore.Object, IndexDocumentService.Object, IndexerConfig, NullLogger<IndexingFunction>.Instance);
     }
 
     private static Mock<TaskOrchestrationContext> MockOrchestrationContext(string instanceId = "instance-1")
@@ -58,7 +58,7 @@ public class PdfIndexingFunctionTests
     {
         var deps    = new Deps();
         var context = MockOrchestrationContext();
-        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(false));
+        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(false));
         context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ReturnsAsync(ExtractStats());
         context.Setup(c => c.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
@@ -81,7 +81,7 @@ public class PdfIndexingFunctionTests
     {
         var deps    = new Deps();
         var context = MockOrchestrationContext();
-        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(false));
+        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(false));
         context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ThrowsAsync(new InvalidOperationException("ExtractActivity failed: boom"));
         context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
@@ -104,7 +104,7 @@ public class PdfIndexingFunctionTests
         var deps    = new Deps();
         var context = MockOrchestrationContext();
         var order   = new List<string>();
-        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(ForceReindex: true, RecreateIndex: true));
+        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(ForceReindex: true, RecreateIndex: true));
         context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .Callback(() => order.Add("recreate")).Returns(Task.CompletedTask);
         context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
@@ -130,7 +130,7 @@ public class PdfIndexingFunctionTests
     {
         var deps    = new Deps();
         var context = MockOrchestrationContext();
-        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(ForceReindex: true, RecreateIndex: true));
+        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(ForceReindex: true, RecreateIndex: true));
         context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ThrowsAsync(new InvalidOperationException("RecreateIndexActivity failed: boom"));
         context.Setup(c => c.CallActivityAsync("SaveIndexReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
@@ -152,7 +152,7 @@ public class PdfIndexingFunctionTests
     {
         var deps    = new Deps();
         var context = MockOrchestrationContext();
-        context.Setup(c => c.GetInput<PdfIndexRequest>()).Returns(new PdfIndexRequest(ForceReindex: true));
+        context.Setup(c => c.GetInput<IndexRequest>()).Returns(new IndexRequest(ForceReindex: true));
         context.Setup(c => c.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
             .ReturnsAsync(ExtractStats());
         context.Setup(c => c.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
@@ -182,7 +182,7 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.ExtractActivity(new PdfExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(stats, result);
         deps.IndexService.Verify(s => s.EnsureIndexAsync(), Times.Once);
@@ -201,7 +201,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.ExtractActivity(new PdfExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "ExtractActivity failed");
     }
@@ -216,7 +216,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
-            function.ExtractActivity(new PdfExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
     }
 
     // ── ChunkActivity ────────────────────────────────────────────────────────
@@ -239,7 +239,7 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.ChunkActivity(new ChunkRequest("extracted.json", "chunks.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(stats, result);
         deps.BlobStore.Verify(b => b.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<CancellationToken>()), Times.Once);
@@ -259,7 +259,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.ChunkActivity(new PdfChunkRequest("extracted.json", "chunks.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ChunkActivity(new ChunkRequest("extracted.json", "chunks.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "ChunkActivity failed");
     }
@@ -290,7 +290,7 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(1, result.DocsUploaded);
         Assert.AreEqual(1, result.VectorCacheHits);
@@ -331,7 +331,7 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context);
 
         Assert.AreEqual(1, result.DocsUploaded);
         deps.UploadService.Verify(s => s.UploadDocumentsAsync(
@@ -359,7 +359,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.EmbedAndUploadActivity(new PdfEmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "EmbedAndUploadActivity failed");
     }

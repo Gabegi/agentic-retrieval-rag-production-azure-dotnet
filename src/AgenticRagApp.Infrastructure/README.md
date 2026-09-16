@@ -46,7 +46,7 @@ only the sync hosts need `ZENYA_*` settings; the Function App must start without
 ## Consumers
 
 `AgenticRagApp.Indexing.CU`, `AgenticRagApp.Querying`, `AgenticRagApp.Observability`,
-`AgenticRagApp.FunctionApp` and `AgenticRagApp.Tools.ZenyaSync`. This project has no pipeline
+`AgenticRagApp.FunctionApp` and the `src/Tools/ZenyaSync.cs` launcher. This project has no pipeline
 logic of its own.
 
 ## Tests

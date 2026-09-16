@@ -47,7 +47,7 @@ All report writes happen on every run in **every** environment — `IRunReportWr
 is unconditionally `true`.
 
 Query reports are the one exception still on their own path, not yet folded into this scheme:
-`queries/{yyyy}/{MM}/{dd}/{HH-mm-ss}.json` (`QueryingFunction`, one file per `/api/query` call,
+`queries/{yyyy}/{MM}/{dd}/{HH-mm-ss}.json` (`QueryingFunction` and `AgenticRagApp.Api`'s `QueryEndpoint`, one file per `/api/query` call,
 containing question / answer / context / telemetry).
 
 Reports written before this consolidation stay at their old paths (`runs/`,
@@ -80,6 +80,6 @@ Nothing here is meant to be read after the run completes.
 ## Container: `documents` (source) and `zenya-documents` (Zenya sync target)
 
 Not written by the indexing pipeline. `documents` holds the hand-uploaded corpus the indexer
-reads. `zenya-documents` is written only by `AgenticRagApp.Tools.ZenyaSync` (`pdf/{document_id}.pdf`,
+reads. `zenya-documents` is written only by `src/Tools/ZenyaSync.cs` (`pdf/{document_id}.pdf`,
 `docs/{document_id}.{ext}`, `zenya_*` blob metadata — contract in
 `Infrastructure/Clients/Zenya/Sync/ZenyaBlobLayout.cs`); the indexer is not yet pointed at it.

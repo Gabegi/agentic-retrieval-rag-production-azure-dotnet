@@ -2,6 +2,7 @@ using System.Text.Json;
 using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using AgenticRagApp.Infrastructure.Clients.Blob;
 
 namespace AgenticRagApp.Indexing.CU.Services;
 
@@ -39,12 +40,26 @@ public class VectorCache : IVectorCache
         }
     }
 
+    // No container create here. Until 2026-09-16 every call began with CreateIfNotExistsAsync -
+    // a second HTTP round trip per write, ~40 ms each at the measured blob latency (D196 §3), so
+    // 255 extra operations on a warm run and 3,703 on a cold one for a container Terraform has
+    // owned since infra/storage.tf declared it. The once-per-run check is AssertContainerExistsAsync
+    // below, called by VectorCacheGateway.WriteFreshAsync (D197 action 1c).
     public async Task SetAsync(string contentHash, float[] vector, CancellationToken ct = default)
     {
-        await _container.CreateIfNotExistsAsync(cancellationToken: ct);
         var json = JsonSerializer.SerializeToUtf8Bytes(vector);
         using var ms = new MemoryStream(json);
         await _container.GetBlobClient($"{Prefix}/{contentHash}.json").UploadAsync(ms, overwrite: true, cancellationToken: ct);
+    }
+
+    // Existence check, never a create - the same policy and the same exception as
+    // IBlobStore.AssertContainerExistsAsync, for the same reason: a silent auto-create on a
+    // name mismatch is how pipeline-artifacts itself once ended up with an unmanaged twin
+    // (see IBlobStore). Once per run, not per write.
+    public async Task AssertContainerExistsAsync(CancellationToken ct = default)
+    {
+        if (!await _container.ExistsAsync(ct))
+            throw new ContainerNotDeclaredException(_container.Name);
     }
 
     public async Task<int> EvictOrphanedAsync(IReadOnlySet<string> liveHashes, CancellationToken ct = default)

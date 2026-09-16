@@ -5,6 +5,7 @@ using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
+using AgenticRagApp.Querying.Models;
 using AgenticRagApp.Querying.Services;
 
 namespace AgenticRagApp;
@@ -23,6 +24,11 @@ public class QueryingFunction
     }
 
     // POST /api/query   body: { "question": "..." }
+    //
+    // The App Service host (AgenticRagApp.Api, QueryEndpoint) serves the same route over the same
+    // service; the response shape (QueryResponse) and the report mapping (QueryRunReportFactory)
+    // live in AgenticRagApp.Querying so the two hosts cannot drift apart. Only the HTTP plumbing
+    // is this file's own.
     [Function("Query")]
     public async Task<HttpResponseData> RunQuery(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "query")] HttpRequestData req,
@@ -68,75 +74,12 @@ public class QueryingFunction
 
             if (_reportWriter.IsEnabled)
                 await _reportWriter.WriteReportAsync(
-                    $"queries/{timestamp:yyyy/MM/dd}/{timestamp:HH-mm-ss}.json",
-                    new QueryRunReport(
-                        RunId:              result.ConversationId,
-                        Timestamp:          timestamp,
-                        Question:           body.Question,
-                        Answer:             result.Answer,
-                        RetrievedContext:   result.RetrievedContext,
-                        SystemInstructions: result.SystemInstructions,
-                        ChunksRetrieved:    result.ChunksRetrieved,
-                        OperationName:      result.OperationName,
-                        ProviderName:       result.ProviderName,
-                        ServerAddress:      result.ServerAddress,
-                        ServerPort:         result.ServerPort,
-                        ConversationId:     result.ConversationId,
-                        Model:              result.Model,
-                        FinishReason:       result.FinishReason,
-                        Category:           result.Category,
-                        LatencyMs:          result.LatencyMs,
-                        InputTokens:        result.InputTokens,
-                        OutputTokens:       result.OutputTokens,
-                        TotalTokens:        result.TotalTokens,
-                        ContextTokens:      result.ContextTokens,
-                        Temperature:        result.Temperature,
-                        MaxOutputTokens:    result.MaxOutputTokens,
-                        TopP:               result.TopP,
-                        TopK:               result.TopK,
-                        FrequencyPenalty:   result.FrequencyPenalty,
-                        PresencePenalty:    result.PresencePenalty,
-                        Seed:               result.Seed,
-                        ResponseFormat:     result.ResponseFormat,
-                        StopSequences:      result.StopSequences),
+                    QueryRunReportFactory.BlobPath(timestamp),
+                    QueryRunReportFactory.Create(body.Question, timestamp, result),
                     context.CancellationToken);
 
             var response = req.CreateResponse(HttpStatusCode.OK);
-            await response.WriteAsJsonAsync(new
-            {
-                answer    = result.Answer,
-                category  = result.Category,
-                // Criterion 7: "[Title] - p.(page number)" — the acceptance criterion's own
-                // example (`[Vilans protocollen voor neustampon] - p.2`) has no parentheses
-                // around the page number despite its prose header reading "p.(page number)";
-                // built to match the example. Both the pre-formatted label and the raw
-                // title/page fields are sent, since no frontend exists in this repo to confirm
-                // which one is expected to do the formatting - see
-                // docs/2608/260806/remaining-acceptance-criteria-plan.md, item 4.
-                sources   = result.Citations.Select(c => new
-                {
-                    document_id   = c.DocumentId,
-                    title         = c.Title,
-                    quick_code    = c.QuickCode,
-                    relative_path = c.RelativePath,
-                    page          = c.Page,
-                    page_count    = c.PageCount,
-                    created_at    = c.CreatedAt,
-                    mod_date      = c.ModDate,
-                    label         = c.Title is not null && c.Page is not null
-                        ? $"[{c.Title}] - p.{c.Page}"
-                        : c.Title,
-                    // url was zenya_url, removed with the Zenya metadata mechanism
-                    // (2026-08-26) - kept as a key so API consumers keep deserializing.
-                    url           = (string?)null,
-                }),
-                telemetry = new
-                {
-                    latency_ms    = result.LatencyMs,
-                    input_tokens  = result.InputTokens,
-                    output_tokens = result.OutputTokens
-                }
-            });
+            await response.WriteAsJsonAsync(QueryResponse.From(result));
             return response;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

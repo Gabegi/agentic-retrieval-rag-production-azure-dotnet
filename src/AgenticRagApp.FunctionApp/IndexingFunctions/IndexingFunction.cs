@@ -29,7 +29,7 @@ namespace AgenticRagApp.Functions;
 // {date}/{instanceId}/chunks.json, {date}/{instanceId}/stale-document-ids.json). Only the blob name string travels through
 // Durable Table Storage, avoiding the 64KB row-size limit - ExtractActivity's own return value
 // is stripped of the raw stale-ID list for the same reason (see ExtractActivity).
-public class PdfIndexingFunction
+public class IndexingFunction
 {
     // Source scope of the rolling snapshot and the drift baseline. "pdf" is the only source
     // today - the CSV pipeline that once shared these is archived (docs/archive) - but the
@@ -50,9 +50,9 @@ public class PdfIndexingFunction
     private readonly IDocumentIdentityStore    _identityStore;
     private readonly IIndexDocumentService     _indexDocumentService;
     private readonly IndexerConfig             _indexerConfig;
-    private readonly ILogger<PdfIndexingFunction> _logger;
+    private readonly ILogger<IndexingFunction> _logger;
 
-    public PdfIndexingFunction(
+    public IndexingFunction(
         IExtractionService        extractionService,
         IChunkingService          chunkingService,
         IEmbeddingService         embeddingService,
@@ -69,7 +69,7 @@ public class PdfIndexingFunction
         // Reporting input only - the embedding list price the run report's cost figures are
         // computed at. Nothing here bills from it; see IndexerConfig.
         IndexerConfig             indexerConfig,
-        ILogger<PdfIndexingFunction> logger)
+        ILogger<IndexingFunction> logger)
     {
         _indexerConfig     = indexerConfig;
         _extractionService = extractionService;
@@ -101,7 +101,7 @@ public class PdfIndexingFunction
         var recreateIndex = req.Query["recreate"] == "true";
 
         var instanceId = await client.ScheduleNewOrchestrationInstanceAsync(
-            "IndexingOrchestrator", new PdfIndexRequest(forceReindex, recreateIndex));
+            "IndexingOrchestrator", new IndexRequest(forceReindex, recreateIndex));
         _logger.LogInformation("Indexing started — instance {InstanceId}, force={Force}, recreate={Recreate}",
             instanceId, forceReindex, recreateIndex);
         return client.CreateCheckStatusResponse(req, instanceId);
@@ -140,7 +140,7 @@ public class PdfIndexingFunction
             // is ForceReindex: false, RecreateIndex: false (diff-only), with the recreate
             // reserved for schema changes via POST /api/index?force=true&recreate=true.
             await client.ScheduleNewOrchestrationInstanceAsync(
-                "IndexingOrchestrator", new PdfIndexRequest(ForceReindex: true, RecreateIndex: true),
+                "IndexingOrchestrator", new IndexRequest(ForceReindex: true, RecreateIndex: true),
                 new StartOrchestrationOptions { InstanceId = instanceId });
         }
     }
@@ -149,7 +149,7 @@ public class PdfIndexingFunction
     public async Task RunOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)
     {
         var startedAt = context.CurrentUtcDateTime;
-        var input     = context.GetInput<PdfIndexRequest>()!;
+        var input     = context.GetInput<IndexRequest>()!;
         // Dated like the artifact/report paths below so today's run's temp files can be found
         // by browsing without already knowing the instance ID.
         var docsBlob     = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/extracted.json";
@@ -197,19 +197,19 @@ public class PdfIndexingFunction
             }
 
             var extractStart = context.CurrentUtcDateTime;
-            extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new PdfExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
+            extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
             stageDurations["extract"] = (long)(context.CurrentUtcDateTime - extractStart).TotalMilliseconds;
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.Chunking, startedAt,
                 DocsExtracted: extractResults.DocsToProcess));
 
             var chunkStart = context.CurrentUtcDateTime;
-            chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new PdfChunkRequest(docsBlob, chunksBlob, familyMovesBlob, context.InstanceId, startedAt));
+            chunkResults   = await context.CallActivityAsync<ChunkingStageMetrics>("ChunkActivity",               new ChunkRequest(docsBlob, chunksBlob, familyMovesBlob, context.InstanceId, startedAt));
             stageDurations["chunk"] = (long)(context.CurrentUtcDateTime - chunkStart).TotalMilliseconds;
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.EmbedAndUpload, startedAt,
                 DocsExtracted: extractResults.DocsToProcess, ChunksProduced: chunkResults.ChunksProduced));
 
             var embedStart = context.CurrentUtcDateTime;
-            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new PdfEmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt));
+            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt));
             stageDurations["embed_upload"] = (long)(context.CurrentUtcDateTime - embedStart).TotalMilliseconds;
             success      = true;
         }
@@ -257,7 +257,7 @@ public class PdfIndexingFunction
             // Only reachable when all three attempts died at the infrastructure level - the
             // activity itself never throws. The run report is already saved by this point, and
             // a missing analysis blob must never turn a good indexing run into a failed one.
-            context.CreateReplaySafeLogger<PdfIndexingFunction>().LogWarning(ex,
+            context.CreateReplaySafeLogger<IndexingFunction>().LogWarning(ex,
                 "SaveRunAnalysisActivity failed after retries for {InstanceId} — run analysis blob not written.",
                 context.InstanceId);
         }
@@ -283,7 +283,7 @@ public class PdfIndexingFunction
     // the output shape to per-document and needs RetryOptions + maxConcurrentActivityFunctions
     // decided deliberately - the design is in docs/2607/260729/extraction-fanout-proposal.md (D018).
     [Function("ExtractActivity")]
-    public async Task<ExtractionStageMetrics> ExtractActivity([ActivityTrigger] PdfExtractRequest req, FunctionContext context)
+    public async Task<ExtractionStageMetrics> ExtractActivity([ActivityTrigger] ExtractRequest req, FunctionContext context)
     {
         // Scope + span pattern, repeated on each pipeline activity (plan 5.1/2.4): the scope
         // stamps InstanceId/Source onto every log line the stage emits, so one App Insights
@@ -323,7 +323,7 @@ public class PdfIndexingFunction
 
     // Step 2 — read ExtractionDocuments, chunk, serialise ChunkObjects to blob; return stats
     [Function("ChunkActivity")]
-    public async Task<ChunkingStageMetrics> ChunkActivity([ActivityTrigger] PdfChunkRequest req, FunctionContext context)
+    public async Task<ChunkingStageMetrics> ChunkActivity([ActivityTrigger] ChunkRequest req, FunctionContext context)
     {
         // Same scope + span pattern as ExtractActivity - see the comment there.
         using var _    = _logger.BeginScope(new Dictionary<string, object?> { ["InstanceId"] = req.InstanceId, ["Source"] = Source });
@@ -363,7 +363,7 @@ public class PdfIndexingFunction
 
     // Step 3 — read ChunkObjects, embed then upload to Azure AI Search; return combined stats
     [Function("EmbedAndUploadActivity")]
-    public async Task<EmbedUploadStageMetrics> EmbedAndUploadActivity([ActivityTrigger] PdfEmbedUploadRequest req, FunctionContext context)
+    public async Task<EmbedUploadStageMetrics> EmbedAndUploadActivity([ActivityTrigger] EmbedUploadRequest req, FunctionContext context)
     {
         // Same scope + span pattern as ExtractActivity - see the comment there.
         using var _    = _logger.BeginScope(new Dictionary<string, object?> { ["InstanceId"] = req.InstanceId, ["Source"] = Source });

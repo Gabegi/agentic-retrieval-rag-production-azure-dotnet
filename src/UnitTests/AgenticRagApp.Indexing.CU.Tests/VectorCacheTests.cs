@@ -3,6 +3,7 @@ using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Moq;
 using AgenticRagApp.Indexing.CU.Services;
+using AgenticRagApp.Infrastructure.Clients.Blob;
 
 namespace RagApp.UnitTests.Indexing;
 
@@ -72,29 +73,55 @@ public class VectorCacheTests
         container.Verify(c => c.GetBlobClient("vector-cache/abc123.json"), Times.Once);
     }
 
+    // Until 2026-09-16 SetAsync called CreateIfNotExistsAsync before every upload - one extra
+    // round trip per write (D197 action 1c). The container is Terraform-owned; the once-per-run
+    // existence check is AssertContainerExistsAsync, tested below.
     [TestMethod]
-    public async Task SetAsync_CreatesContainerBeforeUploading()
+    public async Task SetAsync_DoesNotCreateTheContainer()
     {
         var (cache, container, blob) = BuildCache();
-        container.Setup(c => c.CreateIfNotExistsAsync(
-                It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<BlobContainerEncryptionScopeOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Response<BlobContainerInfo>)null!);
         blob.Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Response<BlobContentInfo>)null!);
 
         await cache.SetAsync("hash1", [1, 2, 3]);
 
         container.Verify(c => c.CreateIfNotExistsAsync(
-            It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<BlobContainerEncryptionScopeOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<BlobContainerEncryptionScopeOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+        container.Verify(c => c.ExistsAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task AssertContainerExistsAsync_ContainerMissing_ThrowsContainerNotDeclared()
+    {
+        var (cache, container, _) = BuildCache();
+        container.Setup(c => c.Name).Returns("pipeline-artifacts");
+        container.Setup(c => c.ExistsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Response.FromValue(false, Mock.Of<Response>()));
+
+        var ex = await Assert.ThrowsExactlyAsync<ContainerNotDeclaredException>(
+            () => cache.AssertContainerExistsAsync());
+
+        Assert.AreEqual("pipeline-artifacts", ex.ContainerName);
+        container.Verify(c => c.CreateIfNotExistsAsync(
+            It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<BlobContainerEncryptionScopeOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task AssertContainerExistsAsync_ContainerPresent_Passes()
+    {
+        var (cache, container, _) = BuildCache();
+        container.Setup(c => c.ExistsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Response.FromValue(true, Mock.Of<Response>()));
+
+        await cache.AssertContainerExistsAsync();
+
+        container.Verify(c => c.ExistsAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
     public async Task SetAsync_UploadsWithOverwriteTrue_ToContentHashScopedPath()
     {
         var (cache, container, blob) = BuildCache();
-        container.Setup(c => c.CreateIfNotExistsAsync(
-                It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<BlobContainerEncryptionScopeOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Response<BlobContainerInfo>)null!);
         blob.Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Response<BlobContentInfo>)null!);
 

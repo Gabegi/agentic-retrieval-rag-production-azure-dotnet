@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace AgenticRagApp.Infrastructure.Clients.Zenya.Sync;
 
 // Registers the sync on top of AddZenyaClient. Separate from AddAgenticRagAppInfrastructure for
-// the same reason the client is: only the sync hosts (Tools.ZenyaSync today, a timer function
+// the same reason the client is: only the sync hosts (src/Tools/ZenyaSync.cs today, a timer function
 // if Track B ever lands) need STORAGE_* + ZENYA_* to start.
 public static class ZenyaSyncServiceCollectionExtensions
 {

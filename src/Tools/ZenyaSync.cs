@@ -1,3 +1,6 @@
+#:project ../AgenticRagApp.Infrastructure/AgenticRagApp.Infrastructure.csproj
+#:package Microsoft.Extensions.Hosting
+
 using AgenticRagApp.Infrastructure.Clients.Zenya;
 using AgenticRagApp.Infrastructure.Clients.Zenya.Sync;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +14,15 @@ using Microsoft.Extensions.Logging;
 // the Zenya identity, runs one sync and turns the result into an exit code:
 //   0  every listed document handled (dry run or real)
 //   1  the run completed but one or more documents failed - see the failure lines
-//   2  not authenticated: Zenya answered /users/me as Anonymous (D173 §2a) - nothing was synced
+//   2  not authenticated: Zenya answered /users/me as Anonymous (D173 2a) - nothing was synced
+//
+// 2026-09-15: this was the project AgenticRagApp.Tools.ZenyaSync until it became a .NET 10
+// file-based app - the same 50 lines with no .csproj and no solution entry, so the launcher
+// stops showing up as a project next to the real ones. `dotnet run src/Tools/ZenyaSync.cs`
+// restores and builds it; the #:project directive supplies Infrastructure and #:package takes
+// its version from Directory.Packages.props (central package management rejects a version on
+// the directive). Its restore graph is locked by src/Tools/packages.lock.json, the same
+// guarantee the project had.
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddZenyaClient(builder.Configuration);
 builder.Services.AddZenyaSync(builder.Configuration);

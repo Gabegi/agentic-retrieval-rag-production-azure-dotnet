@@ -11,6 +11,12 @@ public interface IVectorCache
     // embedding config before trusting it (a model/dimension change can leave stale entries).
     Task<float[]?> TryGetAsync(string contentHash, CancellationToken ct = default);
 
+    // SetAsync does not create the container. Call this once per run before the first SetAsync;
+    // it throws ContainerNotDeclaredException if the Terraform-declared container is missing
+    // (2026-09-16, D197 action 1c - replaces the CreateIfNotExistsAsync SetAsync used to make
+    // on every write).
+    Task AssertContainerExistsAsync(CancellationToken ct = default);
+
     Task SetAsync(string contentHash, float[] vector, CancellationToken ct = default);
 
     // Deletes any cached vector whose hash isn't in liveHashes - cleans up entries for
