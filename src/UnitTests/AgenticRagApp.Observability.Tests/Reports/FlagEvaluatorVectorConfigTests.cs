@@ -34,16 +34,28 @@ public class FlagEvaluatorVectorConfigTests
         Assert.IsFalse(Evaluate(Report(Live())).Any(f => f.Metric.StartsWith("Index.")));
     }
 
+    // Warning, not Critical, since D201 - and the severity is the assertion, not a detail.
+    //
+    // While vectors were validated against OPENAI_EMBEDDING_DIMENSIONS, a config that disagreed
+    // with the index meant the next upload was already doomed, so Critical was right. Validation
+    // now happens against the live index width read at preflight, so this run is fine; what the
+    // flag reports is that the NEXT index creation would build a different index. A latent
+    // footgun, not a broken run. Raising it back to Critical would make a healthy run read as
+    // failing.
     [TestMethod]
-    public void LiveWidthDiffersFromConfiguration_IsCritical()
+    public void LiveWidthDiffersFromConfiguration_IsWarning_BecauseTheRunItselfIsUnaffected()
     {
         var flags = Evaluate(Report(Live(dimensions: 1536, configured: 3072)));
 
         var flag = flags.SingleOrDefault(f => f.Metric == "Index.VectorDimensions");
-        Assert.IsNotNull(flag, "a config change without a re-index has to be named here - VectorDimErrors cannot see it");
-        Assert.AreEqual(FlagSeverity.Critical, flag!.Severity);
+        Assert.IsNotNull(flag, "a config that would provision a different index has to be named somewhere");
+        Assert.AreEqual(FlagSeverity.Warning, flag!.Severity);
         StringAssert.Contains(flag.Observed, "1536");
         StringAssert.Contains(flag.Expected, "3072");
+
+        // The remediation must not claim uploads are failing, and must name the recreate as the
+        // moment the disagreement becomes real.
+        StringAssert.Contains(flag.Action, "recreate");
     }
 
     [TestMethod]

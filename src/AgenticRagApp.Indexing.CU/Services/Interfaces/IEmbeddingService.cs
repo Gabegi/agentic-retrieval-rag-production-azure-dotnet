@@ -4,7 +4,10 @@ namespace AgenticRagApp.Indexing.CU.Services;
 
 public interface IEmbeddingService
 {
-    Task<EmbeddingRunResult> EmbedDocumentsAsync(IEnumerable<ChunkObject> documents, CancellationToken ct = default);
+    // indexVectorDimensions: the LIVE index field width, read once at preflight (D201). Not
+    // OPENAI_EMBEDDING_DIMENSIONS - the model is never sent a width, so the only question that
+    // decides an upload is whether what it returned matches the index.
+    Task<EmbeddingRunResult> EmbedDocumentsAsync(IEnumerable<ChunkObject> documents, int indexVectorDimensions, CancellationToken ct = default);
 }
 
 public record EmbeddingRunResult(
@@ -22,9 +25,11 @@ public record EmbeddingRunResult(
     // existing constructors stay untouched.
     public long? TotalInputTokens { get; init; }
 
-    // Fresh vectors of the right length whose values are all zero or non-finite - they pass the
-    // dimension check and upload cleanly, then never match a query (EmbeddingService
-    // .IsEmptyVector). Init property for the same reason as TotalInputTokens.
+    // Fresh vectors of the right length that are nonetheless unusable - all-zero, or carrying a
+    // NaN/infinity (VectorHealth.Classify: Empty and NonFinite, counted together here). The two
+    // fail very differently and the host log distinguishes them: all-zero uploads cleanly and
+    // then never matches a query, while a non-finite component cannot be serialised at all.
+    // Init property for the same reason as TotalInputTokens.
     public int EmptyVectors { get; init; }
 
     // The split of the embed step's wall-clock (2026-09-15): the batched API phase (batches run
@@ -36,6 +41,15 @@ public record EmbeddingRunResult(
     // Stored token counts of the chunks whose vector came from the cache - what they would have
     // billed. CacheHits says how many; this says how much.
     public long CacheHitTokens { get; init; }
+
+    // The two numbers CachePhaseMs has to be divided by to mean anything (2026-09-17, D197
+    // action 4): the blob round trips the two cache passes actually made, counted at the call
+    // site, and the parallelism they ran at. ms/op = CachePhaseMs × CacheParallelism /
+    // CacheOperations, with nothing inferred - before these, a reader had to assume BOTH the
+    // ops model (which action 1c changed: a PUT was two round trips, then one) and which build
+    // had been deployed. Zero operations is a real reading: a run with no chunks.
+    public int CacheOperations  { get; init; }
+    public int CacheParallelism { get; init; }
 
     // The 429 subset of EmbeddingRetries (2026-09-15). The total also counts 5xx, dropped
     // connections and request timeouts, and those point at different remedies: throttling means

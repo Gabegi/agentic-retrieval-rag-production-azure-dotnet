@@ -21,4 +21,7 @@ namespace AgenticRagApp.Functions;
 public record IndexRequest(bool ForceReindex, bool RecreateIndex = false);
 public record ExtractRequest(bool ForceReindex, string OutputBlob, string StaleIdsBlob, string InstanceId, DateTimeOffset StartedAt);
 public record ChunkRequest(string InputBlob, string OutputBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
-public record EmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
+// VectorDimensions is the LIVE index field width, read once at preflight and threaded down rather
+// than re-read or taken from configuration (D201). It is what the embed and upload stages judge a
+// vector against, because the index is the only thing that can actually reject one.
+public record EmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt, int VectorDimensions);

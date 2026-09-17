@@ -115,21 +115,71 @@ public sealed class BatchEmbedder
                 var doc           = batch[i];
                 doc.ContentVector = vectors[i];
 
-                var dimError = doc.ContentVector?.Length != _expectedDimensions;
+                // One predicate, one order, in VectorHealth (2026-09-17). The "only checked on a
+                // vector of the right length" rule this code used to carry in a comment is now
+                // Classify's precedence: a wrong-width vector never also reads as empty, so one
+                // bad response still counts as one defect.
+                //
+                // A null vector cannot reach here - the client hands back Vector.ToArray(), and a
+                // short response array throws at vectors[i] above - but the inline check this
+                // replaced treated null as a dimension error, and nothing is gained by changing
+                // what it reports on a case that cannot happen.
+                var verdict = doc.ContentVector is { } cv
+                    ? VectorHealth.Classify(cv, _expectedDimensions)
+                    : VectorVerdict.WrongWidth;
+
+                // A switch EXPRESSION with no discard arm, which is the whole point and the reason
+                // for the suppression below. The two diagnostics are different:
+                //
+                //   CS8509 - a NAMED enum member has no arm. This is the one that must stay live,
+                //            and it has already earned its keep: splitting NonFinite out of Empty
+                //            the same day failed the build here with "the pattern
+                //            'VectorVerdict.NonFinite' is not covered", instead of silently
+                //            metering the new case as neither defect.
+                //   CS8524 - all named members ARE covered, but an unnamed value could be cast in.
+                //            Cannot arise here: the value comes straight from Classify.
+                //
+                // A `_ => throw` arm would silence BOTH, and the build break for a new verdict -
+                // the entire point of routing these checks through one predicate - would be lost
+                // with it. So CS8524 is suppressed by name, as narrowly as possible, and CS8509
+                // is left to do its job. Without the suppression this is error CS8524 under
+                // TreatWarningsAsErrors; with a discard arm it is a silent fall-through later.
+#pragma warning disable CS8524
+                var (dimError, emptyVector) = verdict switch
+                {
+                    VectorVerdict.Healthy    => (false, false),
+                    VectorVerdict.WrongWidth => (true,  false),
+                    // NonFinite and Empty share the EmptyVectors meter and the EmbedChunkResult
+                    // flag deliberately: the run report's field means "right width, unusable" and
+                    // both still are, so the split (D199 A0.5) changes what the LOG says without
+                    // changing what the report counts. A separate counter would be a new report
+                    // field for a case measured at zero - see D199 §2.4.
+                    VectorVerdict.NonFinite  => (false, true),
+                    VectorVerdict.Empty      => (false, true),
+                };
+#pragma warning restore CS8524
+
                 if (dimError)
                 {
                     _logger.LogError("Wrong vector dimensions {Dims} for {Id}", doc.ContentVector?.Length, doc.Id);
                     Instrumentation.VectorDimErrors.Add(1);
                 }
 
-                // Only checked on a vector of the right length: a wrong-length vector is
-                // already counted once, and a second count for the same vector would make
-                // one bad response read as two defects.
-                var emptyVector = !dimError && doc.ContentVector is { } cv && VectorHealth.IsEmptyVector(cv);
-                if (emptyVector)
+                // One meter, two messages: the report counts "right width, unusable", but the two
+                // ways of being unusable need different things done about them, and the log is
+                // where that difference has to be legible (D199 A0.5).
+                if (verdict is VectorVerdict.NonFinite)
                 {
-                    _logger.LogError("Empty vector (all-zero or non-finite) for {Id} — it will never match a query", doc.Id);
-                    Instrumentation.EmptyVectors.Add(1);
+                    _logger.LogError(
+                        "Non-finite vector (NaN or ±Infinity) for {Id} — it cannot be serialised: the Search SDK throws before the request is sent, so left in place it would fail the whole upload batch and the run",
+                        doc.Id);
+                    Instrumentation.EmptyVectors.Add(1, VectorHealth.VerdictTag(VectorVerdict.NonFinite));
+                }
+                else if (emptyVector)
+                {
+                    _logger.LogError(
+                        "All-zero vector for {Id} — it uploads cleanly and will never match a query", doc.Id);
+                    Instrumentation.EmptyVectors.Add(1, VectorHealth.VerdictTag(VectorVerdict.Empty));
                 }
 
                 results.Add(new EmbedChunkResult(doc, truncated[i], dimError, emptyVector));

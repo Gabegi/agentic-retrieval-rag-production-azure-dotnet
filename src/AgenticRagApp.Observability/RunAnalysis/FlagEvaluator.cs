@@ -255,13 +255,23 @@ public static class FlagEvaluator
             return;
         }
 
-        // VectorDimErrors cannot see this one: it compares each vector against the same
-        // configuration value, so a config change without a re-index passes it and fails at upload.
+        // Warning since 2026-09-17 (D201), and the meaning changed with it.
+        //
+        // It used to be Critical because vectors were validated against OPENAI_EMBEDDING_DIMENSIONS,
+        // so a config that disagreed with the index meant the next upload was already doomed - this
+        // comment used to read "VectorDimErrors cannot see this one: it compares each vector against
+        // the same configuration value, so a config change without a re-index passes it and fails at
+        // upload." That sentence is what prompted D201: validation now happens against the live
+        // index width, read at preflight.
+        //
+        // So this no longer predicts a failure. It says the configured value would provision a
+        // DIFFERENT index the next time one is created - a latent footgun on the next recreate,
+        // not a broken run. Nothing is failing now, which is what makes it a Warning.
         if (v.Dimensions is { } dims && dims != v.ConfiguredDimensions)
-            flags.Add(new ReportFlag(FlagSeverity.Critical, "Index.VectorDimensions",
+            flags.Add(new ReportFlag(FlagSeverity.Warning, "Index.VectorDimensions",
                 $"{dims} (index field)", $"{v.ConfiguredDimensions} (OPENAI_EMBEDDING_DIMENSIONS)",
-                "The index field was created at a different width than the configuration now says — every fresh vector is rejected at upload and surfaces as DocsFailed.",
-                "Either restore OPENAI_EMBEDDING_DIMENSIONS to the width the index was built with, or recreate the index and re-embed the corpus."));
+                "The live index is not the width the configuration asks for. This run was unaffected — vectors are validated against the index, not against configuration — but the next index creation would build it at the configured width, and the daily run recreates the index.",
+                "Decide which is right before the next recreate: set OPENAI_EMBEDDING_DIMENSIONS to the width the index actually has, or keep it and accept that the next recreate rebuilds the index at that width, which requires re-embedding the corpus."));
 
         // The vectorizer embeds QUERIES; the documents were embedded by the configured model. Two
         // different models produce vectors that compare, but not meaningfully - nothing errors.
@@ -284,11 +294,38 @@ public static class FlagEvaluator
     {
         if (e is null) return;
 
+        // DocsFailed folds two causes with the same consequence and opposite remedies: chunks
+        // Azure AI Search refused, and chunks this pipeline withheld because their vector failed
+        // VectorHealth.Classify (2026-09-17, D199 A1). DocsWithheld carries the split explicitly -
+        // read, not inferred from VectorDimErrors + EmptyVectors, which happens to equal it today
+        // but is not enforced to. Null on reports that predate the field, which then read exactly
+        // as they did before.
         if (e.DocsFailed > 0)
+        {
+            var withheld = e.DocsWithheld ?? 0;
+            var refused  = e.DocsFailed - withheld;
+
+            // "Silently" is true only of the refused half. A withheld chunk is logged at Error
+            // with its id and verdict, plus a per-verdict summary line.
+            var consequence = withheld == 0
+                ? "Those chunks are silently missing from the index."
+                : $"{refused} refused by Search (silently missing); {withheld} withheld by the pipeline and logged with their chunk ids. " +
+                  "A withheld chunk that replaced an existing row leaves the previous content live and the document reading stale, " +
+                  "so it returns on the next run by itself; one that never had a row is simply absent and will not come back on its own.";
+
+            // Upstream first, deliberately: re-running before the cause is fixed spends a
+            // Content Understanding extraction to reach the same verdict. The report cannot say
+            // which withheld chunks had a prior row, so "the documents named in the log" is the
+            // instruction that is safe either way.
+            var remediation = withheld == 0
+                ? "Re-run indexing for the affected documents; check Search service throttling."
+                : "Fix the cause before re-running. The host log's first 20 withheld ids and its per-verdict summary say which: " +
+                  "wrong width means OPENAI_EMBEDDING_DIMENSIONS has drifted from the index's content_vector field, anything else means the embedding deployment. " +
+                  "Then re-run indexing for the documents named in that log. For the refused chunks, check Search service throttling.";
+
             flags.Add(new ReportFlag(FlagSeverity.Critical, "Embedding.DocsFailed",
-                e.DocsFailed.ToString(), "0",
-                "Those chunks are silently missing from the index.",
-                "Re-run indexing for the affected documents; check Search service throttling."));
+                e.DocsFailed.ToString(), "0", consequence, remediation));
+        }
 
         if (e.VectorDimErrors > 0)
             flags.Add(new ReportFlag(FlagSeverity.Critical, "Embedding.VectorDimErrors",

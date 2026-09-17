@@ -62,7 +62,6 @@ public static class ServiceCollectionExtensions
             OpenAiEmbeddingDeployment    = configuration["OPENAI_EMBEDDING_DEPLOYMENT"]!,
             OpenAiGptDeployment          = configuration["OPENAI_GPT_DEPLOYMENT"]!,
             OpenAiGptModelName           = configuration["OPENAI_GPT_MODEL_NAME"]!,
-            OpenAiExtractionDeployment   = configuration["OPENAI_EXTRACTION_DEPLOYMENT"] ?? "gpt-41-extraction",
             ContentUnderstandingEndpoint = configuration["CONTENT_UNDERSTANDING_ENDPOINT"] ?? "",
             ContentSafetyEndpoint        = configuration["CONTENT_SAFETY_ENDPOINT"]!,
             LanguageEndpoint             = configuration["LANGUAGE_ENDPOINT"]!,

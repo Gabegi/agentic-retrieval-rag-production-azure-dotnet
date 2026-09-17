@@ -189,7 +189,6 @@ list of missing keys. The full table (required, indexing-only, optional with def
 │   ├── AgenticRagApp.Observability/
 │   ├── AgenticRagApp.FunctionApp/
 │   ├── AgenticRagApp.Api/           # App Service host for /api/query — first deploy pending
-│   ├── Tools/ZenyaSync.cs           # Zenya sync launcher — file-based app, not a project
 │   ├── Evaluations/
 │   ├── UnitTests/
 │   └── AgenticRagApplication.sln   # the solution to build/test
@@ -273,22 +272,6 @@ schema shows up in the next run's analysis.
 `GET /api/index/status` gives stage-level progress of a run in flight; the `INDEXING RUN FINISHED`
 log line in App Insights summarizes a finished run. See
 [indexing-run-status.md](src/AgenticRagApp.FunctionApp/indexing-run-status.md) for both.
-
-## Known gaps
-
-- **Guards do not block.** `GUARDS_LOG_ONLY` is `"true"` in `infra/function_app.tf`, so the
-  prompt-injection and PII acceptance criteria are logged, not enforced, in every environment —
-  the mode chosen on 2026-08-12 pending eval evidence. Flipping it is an app-setting change
-  (`"false"`), applied through CI; only an explicit `false` enables blocking.
-- `infra/app_service.tf`'s Linux App Service (`con-app-api-*`) has its code since 2026-09-16
-  (`src/AgenticRagApp.Api`, for the OutSystems frontend) and an app-deploy workflow job, both
-  waiting for their first run; `/api/query` is served by the Function App until then. Still
-  undecided: how OutSystems (outside Azure) reaches a private-endpoint, deny-by-default host,
-  and which auth layer sits in front.
-- `created_at` / `mod_date` are declared on the index but always null: their producer (the
-  PdfPig read of the PDF Info dictionary) went with Document Intelligence and Content
-  Understanding returns no equivalent. Listed with the other producer-less fields in
-  `Infrastructure/Clients/Search/IndexService.cs`.
 
 ## CI
 

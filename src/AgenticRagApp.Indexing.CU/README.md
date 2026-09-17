@@ -20,7 +20,7 @@ Intelligence path this project replaced is archived under `docs/archive/AgenticR
 | Metadata | `Services/Chunking/ChunkMetadata/ChunkMetadataBuilder.cs` | Turns cuts into index rows: document stamp (title, language, family, domain, validity dates), chunk ids, pages, heading path, embedded prefix, token count, `has_table`, figure captions |
 | Report | `Services/Chunking/ChunkingReporting/ChunkingReporter.cs` | Log lines, OpenTelemetry counters and the `chunking-artifact` blob — written from a `finally`, so a stage that throws still leaves a report naming where it died |
 | Embed | `Services/EmbeddingService.cs` + `Services/Embedding/VectorCache.cs` | Content-hash cache lookup first (`pipeline-artifacts/vector-cache/`), then batches of 100 through `IEmbeddingClient`; 8,191-token input limit enforced |
-| Upload | `Services/UploadService.cs` | Maps to `SearchUploadChunk`, upserts, deletes orphaned chunks of stale documents, applies family moves, records index size/drift |
+| Upload | `Services/Upload/UploadService.cs` | Maps to `SearchUploadChunk`, withholds chunks whose vector fails `VectorHealth.Classify`, upserts, deletes orphaned chunks of stale documents, applies family moves, records index size/drift |
 | Restore | `Services/RestoreService.cs` | Rebuilds the index from the rolling snapshot (`ISnapshotService`), re-embedding only chunks with no cached vector |
 
 Budgets live in one place: `StrategyHelpers/ChunkingBudget.cs` — 512-token ceiling on the
@@ -32,7 +32,7 @@ embedded text (prefix included), 128-token body floor. Route names in `StrategyH
 ```
 Services/
   ExtractionService.cs, IndexDiffService.cs, ChunkingService.cs,
-  EmbeddingService.cs, UploadService.cs, RestoreService.cs
+  EmbeddingService.cs, RestoreService.cs
   Interfaces/                       one interface per service above (+ IDocumentChunkingStrategy, IVectorCache)
   Extraction/
     Helpers/CUHelpers/              CUHelper (facade) + Cu{Page,Outline,Table,Figure,Hyperlink,Annotation,Geometry}Helper
@@ -47,7 +47,11 @@ Services/
     Selection/                      TableChecker (reported signal, not a route input), TocFilter (drops table-of-contents chunks)
     Utils/                          HeadingLocator, HeadingChainBuilder, HeadingTextNormalizer, TokenCounter, ChunkingHelper
     Models/ContentPiece.cs
-  Embedding/VectorCache.cs
+  Embedding/                        VectorCache (blob store), VectorCacheGateway (the run's two bulk
+                                    cache passes), BatchEmbedder (one API call: truncation + response
+                                    validation), VectorHealth (Classify → VectorVerdict, the one
+                                    predicate the cache, the embedder and the uploader share)
+  Upload/                           UploadService, TotalWithholdException
 Models/
   PdfExtractionDocument, PdfExtractionOutput, ChunkObject, SearchUploadChunk, ChunkingRunReport, DocumentFamily, ZenyaMetadata, …
   Extraction/Structure/             PdfDocumentStructure, Heading, SectionInfo, TableInfo, FigureInfo, PageSpan, … (the typed CU shape the app keeps)

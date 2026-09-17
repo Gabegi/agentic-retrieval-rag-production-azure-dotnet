@@ -1,8 +1,8 @@
 # OpenAI model deployments on the existing Foundry AI Services account (data.tf), looped - all
 # GlobalStandard, only model and capacity vary. Model and quota facts: docs/ai-foundry-models.md
-# (verified 2026-07-02, addendum 2026-08-27).
+# (verified 2026-07-02, addenda 2026-08-27 and 2026-09-16).
 #   - Deployment NAMES are frozen in variables.tf: renaming forces destroy+recreate, so
-#     "gpt-4.1-query"/"gpt-4.1-extraction" run gpt-5.4 and "gpt-4.1-mini" runs gpt-5.4-mini.
+#     "gpt-4.1-query" runs gpt-5.4 and "gpt-4.1-mini" runs gpt-5.4-mini.
 #   - Model versions differ per variant (gpt-5.4 = 2026-03-05, gpt-5.4-mini = 2026-03-17) - never
 #     carry one across. A guessed version failed on 2026-08-27 with DeploymentModelNotSupported
 #     AFTER the destroy had completed, taking CU down until the corrected entry applied
@@ -13,41 +13,52 @@
 
 locals {
   openai_deployments = {
+    # 350 -> 1000 (2026-09-16): 1000 is the ENTIRE text-embedding-3-large GlobalStandard pool in
+    # this sub/region (docs/ai-foundry-models.md: 350 / 1000 used/limit on the 2026-07-02 snapshot,
+    # so the 650 headroom was free and no quota request is needed). Same rule as `mini` below:
+    # nothing else may deploy text-embedding-3-large in this sub/region without taking capacity
+    # from here. Three consumers draw from this one pool: chunk/identity embedding
+    # (EmbeddingService, IdentityEmbedder), the index's query-time vectorizer
+    # (IndexService.BuildVectorSearch) and Content Understanding via the account default
+    # model->deployment mapping (function_app.tf). Headroom, not a fix for an observed 429: the
+    # measured cold re-embeds (95-166 s embed step) ran at 0 retries against the old 350
+    # (docs/2609/260916/vector-cache-performance.md section 4a).
     embedding = {
       name          = var.openai_embedding_deployment
       model_name    = "text-embedding-3-large"
       model_version = "1"
-      capacity      = 350
+      capacity      = 1000
     }
     # 10 -> 200 (2026-07-30): RagEvaluationTests' Parallelize(Workers = 5) runs 5 query streams
     # concurrently and the 2026-07-30 eval run 429'd at 10. Matched to `evaluation`'s 200 - same
     # 5-worker concurrency, shouldn't be sized lower. Earned from real 429s; don't shrink it.
-    # Shares the 1000 K TPM gpt-5.4 pool with `extraction` (200 + 500 = 700 used).
+    # 200 -> 1000 (2026-09-16): the WHOLE gpt-5.4 pool, this deployment's alone. It used to share
+    # it with `extraction` (200 + 500 = 700), deleted the same day because nothing consumed it: no
+    # chat client was ever built against OPENAI_EXTRACTION_DEPLOYMENT, and Content Understanding
+    # routes only through the account default mapping (gpt-5.4-mini -> `mini`,
+    # text-embedding-3-large -> `embedding`), so the 2026-08-27 "CU bills figure analysis through
+    # it" rationale for its 40 -> 500 was wrong (docs/2608/260827/extraction-coverage-chunking-
+    # review.md). Nothing else may deploy gpt-5.4 in this sub/region from now on without taking
+    # capacity from here. Headroom, not a fix for an observed 429.
     querying = {
       name          = var.openai_gpt_deployment
       model_name    = "gpt-5.4"
       model_version = "2026-03-05"
-      capacity      = 200
+      capacity      = 1000
     }
-    # 40 -> 500 (2026-08-27): the 40 predated CU and had no recorded rationale. CU's figure
-    # analysis bills ~1,200 tokens/figure through this deployment
-    # (docs/2608/260819/content-understanding-when-and-how.md) at the same 8-document parallelism
-    # (ExtractionService.MaxExtractionParallelism) that TPM-bound `mini` on 2026-08-25.
-    extraction = {
-      name          = var.openai_extraction_deployment
-      model_name    = "gpt-5.4"
-      model_version = "2026-03-05"
-      capacity      = 500
-    }
-    # Deliberately a different model from querying/extraction - avoids self-preference bias in
+    # Deliberately a different model from querying - avoids self-preference bias in
     # eval scores. 10 -> 50 (2026-07-29: ~5 judge calls per Answer test, ~3 per Refusal test, over
     # ~79 golden queries; the throttle delays in RagEvaluator/RefusalEvaluator were shortened to
     # match) -> 200 (2026-07-30: Parallelize(Workers = 3) added). gpt-5.1 pool is 1000 K TPM.
+    # 200 -> 1000 (2026-09-16): the WHOLE gpt-5.1 pool. This is the only gpt-5.1 deployment in this
+    # sub/region (docs/ai-foundry-models.md: 10 / 1000 used on 2026-07-29, the 10 being this one), so
+    # nothing else may deploy gpt-5.1 here from now on without taking capacity from it. Headroom
+    # for the parallel judge streams, not a fix for an observed 429.
     evaluation = {
       name          = var.openai_eval_deployment
       model_name    = "gpt-5.1"
       model_version = "2025-11-13"
-      capacity      = 200
+      capacity      = 1000
     }
     # Content Understanding's completion model for prebuilt-documentSearch. The app never calls
     # it; CU resolves it through the account default model->deployment mapping

@@ -12,29 +12,36 @@ namespace AgenticRagApp.Indexing.CU.Services;
 public class EmbeddingService : IEmbeddingService
 {
     private readonly ILogger<EmbeddingService> _logger;
-    private readonly VectorCacheGateway        _cache;
-    private readonly BatchEmbedder             _batchEmbedder;
+    private readonly IEmbeddingClient          _embeddingClient;
+    private readonly IVectorCache              _vectorCache;
 
     private const int MaxParallelism = 4;
     private const int BatchSize = 100;    // one request per batch instead of one per chunk
 
+    // No IndexerConfig: the width vectors are judged against is no longer a configured value but
+    // the live index field width, read once at preflight and passed per call (D201). This service
+    // is a singleton, so holding a width here would also mean holding one run's value for the
+    // lifetime of the host.
     public EmbeddingService(
         IEmbeddingClient                              embeddingClient,
         IVectorCache                                  vectorCache,
-        IndexerConfig                                 config,
         ILogger<EmbeddingService>                     logger)
     {
-        _logger        = logger;
-        _cache         = new VectorCacheGateway(vectorCache, config.OpenAiEmbeddingDimensions);
-        // EmbeddingService's own logger, deliberately - see BatchEmbedder's comment on the
-        // log category.
-        _batchEmbedder = new BatchEmbedder(embeddingClient, config.OpenAiEmbeddingDimensions, logger);
+        _logger          = logger;
+        _embeddingClient = embeddingClient;
+        _vectorCache     = vectorCache;
     }
 
     public async Task<EmbeddingRunResult> EmbedDocumentsAsync(
         IEnumerable<ChunkObject> documents,
+        int indexVectorDimensions,
         CancellationToken ct = default)
     {
+        var cache = new VectorCacheGateway(_vectorCache, indexVectorDimensions);
+        // EmbeddingService's own logger, deliberately - see BatchEmbedder's comment on the
+        // log category.
+        var batchEmbedder = new BatchEmbedder(_embeddingClient, indexVectorDimensions, _logger);
+
         var docList = documents.ToList();
 
         // Two wall-clocks, so the report can say how much of the embed step was the paid API
@@ -45,7 +52,7 @@ public class EmbeddingService : IEmbeddingService
         // A chunk whose content hash is already cached gets its vector back for free - no
         // embedding API call. Only genuinely new/changed chunks (within an updated document,
         // typically just the pages that actually changed) go on to the batch embedder below.
-        var (cached, toEmbed) = await _cache.SplitAsync(docList, ct);
+        var (cached, toEmbed, readOps) = await cache.SplitAsync(docList, ct);
         cacheClock.Stop();
 
         _logger.LogInformation(
@@ -54,13 +61,13 @@ public class EmbeddingService : IEmbeddingService
 
         var apiClock     = System.Diagnostics.Stopwatch.StartNew();
         var semaphore    = new SemaphoreSlim(MaxParallelism);
-        var tasks        = toEmbed.Chunk(BatchSize).Select(batch => _batchEmbedder.EmbedBatchAsync(batch, semaphore, ct)).ToList();
+        var tasks        = toEmbed.Chunk(BatchSize).Select(batch => batchEmbedder.EmbedBatchAsync(batch, semaphore, ct)).ToList();
         var batchResults = await Task.WhenAll(tasks);
         apiClock.Stop();
         var freshResults = batchResults.SelectMany(b => b.Results).ToArray();
 
         cacheClock.Start();
-        await _cache.WriteFreshAsync(freshResults, ct);
+        var writeOps = await cache.WriteFreshAsync(freshResults, ct);
         cacheClock.Stop();
 
         _logger.LogInformation("Embedding complete — {Fresh} embedded, {Cached} reused", freshResults.Length, cached.Count);
@@ -84,6 +91,12 @@ public class EmbeddingService : IEmbeddingService
             // What the reused vectors would have billed: the stored count of the exact text a
             // fresh embed would have sent. The tokens the cache saved, in the model's own unit.
             CacheHitTokens = cached.Sum(d => (long)d.TokenCount),
+            // Both cache passes' round trips, and the width they ran at - the divisors for
+            // CachePhaseMs. Summed from what the passes counted, never from docList.Count:
+            // action 2 would stop probing hashes a listing already ruled out, and the derived
+            // figure would not notice.
+            CacheOperations  = readOps + writeOps,
+            CacheParallelism = VectorCacheGateway.MaxCacheParallelism,
         };
     }
 }

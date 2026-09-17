@@ -40,7 +40,7 @@ public class IndexRestoreFunctionTests
         var context = MockOrchestrationContext();
         context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
         context.Setup(c => c.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ReturnsAsync(new RestoreResult("snap-1", 5, 0, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
+            .ReturnsAsync(new RestoreResult("snap-1", 5, 0, 0, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
         context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
         var function = deps.Build();
 
@@ -57,7 +57,7 @@ public class IndexRestoreFunctionTests
         var context = MockOrchestrationContext();
         context.Setup(c => c.CallActivityAsync("RecreateIndexActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
         context.Setup(c => c.CallActivityAsync<RestoreResult>("RestoreFromSnapshotActivity", It.IsAny<object>(), It.IsAny<TaskOptions>()))
-            .ReturnsAsync(new RestoreResult("snap-1", 5, 3, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
+            .ReturnsAsync(new RestoreResult("snap-1", 5, 3, 0, 0, 10, 100, "index", "text-embedding-3-large", "embedding-deployment"));
         context.Setup(c => c.CallActivityAsync("SaveRestoreReportActivity", It.IsAny<object>(), It.IsAny<TaskOptions>())).Returns(Task.CompletedTask);
         var function = deps.Build();
 
@@ -118,7 +118,7 @@ public class IndexRestoreFunctionTests
     public async Task RestoreFromSnapshotActivity_Success_ReturnsRestoreResult()
     {
         var deps   = new Deps();
-        var result = new RestoreResult("snap-1", 5, 0, 0, 10, 100, "index", "model", "deployment");
+        var result = new RestoreResult("snap-1", 5, 0, 0, 0, 10, 100, "index", "model", "deployment");
         deps.RestoreService.Setup(s => s.RestoreFromLatestSnapshotAsync(It.IsAny<CancellationToken>())).ReturnsAsync(result);
         var function = deps.Build();
         var context  = new FakeFunctionContext();

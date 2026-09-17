@@ -78,19 +78,82 @@ public class IndexDocumentServiceTests
         Assert.AreEqual(1, batches);
     }
 
+    // Rolls chunk rows up to one date per document, keeping the OLDEST (2026-09-17, D199 A2).
+    //
+    // Fed in BOTH orders on purpose. The behaviour this replaced was first-seen-wins, and a test
+    // that only ever presents the oldest row first passes under both rules - which is precisely
+    // how the old behaviour survived: whichever chunk sorted first by id decided for the whole
+    // document, and a document with one stale row read as fully current forever.
     [TestMethod]
-    public async Task GetCurrentIndexedDocumentDatesAsync_DeduplicatesByDocumentId_KeepingFirstOccurrence()
+    [DataRow(true,  "newest row first")]
+    [DataRow(false, "oldest row first")]
+    public async Task GetCurrentIndexedDocumentDatesAsync_RowsDisagree_KeepsTheOldestRegardlessOfOrder(
+        bool newestFirst, string label)
     {
         var (service, client, _) = BuildService();
-        var first  = DateTimeOffset.Parse("2024-01-01T00:00:00Z");
-        var second = DateTimeOffset.Parse("2024-06-01T00:00:00Z");
+        var oldest = DateTimeOffset.Parse("2024-01-01T00:00:00Z");
+        var newest = DateTimeOffset.Parse("2024-06-01T00:00:00Z");
+
+        var rows = newestFirst
+            ? new[] { DateDoc("doc1", newest, id: "chunk1"), DateDoc("doc1", oldest, id: "chunk2") }
+            : new[] { DateDoc("doc1", oldest, id: "chunk1"), DateDoc("doc1", newest, id: "chunk2") };
+
         client.Setup(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SearchResponse(DateDoc("doc1", first), DateDoc("doc1", second)));
+            .ReturnsAsync(SearchResponse(rows));
 
         var result = await service.GetCurrentlyIndexedDocsIdsNDatesAsync();
 
-        Assert.AreEqual(1, result.Count);
-        Assert.AreEqual(first, result["doc1"]);
+        Assert.AreEqual(1, result.Count, label);
+        Assert.AreEqual(oldest, result["doc1"], label);
+    }
+
+    // The healthy case, and the reason the rule is invisible in normal operation: DocumentStamp
+    // puts one date on every chunk of a document, so oldest == first == newest.
+    [TestMethod]
+    public async Task GetCurrentIndexedDocumentDatesAsync_RowsAgree_KeepsThatDate()
+    {
+        var (service, client, _) = BuildService();
+        var stamped = DateTimeOffset.Parse("2024-03-01T00:00:00Z");
+        client.Setup(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(
+                DateDoc("doc1", stamped, id: "chunk1"), DateDoc("doc1", stamped, id: "chunk2")));
+
+        var result = await service.GetCurrentlyIndexedDocsIdsNDatesAsync();
+
+        Assert.AreEqual(stamped, result["doc1"]);
+    }
+
+    // A row with no date is skipped entirely rather than treated as a very old one - under `<` it
+    // would otherwise win every comparison and drag its document back into every run forever.
+    [TestMethod]
+    public async Task GetCurrentIndexedDocumentDatesAsync_DatelessRow_IsIgnoredNotTreatedAsOldest()
+    {
+        var (service, client, _) = BuildService();
+        var stamped  = DateTimeOffset.Parse("2024-03-01T00:00:00Z");
+        var dateless = new SearchDocument { ["id"] = "chunk1", ["document_id"] = "doc1" };
+
+        client.Setup(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(dateless, DateDoc("doc1", stamped, id: "chunk2")));
+
+        var result = await service.GetCurrentlyIndexedDocsIdsNDatesAsync();
+
+        Assert.AreEqual(stamped, result["doc1"]);
+    }
+
+    // And a document whose rows are ALL dateless is absent from the map, so the diff reads it as
+    // new and reprocesses it - unchanged by A2, pinned because A2 made date semantics load-bearing.
+    [TestMethod]
+    public async Task GetCurrentIndexedDocumentDatesAsync_AllRowsDateless_DocumentIsAbsent()
+    {
+        var (service, client, _) = BuildService();
+        var dateless = new SearchDocument { ["id"] = "chunk1", ["document_id"] = "doc1" };
+
+        client.Setup(c => c.SearchAsync<SearchDocument>(It.IsAny<string>(), It.IsAny<SearchOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchResponse(dateless));
+
+        var result = await service.GetCurrentlyIndexedDocsIdsNDatesAsync();
+
+        Assert.AreEqual(0, result.Count);
     }
 
     [TestMethod]

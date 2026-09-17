@@ -9,7 +9,8 @@ namespace RagApp.UnitTests.Observability;
 [TestClass]
 public class FlagEvaluatorEmbeddingTests
 {
-    private static EmbedUploadStageMetrics Embedding(int uploaded, int failed = 0, int? emptyVectors = 0) => new(
+    private static EmbedUploadStageMetrics Embedding(
+        int uploaded, int failed = 0, int? emptyVectors = 0, int? withheld = null) => new(
         DocsUploaded:                  uploaded,
         DocsFailed:                    failed,
         ChunksRemoved:                 0,
@@ -27,6 +28,7 @@ public class FlagEvaluatorEmbeddingTests
         PreviousIndexStorageSizeBytes: null)
     {
         EmptyVectors = emptyVectors,
+        DocsWithheld = withheld,
     };
 
     private static PdfIndexRunReport Report(int chunksProduced, EmbedUploadStageMetrics? embedding) => new()
@@ -135,5 +137,76 @@ public class FlagEvaluatorEmbeddingTests
         var flags = Evaluate(Report(chunksProduced: 3940, embedding: null));
 
         Assert.IsFalse(flags.Any(f => f.Metric.StartsWith("Embedding.")));
+    }
+
+    // ── DocsFailed now folds two causes (D199 A3) ────────────────────────────
+
+    private static ReportFlag DocsFailedFlag(IReadOnlyList<ReportFlag> flags) =>
+        flags.Single(f => f.Metric == "Embedding.DocsFailed");
+
+    // Nothing withheld - and a report that predates the field (null) must read exactly as it did
+    // before, which is why the branch is on DocsWithheld and not on "is this a new report".
+    [TestMethod]
+    [DataRow(0,    "withheld counted as zero")]
+    [DataRow(null, "report predates DocsWithheld")]
+    public void DocsFailed_NothingWithheld_KeepsTheOriginalWording(int? withheld, string label)
+    {
+        var flags = Evaluate(Report(3940, Embedding(uploaded: 3938, failed: 2, withheld: withheld)));
+        var flag  = DocsFailedFlag(flags);
+
+        Assert.AreEqual("Those chunks are silently missing from the index.", flag.Meaning, label);
+        StringAssert.Contains(flag.Action, "throttling", label);
+    }
+
+    // With chunks withheld, the split is STATED - the reader gets both numbers rather than being
+    // told the count "includes some" of each.
+    [TestMethod]
+    public void DocsFailed_SomeWithheld_StatesTheSplitAndDropsTheSilentlyClaim()
+    {
+        var flags = Evaluate(Report(3940, Embedding(uploaded: 3937, failed: 3, emptyVectors: 2, withheld: 2)));
+        var flag  = DocsFailedFlag(flags);
+
+        // 3 failed, 2 of them withheld, so 1 was refused by Search.
+        StringAssert.Contains(flag.Meaning, "1 refused by Search");
+        StringAssert.Contains(flag.Meaning, "2 withheld");
+
+        // The blanket "silently missing" claim must not stand alone once some were logged.
+        Assert.AreNotEqual("Those chunks are silently missing from the index.", flag.Meaning);
+
+        // A2's gap is visible here or nowhere: this is the only place a reader learns that some
+        // withheld chunks come back by themselves and some do not.
+        StringAssert.Contains(flag.Meaning, "reading stale");
+        StringAssert.Contains(flag.Meaning, "will not come back on its own");
+    }
+
+    // Upstream before re-running: a re-run ahead of the fix spends a Content Understanding
+    // extraction to reach the same verdict.
+    [TestMethod]
+    public void DocsFailed_SomeWithheld_SequencesRemediationCauseFirst()
+    {
+        var flags = Evaluate(Report(3940, Embedding(uploaded: 3939, failed: 1, emptyVectors: 1, withheld: 1)));
+        var flag  = DocsFailedFlag(flags);
+
+        StringAssert.Contains(flag.Action, "Fix the cause before re-running");
+        StringAssert.Contains(flag.Action, "OPENAI_EMBEDDING_DIMENSIONS");
+
+        // This pins the ORDER - cause before re-run - not the phrasing. Reword the sentence freely
+        // and update the two search strings with it; what must not change is which instruction
+        // comes first, because a re-run ahead of the fix spends a paid Content Understanding
+        // extraction to arrive at the same verdict. Do not delete this on a rewording.
+        Assert.IsTrue(
+            flag.Action.IndexOf("Fix the cause", StringComparison.Ordinal)
+            < flag.Action.IndexOf("re-run indexing", StringComparison.OrdinalIgnoreCase),
+            "the fix has to be named before the re-run, or the re-run is a wasted extraction");
+    }
+
+    // Every chunk in DocsFailed was withheld: nothing was refused, so the flag must not invent a
+    // Search problem to blame.
+    [TestMethod]
+    public void DocsFailed_AllWithheld_ReportsZeroRefused()
+    {
+        var flags = Evaluate(Report(3940, Embedding(uploaded: 3938, failed: 2, emptyVectors: 2, withheld: 2)));
+
+        StringAssert.Contains(DocsFailedFlag(flags).Meaning, "0 refused by Search");
     }
 }

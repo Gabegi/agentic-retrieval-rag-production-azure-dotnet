@@ -56,7 +56,7 @@ public class ZenyaOptionsTests
             ZenyaOptions.FromConfiguration(Config("https://t.zenya.work", secret: "s", scope: "api://x/.default")));
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("https://contoso.zenya.work")]
     [DataRow("https://contoso.zenya.work/")]
     [DataRow("https://contoso.zenya.work/api")]

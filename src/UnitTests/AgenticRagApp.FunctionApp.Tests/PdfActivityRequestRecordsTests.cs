@@ -64,7 +64,7 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfEmbedUploadRequest_Constructor_PropagatesAllFields()
     {
-        var request = new EmbedUploadRequest("chunks-blob", "stale-ids-blob", "moves-blob", "instance-1", StartedAt);
+        var request = new EmbedUploadRequest("chunks-blob", "stale-ids-blob", "moves-blob", "instance-1", StartedAt, 3072);
 
         Assert.AreEqual("chunks-blob", request.ChunksBlob);
         Assert.AreEqual("stale-ids-blob", request.StaleIdsBlob);

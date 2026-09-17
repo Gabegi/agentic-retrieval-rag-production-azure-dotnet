@@ -68,7 +68,6 @@ public class ServiceCollectionExtensionsTests
 
         var config = services.AddAgenticRagAppInfrastructure(configuration);
 
-        Assert.AreEqual("gpt-41-extraction", config.OpenAiExtractionDeployment);
         Assert.AreEqual("protocols", config.StorageContainer);
         Assert.AreEqual("text-embedding-3-large", config.OpenAiEmbeddingModelName);
         Assert.AreEqual(3072, config.OpenAiEmbeddingDimensions);
@@ -94,7 +93,6 @@ public class ServiceCollectionExtensionsTests
         var services      = new ServiceCollection();
         var configuration = BuildConfiguration(new()
         {
-            ["OPENAI_EXTRACTION_DEPLOYMENT"]  = "custom-extraction",
             ["STORAGE_CONTAINER"]              = "custom-container",
             ["OPENAI_EMBEDDING_MODEL_NAME"]    = "custom-embedding-model",
             ["OPENAI_EMBEDDING_DIMENSIONS"]    = "1536",
@@ -102,7 +100,6 @@ public class ServiceCollectionExtensionsTests
 
         var config = services.AddAgenticRagAppInfrastructure(configuration);
 
-        Assert.AreEqual("custom-extraction", config.OpenAiExtractionDeployment);
         Assert.AreEqual("custom-container", config.StorageContainer);
         Assert.AreEqual("custom-embedding-model", config.OpenAiEmbeddingModelName);
         Assert.AreEqual(1536, config.OpenAiEmbeddingDimensions);

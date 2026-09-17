@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Infrastructure.Configuration;
 using AgenticRagApp.Observability.Reports;
@@ -14,19 +15,26 @@ public class RestoreService : IRestoreService
     private readonly ISnapshotService     _snapshotService;
     private readonly IVectorCache         _vectorCache;
     private readonly IUploadService       _uploadService;
+    private readonly IIndexService        _indexService;
     private readonly IndexerConfig        _config;
     private readonly ILogger<RestoreService> _logger;
 
+    // IIndexService is here for one call: reading the live vector field width, for the same reason
+    // the indexing pipeline reads it at preflight (D201). A restore publishes cached vectors it
+    // did not produce, so "does this match the index" is if anything a sharper question here -
+    // a cached vector can outlive the index generation it was made for.
     public RestoreService(
         ISnapshotService        snapshotService,
         IVectorCache            vectorCache,
         IUploadService          uploadService,
+        IIndexService           indexService,
         IndexerConfig           config,
         ILogger<RestoreService> logger)
     {
         _snapshotService = snapshotService;
         _vectorCache     = vectorCache;
         _uploadService   = uploadService;
+        _indexService    = indexService;
         _config          = config;
         _logger          = logger;
     }
@@ -38,7 +46,7 @@ public class RestoreService : IRestoreService
         if (snapshotChunks.Count == 0)
         {
             _logger.LogWarning("No snapshot found for source '{Source}' — nothing to restore.", Source);
-            return new RestoreResult(snapshotInstanceId, 0, 0, 0, null, null,
+            return new RestoreResult(snapshotInstanceId, 0, 0, 0, 0, null, null,
                 _config.SearchIndexName, _config.OpenAiEmbeddingModelName, _config.OpenAiEmbeddingDeployment);
         }
 
@@ -125,18 +133,36 @@ public class RestoreService : IRestoreService
         // No family moves on a restore: the snapshot already carries each chunk's family_id, so
         // the rows go in correct rather than being patched afterwards. A restore rebuilds the
         // index from a point in time; it does not re-run the clustering that produces a move.
+        // allowVectorless: the ONLY caller that sets it. A chunk whose vector the cache could not
+        // resolve is uploaded without one on purpose - see the missingVector warning above; the
+        // row is the restore, and withholding it would mean a restore that restores nothing for
+        // those chunks. It exempts an absent vector only: a restored chunk that HAS a vector is
+        // judged by VectorHealth.Classify exactly like a freshly embedded one.
+        // The live width, for the same reason preflight reads it on the indexing path (D201).
+        // Fails the restore rather than falling back to configuration: a restore that cannot read
+        // the index cannot publish to it either, and validating against the configured width would
+        // reinstate exactly the proxy this replaced.
+        var vectorConfig = await _indexService.ReadVectorConfigAsync(ct);
+        if (!vectorConfig.FieldPresent || vectorConfig.Dimensions is not > 0)
+            throw new InvalidOperationException(
+                $"Restore could not read the width of the index's '{vectorConfig.FieldName}' field; " +
+                "cached vectors are judged against it, so the restore stops rather than guessing from configuration.");
+
         var uploadResult = await _uploadService.UploadDocumentsAsync(
-            chunks, staleDocumentIds: [], familyMoves: [], ct);
+            chunks, staleDocumentIds: [], familyMoves: [],
+            indexVectorDimensions: vectorConfig.Dimensions.Value,
+            allowVectorless: true, ct: ct);
 
         _logger.LogInformation(
-            "Restore from snapshot '{InstanceId}' complete — {Restored} chunk(s) uploaded, {Failed} failed, {Missing} missing vectors.",
-            snapshotInstanceId, uploadResult.DocsUploaded, uploadResult.DocsFailed, missingVector);
+            "Restore from snapshot '{InstanceId}' complete — {Restored} chunk(s) uploaded, {Failed} failed, {Missing} missing vectors, {Withheld} withheld.",
+            snapshotInstanceId, uploadResult.DocsUploaded, uploadResult.DocsFailed, missingVector, uploadResult.DocsWithheld);
 
         return new RestoreResult(
             snapshotInstanceId,
             uploadResult.DocsUploaded,
             uploadResult.DocsFailed,
             missingVector,
+            uploadResult.DocsWithheld,
             uploadResult.IndexDocumentCountSnapshot,
             uploadResult.IndexStorageSizeBytesSnapshot,
             _config.SearchIndexName,

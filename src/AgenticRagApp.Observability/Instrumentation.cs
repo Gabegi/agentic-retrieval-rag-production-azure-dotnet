@@ -182,12 +182,29 @@ public static class Instrumentation
     public static readonly Counter<long> VectorDimErrors =
         Meter.CreateCounter<long>("indexer.vector_dim_errors", description: "Chunks with unexpected embedding vector dimensions");
 
-    // Right-length vectors that are all-zero or contain NaN/infinity — should always be zero.
-    // They pass the dimension check and upload without error, then never match a query.
+    // Right-length vectors that are unusable — should always be zero. Tags: verdict (empty|
+    // non_finite), because the two fail in opposite ways and only the tag says which (2026-09-17,
+    // D199 A0.5): "empty" is all-zero, which uploads without error and then never matches a
+    // query; "non_finite" carries a NaN or infinity, which the Search SDK refuses to serialise,
+    // failing the whole upload batch before it is sent. One counter rather than two so the run
+    // report's EmptyVectors field keeps meaning the same thing, with the distinction in telemetry
+    // rather than only in the host log.
     public static readonly Counter<long> EmptyVectors =
-        Meter.CreateCounter<long>("indexer.empty_vectors", description: "Chunks whose embedding vector is all-zero or non-finite — indexed but unretrievable");
+        Meter.CreateCounter<long>("indexer.empty_vectors", description: "Chunks whose embedding vector is unusable: all-zero, or non-finite (tag: verdict)");
 
     // ── Upload ────────────────────────────────────────────────────────────────
+
+    // Chunks this pipeline refused to SEND to Azure AI Search because their vector failed
+    // VectorHealth.Classify — as opposed to UploadFailures, which is Search rejecting what we did
+    // send (2026-09-17, D199). Tags: verdict (wrong_width|non_finite|empty|no_vector).
+    //
+    // Not derivable from the counters above. EmptyVectors and VectorDimErrors count what the
+    // EMBEDDER produced, and the restore path embeds nothing: it resolves vectors from the cache,
+    // so a cached vector that outlived a dimension change is withheld here and metered nowhere
+    // else. Any non-zero from that path is therefore the canary that the cache and the index
+    // disagree about width, which is why no separate path tag is needed.
+    public static readonly Counter<long> ChunksWithheld =
+        Meter.CreateCounter<long>("indexer.chunks_withheld", description: "Chunks withheld from Azure AI Search because their vector failed its health check (tag: verdict)");
 
     // Individual chunk upserts that succeeded. Pair with UploadFailures for the full picture.
     public static readonly Counter<long> DocsUpserted =

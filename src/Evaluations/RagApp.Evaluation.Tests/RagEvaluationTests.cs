@@ -95,9 +95,30 @@ public class RagEvaluationTests
         Environment.GetEnvironmentVariable("EVAL_RESULTS_FILE")
         ?? Path.Combine(AppContext.BaseDirectory, "eval-results", $"{DateTime.UtcNow:yyyyMMddTHHmmss}.jsonl");
 
+    // Set when the suite cannot run because its environment is not configured, e.g. a developer
+    // running `dotnet test` over the whole solution. Not a failure: this suite talks to a live
+    // Search index and a live model deployment, and "not configured here" is the normal state
+    // outside the eval pipeline.
+    //
+    // It has to be a flag rather than an Assert.Inconclusive in ClassInitialize, because MSTest
+    // treats ANY exception out of ClassInitialize as a class-level failure - including the one
+    // Assert.Inconclusive throws. So the check is recorded here and surfaced by the test method,
+    // which is allowed to be inconclusive. Before this, a full-solution run always ended with one
+    // red test that everyone learned to scroll past, which is how a real failure would have hidden.
+    private static string? _notConfigured;
+
     [ClassInitialize]
     public static async Task ClassInit(TestContext context)
     {
+        var missing = RequiredEnvVars.Where(v => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(v))).ToList();
+        if (missing.Count > 0)
+        {
+            _notConfigured =
+                $"Evaluation suite not configured in this environment — missing {string.Join(", ", missing)}. " +
+                "See .env.example. This suite scores against a live index and model deployment; it runs in the eval pipeline, not in a plain `dotnet test`.";
+            return;
+        }
+
         var credential = new DefaultAzureCredential();
 
         var config = new IndexerConfig
@@ -445,6 +466,10 @@ public class RagEvaluationTests
     [DynamicData(nameof(GoldenQueries))]
     public void EvaluateGoldenQuery(TestQuery testQuery)
     {
+        // Inconclusive, not failed: the environment is not configured, so nothing was measured -
+        // which is different from something being measured and found wrong. See _notConfigured.
+        if (_notConfigured is not null) Assert.Inconclusive(_notConfigured);
+
         if (!_rows.TryGetValue(testQuery.Name, out var row))
         {
             // Reachable only if the run was cut short before this row was scored (a cancelled
@@ -522,6 +547,15 @@ public class RagEvaluationTests
 
     // Resource names/endpoints are environment-specific and documented in .env.example
     // (not secrets, but subscription-specific values that rot quickly if baked into source).
+    // The variables ClassInit reads through Env below. Listed separately so the suite can report
+    // ALL of the missing ones at once and stand down cleanly, rather than throwing on the first.
+    private static readonly string[] RequiredEnvVars =
+    [
+        "SEARCH_ENDPOINT", "OPENAI_ENDPOINT", "OPENAI_EMBEDDING_DEPLOYMENT",
+        "OPENAI_GPT_DEPLOYMENT", "OPENAI_GPT_MODEL_NAME", "SEARCH_INDEX_NAME",
+        "STORAGE_ACCOUNT_URL", "STORAGE_CONTAINER",
+    ];
+
     private static string Env(string name) =>
         Environment.GetEnvironmentVariable(name)
         ?? throw new InvalidOperationException(

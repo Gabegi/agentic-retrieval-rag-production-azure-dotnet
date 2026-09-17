@@ -83,13 +83,12 @@ environment variable.
 | Setting | Default | Purpose |
 |---|---|---|
 | `STORAGE_CONTAINER` | `protocols` | Container the run-report assembler counts the corpus in. Note the extraction pipeline itself reads the `documents` container (hard-wired in `Indexing.CU/ServiceCollectionExtensions.cs`) |
-| `OPENAI_EXTRACTION_DEPLOYMENT` | `gpt-41-extraction` | Legacy; not used by the Content Understanding path |
 | `OPENAI_EMBEDDING_MODEL_NAME` | `text-embedding-3-large` | Model name written into snapshots/reports and verified in the CU default mapping |
 | `OPENAI_EMBEDDING_DIMENSIONS` | `3072` | Vector size of the index field |
 | `OPENAI_MINI_DEPLOYMENT` | `gpt-4.1-mini` | The **deployment name** Content Understanding's prebuilt analyzer resolves its completion model against (serves gpt-5.4-mini since 2026-08-27; the name was kept stable). Used only by `ContentUnderstandingDefaultsSetup` |
 | `RunAnalysis__Enabled` | `true` | Master switch for the per-run `run-analysis` blob |
 | `RunAnalysis__CalibrationMode` | `true` | While true, flags with uncalibrated thresholds render their value but do not fire |
-| `GUARDS_LOG_ONLY` | `true` | Query-time guards (prompt injection, PII) log but do not block. Only an explicit `false` makes them block; anything unparsable counts as absent. `"true"` in `function_app.tf` — see the root README's [Known gaps](ReadMe.md#known-gaps-as-of-2026-09-11) |
+| `GUARDS_LOG_ONLY` | `true` | Query-time guards (prompt injection, PII) log but do not block. Only an explicit `false` makes them block; anything unparsable counts as absent. `"true"` in `function_app.tf` — the log-only decision is `docs/2608/260812/guards-review.md` (D091) |
 | `WEBSITE_TIME_ZONE` | — | Set to `W. Europe Standard Time` in `function_app.tf` so the 17:00 timer is Dutch wall-clock time |
 
 ### Getting dev values

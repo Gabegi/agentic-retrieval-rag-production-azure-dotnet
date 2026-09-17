@@ -165,6 +165,12 @@ public class IndexingFunction
         EmbedUploadStageMetrics? embedResults   = null;
         bool    success = false;
         string? error   = null;
+        string? errorType = null;
+        // The one read of the live index configuration for this run (D201). Threaded into the
+        // embed/upload stage as the width every vector is judged against, and onto the report as
+        // what the index actually was - rather than being read a second time at report time,
+        // where the two could disagree.
+        IndexVectorConfig? vectorConfig = null;
 
         // Wall-clock per stage from CurrentUtcDateTime deltas - the replay-safe clock, so a
         // replayed orchestration recomputes the same numbers from the same history events
@@ -196,6 +202,11 @@ public class IndexingFunction
                 context.SetCustomStatus(new IndexingProgress(IndexingProgress.Extracting, startedAt));
             }
 
+            // Before extraction, because extraction is the only step that costs money and this is
+            // the step that can say "the index is not readable, stop". After any recreate, because
+            // it reads the index the rest of the run will publish to. See PreflightActivity.
+            vectorConfig = await context.CallActivityAsync<IndexVectorConfig>("PreflightActivity", context.InstanceId);
+
             var extractStart = context.CurrentUtcDateTime;
             extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
             stageDurations["extract"] = (long)(context.CurrentUtcDateTime - extractStart).TotalMilliseconds;
@@ -209,13 +220,31 @@ public class IndexingFunction
                 DocsExtracted: extractResults.DocsToProcess, ChunksProduced: chunkResults.ChunksProduced));
 
             var embedStart = context.CurrentUtcDateTime;
-            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt));
+            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt, vectorConfig!.Dimensions!.Value));
             stageDurations["embed_upload"] = (long)(context.CurrentUtcDateTime - embedStart).TotalMilliseconds;
-            success      = true;
+
+            // A stage that could describe its own failure returns it instead of throwing, so that
+            // the detail survives the Durable boundary as data (see EmbedAndUploadActivity). The
+            // run is still a failure - it just keeps its metrics.
+            if (embedResults?.Failure is { } failure)
+            {
+                error     = failure.Message;
+                errorType = failure.ExceptionType;
+            }
+            else
+            {
+                success = true;
+            }
         }
         catch (Exception ex)
         {
             error = ex.ToString();
+            // In the isolated worker this catch sees TaskFailedException, never the activity's
+            // own exception, so ex.GetType() would name the wrapper on every failed run.
+            // FailureDetails.ErrorType is where the real type survives - as a string.
+            errorType = ex is Microsoft.DurableTask.TaskFailedException tfe
+                ? tfe.FailureDetails.ErrorType
+                : ex.GetType().Name;
         }
 
         context.SetCustomStatus(new IndexingProgress(
@@ -232,11 +261,14 @@ public class IndexingFunction
             {
                 Run = new RunIdentity(
                     context.InstanceId, startedAt, context.CurrentUtcDateTime,
-                    input.ForceReindex, success, error),
+                    input.ForceReindex, success, error, errorType),
                 Extraction = extractResults,
                 Chunking   = chunkResults,
                 Embedding  = embedResults,
                 StageDurationsMs = stageDurations,
+                // The preflight read, not a second one at report time (D201): one value per run,
+                // and it is the value the embed/upload stage was actually judged against.
+                VectorConfig = vectorConfig,
             });
 
         // After the report is saved, since this reads it back: assembles the run-analysis blob
@@ -295,7 +327,11 @@ public class IndexingFunction
         span?.SetTag("indexing.instance_id", req.InstanceId);
         try
         {
-            await _indexService.EnsureIndexAsync();
+            // Index provisioning moved to PreflightActivity (D201): the live field width has to be
+            // read before the paid extraction, and it cannot be read before the index exists, so
+            // the two belong together and ahead of this stage. A second EnsureIndexAsync here
+            // would also be a second writer of the same object.
+            //
             // req.InstanceId threaded through so this run's file-facts/diff/failure
             // reports are named by instance, not just by wall clock - see StageReportPath.
             var (docs, stats) = await _extractionService.ExtractAsync(
@@ -379,7 +415,7 @@ public class IndexingFunction
             LogProcessMemory("chunks loaded", chunks.Count);
 
             var sw              = System.Diagnostics.Stopwatch.StartNew();
-            var embeddingResult = await _embeddingService.EmbedDocumentsAsync(chunks, context.CancellationToken);
+            var embeddingResult = await _embeddingService.EmbedDocumentsAsync(chunks, req.VectorDimensions, context.CancellationToken);
             sw.Stop();
             LogProcessMemory("embedding complete", chunks.Count);
 
@@ -412,7 +448,7 @@ public class IndexingFunction
                 context.CancellationToken);
 
             var uploadResult = await _uploadService.UploadDocumentsAsync(
-                embeddedDocs, staleDocumentIds, familyMoves, context.CancellationToken);
+                embeddedDocs, staleDocumentIds, familyMoves, req.VectorDimensions, ct: context.CancellationToken);
             LogProcessMemory("upload complete", chunks.Count);
 
             // Rolling full-corpus snapshot (source-scoped) + the two evictions that ride along
@@ -443,7 +479,12 @@ public class IndexingFunction
 
             return new EmbedUploadStageMetrics(
                 DocsUploaded:                  uploadResult.DocsUploaded,
-                DocsFailed:                    uploadResult.DocsFailed,
+                // Refused by Search PLUS withheld by us (2026-09-17, D199 A1). Folded rather than
+                // reported separately because the report's identity is
+                // DocsUploaded + DocsFailed == ChunksProduced, and a chunk we withheld is as
+                // absent from the index as one Search rejected. Which of the two it was is on the
+                // same report already: VectorDimErrors and EmptyVectors sit beside this.
+                DocsFailed:                    uploadResult.DocsFailed + uploadResult.DocsWithheld,
                 ChunksRemoved:                 uploadResult.ChunksRemoved,
                 ChunkFamiliesPatched:          uploadResult.ChunkFamiliesPatched,
                 ChunksTruncated:               embeddingResult.ChunksTruncated,
@@ -460,6 +501,10 @@ public class IndexingFunction
             {
                 TotalEmbeddingTokens   = embeddingResult.TotalInputTokens,
                 EmptyVectors           = embeddingResult.EmptyVectors,
+                // The split of the folded DocsFailed above, so the report states it rather than
+                // leaving a reader to infer it from VectorDimErrors + EmptyVectors.
+                DocsWithheld           = uploadResult.DocsWithheld,
+                DocumentsWithheld      = uploadResult.DocumentsWithheld,
                 EmbeddingApiDurationMs = embeddingResult.ApiPhaseMs,
                 VectorCacheDurationMs  = embeddingResult.CachePhaseMs,
                 VectorCacheHitTokens   = embeddingResult.CacheHitTokens,
@@ -467,12 +512,120 @@ public class IndexingFunction
                 // are what the rebuild actually costs, not the dollars.
                 RateLimitedRetries     = embeddingResult.ThrottledRetries,
                 IndexVectorIndexSizeBytesSnapshot = uploadResult.IndexVectorIndexSizeBytesSnapshot,
+                // The divisors for VectorCacheDurationMs, plus the binary that produced them
+                // (D197 action 4). BuildId is taken from the assembly the embed stage lives in,
+                // not this one: it is the code whose changes these timings are used to judge.
+                MaxCacheParallelism   = embeddingResult.CacheParallelism,
+                VectorCacheOperations = embeddingResult.CacheOperations,
+                BuildId               = BuildIdentity.For(typeof(IEmbeddingService).Assembly),
+            };
+        }
+        // Returned as data, not thrown (2026-09-17, D199 §8b item 3). The total-withhold guard is
+        // the one failure this stage can fully DESCRIBE - it knows the verdict breakdown, the
+        // configured width, and how many chunks and documents were involved - and throwing would
+        // destroy all of it: in the isolated worker the orchestrator receives TaskFailedException
+        // with FailureDetails, where the type survives as a string and custom properties do not
+        // survive at all. So the detail is converted here, where it still exists, and the
+        // orchestrator marks the run failed from the returned Failure instead.
+        //
+        // The payoff is that a configuration drift reports like an ordinary run that withheld
+        // everything: DocsWithheld == the chunk count, DocumentsWithheld == the document count,
+        // DocsUploaded 0. The drift is visible in the report's own columns rather than only in a
+        // stringified exception.
+        catch (TotalWithholdException ex)
+        {
+            _logger.LogError(ex, "EmbedAndUploadActivity withheld every chunk for '{ChunksBlob}'", req.ChunksBlob);
+            Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "embed_upload"));
+
+            return new EmbedUploadStageMetrics(
+                DocsUploaded:                  0,
+                DocsFailed:                    ex.TotalChunks,
+                ChunksRemoved:                 0,
+                ChunkFamiliesPatched:          0,
+                ChunksTruncated:               0,
+                EmbeddingRetries:              0,
+                VectorDimErrors:               0,
+                VectorCacheHits:               0,
+                TotalEmbeddingDurationMs:      0,
+                IndexDocumentCountSnapshot:    null,
+                IndexStorageSizeBytesSnapshot: null,
+                RedFlags:                      [],
+                ChunksEvicted:                 0,
+                PreviousIndexDocumentCount:    null,
+                PreviousIndexStorageSizeBytes: null)
+            {
+                DocsWithheld      = ex.TotalChunks,
+                DocumentsWithheld = ex.DistinctDocuments,
+                // FULLY QUALIFIED, to match the other path. The catch below writes
+                // FailureDetails.ErrorType, which Durable gives as the full type name
+                // ("System.InvalidOperationException"), so nameof() here would put two spellings
+                // in one column and any filter on it would miss half the failures.
+                Failure = new StageFailure(typeof(TotalWithholdException).FullName!, ex.Message)
+                {
+                    IsDimensionDrift   = ex.IsDimensionDrift,
+                    ExpectedDimensions = ex.ExpectedDimensions,
+                    VerdictCounts      = ex.VerdictCounts,
+                },
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "EmbedAndUploadActivity failed for '{ChunksBlob}'", req.ChunksBlob);
             throw new InvalidOperationException($"EmbedAndUploadActivity failed: {ex}");
+        }
+    }
+
+    // Step 0 — provision the index if missing, then read back what it ACTUALLY is. One read per
+    // run, threaded down from here (D201).
+    //
+    // Why the index and not OPENAI_EMBEDDING_DIMENSIONS: the configured value is a provisioning
+    // input, not a fact. Nothing sends it to the embedding model - the deployment returns its
+    // native width regardless - so validating a vector against config asks "does the model agree
+    // with a setting", when the only question that decides an upload is "does the model agree with
+    // the index". FlagEvaluator has said so since 2026-09-15: "VectorDimErrors cannot see this
+    // one: it compares each vector against the same configuration value, so a config change
+    // without a re-index passes it and fails at upload."
+    //
+    // Why here and not inside the embed stage: this fails the run, and it has to fail it before
+    // the only paid step. Extraction bills Content Understanding per page; a Search outage found
+    // at preflight costs nothing, the same outage found at upload has already spent it.
+    //
+    // Why failing rather than falling back to config: a fallback silently reinstates the
+    // config-as-proxy path this exists to remove, and a run validated against the wrong claim
+    // would be indistinguishable from a correct one afterwards. A run that cannot read the index
+    // cannot publish to it either.
+    [Function("PreflightActivity")]
+    public async Task<IndexVectorConfig> PreflightActivity([ActivityTrigger] string instanceId, FunctionContext context)
+    {
+        using var _    = _logger.BeginScope(new Dictionary<string, object?> { ["InstanceId"] = instanceId, ["Source"] = Source });
+        using var span = Instrumentation.ActivitySource.StartActivity("indexing.preflight");
+        span?.SetTag("indexing.instance_id", instanceId);
+        try
+        {
+            // Get-or-create, and it must come first: ReadVectorConfigAsync cannot describe an
+            // index that does not exist yet, which is the first run in a fresh environment.
+            await _indexService.EnsureIndexAsync();
+
+            var vectorConfig = await _indexService.ReadVectorConfigAsync(context.CancellationToken);
+
+            if (!vectorConfig.FieldPresent || vectorConfig.Dimensions is not > 0)
+                throw new InvalidOperationException(
+                    $"Preflight could not read the width of the index's '{vectorConfig.FieldName}' field. " +
+                    "The embed and upload stages validate every vector against it, so the run stops here rather " +
+                    "than falling back to OPENAI_EMBEDDING_DIMENSIONS, which is what the index was asked for and " +
+                    "not necessarily what it is.");
+
+            _logger.LogInformation(
+                "Preflight — index '{Index}' vector field is {Dims} wide (configured {Configured}); vectors are judged against the live width",
+                _indexerConfig.SearchIndexName, vectorConfig.Dimensions, vectorConfig.ConfiguredDimensions);
+
+            return vectorConfig;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Instrumentation.PipelineFailures.Add(1, new KeyValuePair<string, object?>("stage", "preflight"));
+            _logger.LogError(ex, "PreflightActivity failed");
+            throw new InvalidOperationException($"PreflightActivity failed: {ex}");
         }
     }
 

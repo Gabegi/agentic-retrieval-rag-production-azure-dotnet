@@ -90,7 +90,7 @@ public class VectorCacheGatewayTests
         var gateway = new VectorCacheGateway(cache.Object, Dims);
         var doc     = Document("a");
 
-        var (cached, toEmbed) = await gateway.SplitAsync([doc], CancellationToken.None);
+        var (cached, toEmbed, _) = await gateway.SplitAsync([doc], CancellationToken.None);
 
         Assert.AreEqual(1, cached.Count);
         Assert.AreEqual(0, toEmbed.Count);
@@ -113,10 +113,87 @@ public class VectorCacheGatewayTests
         cache.Setup(c => c.TryGetAsync(nan.ContentHash,    It.IsAny<CancellationToken>())).ReturnsAsync([1f, float.NaN, 1f, 1f]);
         var gateway = new VectorCacheGateway(cache.Object, Dims);
 
-        var (cached, toEmbed) = await gateway.SplitAsync([absent, narrow, zeroes, nan], CancellationToken.None);
+        var (cached, toEmbed, _) = await gateway.SplitAsync([absent, narrow, zeroes, nan], CancellationToken.None);
 
         Assert.AreEqual(0, cached.Count);
         Assert.AreEqual(4, toEmbed.Count);
         Assert.IsTrue(toEmbed.All(d => d.ContentVector is null), "a rejected cached vector must not be left on the document");
+    }
+
+    // --- Operation counts (D197 action 4) ---
+    //
+    // These pin the count to the round trips actually made, which is the whole point of the
+    // field: ms/op is read off CachePhaseMs × P / operations, and the ops term has already
+    // changed basis once (action 1c made a PUT one round trip instead of two). A count derived
+    // from chunk totals would have gone on reading the same across that change.
+
+    [TestMethod]
+    public async Task SplitAsync_CountsOneOperationPerProbe_HitOrMiss()
+    {
+        var cache = Cache();
+        var hit   = Enumerable.Repeat(0.5f, Dims).ToArray();
+        var found = Document("found");
+        var miss  = Document("miss");
+        cache.Setup(c => c.TryGetAsync(found.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(hit);
+        cache.Setup(c => c.TryGetAsync(miss.ContentHash,  It.IsAny<CancellationToken>())).ReturnsAsync((float[]?)null);
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+
+        var (cached, toEmbed, operations) = await gateway.SplitAsync([found, miss], CancellationToken.None);
+
+        Assert.AreEqual(1, cached.Count);
+        Assert.AreEqual(1, toEmbed.Count);
+        Assert.AreEqual(2, operations, "a probe is a round trip whether or not it returns a usable vector");
+    }
+
+    [TestMethod]
+    public async Task SplitAsync_NoDocuments_CountsNoOperations()
+    {
+        var gateway = new VectorCacheGateway(Cache().Object, Dims);
+
+        var (_, _, operations) = await gateway.SplitAsync([], CancellationToken.None);
+
+        Assert.AreEqual(0, operations);
+    }
+
+    // One existence check plus one PUT each - the shape action 1c produced. If SetAsync ever
+    // goes back to creating the container per write this count has to go back to 2 per PUT,
+    // and that is the change this assertion is here to force someone to make deliberately.
+    [TestMethod]
+    public async Task WriteFreshAsync_CountsTheContainerCheckPlusOnePerWrite()
+    {
+        var cache   = Cache();
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+        var results = new[] { Fresh(Document("a")), Fresh(Document("b")), Fresh(Document("c")) };
+
+        var operations = await gateway.WriteFreshAsync(results, CancellationToken.None);
+
+        Assert.AreEqual(4, operations, "1 AssertContainerExists + 3 SetAsync");
+    }
+
+    // Skipped vectors are not written, so they are not counted either.
+    [TestMethod]
+    public async Task WriteFreshAsync_CountsOnlyTheVectorsItActuallyWrote()
+    {
+        var cache   = Cache();
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+        var results = new[]
+        {
+            Fresh(Document("good")),
+            Fresh(Document("dim"),   dimError: true),
+            Fresh(Document("empty"), emptyVector: true),
+        };
+
+        var operations = await gateway.WriteFreshAsync(results, CancellationToken.None);
+
+        Assert.AreEqual(2, operations, "1 AssertContainerExists + 1 SetAsync");
+    }
+
+    [TestMethod]
+    public async Task WriteFreshAsync_NothingUsable_CountsNoOperations()
+    {
+        var gateway = new VectorCacheGateway(Cache().Object, Dims);
+
+        Assert.AreEqual(0, await gateway.WriteFreshAsync([Fresh(Document("dim"), dimError: true)], CancellationToken.None));
+        Assert.AreEqual(0, await gateway.WriteFreshAsync([], CancellationToken.None));
     }
 }

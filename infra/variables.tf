@@ -37,15 +37,9 @@ variable "openai_gpt_deployment" {
   default     = "gpt-4.1-query"
 }
 
-variable "openai_extraction_deployment" {
-  type        = string
-  description = "Deployment name for the indexing/extraction pipeline's GPT model - runs gpt-5.4 (ai_deployments.tf). Name frozen at gpt-4.1 for the same reason as openai_gpt_deployment."
-  default     = "gpt-4.1-extraction"
-}
-
 variable "openai_eval_deployment" {
   type        = string
-  description = "Deployment name for the eval judge model - runs gpt-5.1, deliberately a different model from querying/extraction (ai_deployments.tf). Name frozen from the gpt-4o era for the same reason as openai_gpt_deployment."
+  description = "Deployment name for the eval judge model - runs gpt-5.1, deliberately a different model from querying (ai_deployments.tf). Name frozen from the gpt-4o era for the same reason as openai_gpt_deployment."
   default     = "gpt-4o-eval"
 }
 
@@ -84,7 +78,7 @@ variable "zenya_sync_ado_federated_credentials" {
 
 variable "dev_allowed_ips" {
   type        = list(string)
-  description = "Public IPs allowlisted for direct access to the function app, data storage account, and search service - development convenience only. Every usage site also gates on var.environment == \"development\", so this has no effect even if accidentally set in prod.tfvars."
+  description = "Public IPs allowlisted for direct access to the function app, the query API App Service, data storage account, and search service - development convenience only. Every usage site also gates on var.environment == \"development\", so this has no effect even if accidentally set in prod.tfvars."
   default     = []
 }
 

@@ -23,7 +23,6 @@ public class IndexerConfig
     // Below all have a fallback applied at construction time (see ServiceCollectionExtensions),
     // so they're never actually null/empty in practice - not [Required].
     public string StorageContainer             { get; init; } = "protocols";
-    public string OpenAiExtractionDeployment    { get; init; } = "gpt-41-extraction";
     // Optional here, but required by the indexing side - the Content Understanding client is
     // only registered when set, and AgenticRagApp.Indexing.CU's AddIndexing throws without
     // it. Optional at this level because the query-side host does no extraction and should not

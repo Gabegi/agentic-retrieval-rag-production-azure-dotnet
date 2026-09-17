@@ -99,7 +99,6 @@ resource "azurerm_windows_function_app" "indexer" {
     "OPENAI_EMBEDDING_DEPLOYMENT"              = var.openai_embedding_deployment
     "OPENAI_GPT_DEPLOYMENT"                    = var.openai_gpt_deployment
     "OPENAI_GPT_MODEL_NAME"                    = var.openai_gpt_model_name
-    "OPENAI_EXTRACTION_DEPLOYMENT"             = var.openai_extraction_deployment
     # Read only by ContentUnderstandingDefaultsSetup, which writes the account-wide default
     # model->deployment mapping at host startup (see the cognitive_services_user grant below).
     "OPENAI_MINI_DEPLOYMENT" = var.openai_mini_deployment

@@ -47,6 +47,13 @@ resource "azurerm_linux_web_app" "api" {
     # GET /health is liveness only (no dependency probes) - see AgenticRagApp.Api/Program.cs - so a
     # Search or Foundry hiccup does not get the instance recycled.
     health_check_path = "/health"
+    # RequiredWith health_check_path in azurerm 4.x - the plan of 2026-09-16 failed with "all of
+    # `site_config.0.health_check_eviction_time_in_min,site_config.0.health_check_path` must be
+    # specified". Provider range is 2-10; 10 is Azure's own default for the setting it writes
+    # (WEBSITE_HEALTHCHECK_MAXPINGFAILURES), so this adds the argument without also changing
+    # eviction behaviour. Largely inert at one instance anyway - App Service will not evict the
+    # last healthy-or-not instance.
+    health_check_eviction_time_in_min = 10
 
     # Rule names are capped at 32 chars; "dev-access-" (11) + a dashed IPv4 (up to 15) fits - see
     # function_app.tf for the failure that set the prefix.

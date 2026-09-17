@@ -46,11 +46,48 @@ public record EmbedUploadStageMetrics(
     // Identity-resolution embeddings (chunking stage) are metered but not in this field.
     public long? TotalEmbeddingTokens { get; init; }
 
-    // Fresh vectors of the right length whose values are all zero or non-finite. They pass the
-    // dimension check and upload cleanly, then never match a query - the one defect the two
-    // counts above cannot see (EmbeddingService.IsEmptyVector, 2026-09-15). Should always be 0.
+    // Fresh vectors of the right length that are nonetheless unusable - the one defect the two
+    // counts above cannot see (VectorHealth.Classify, 2026-09-15). Two conditions, counted
+    // together and separated in the host log (2026-09-17): all-zero passes the dimension check
+    // and uploads cleanly, then never matches a query; a NaN/infinity cannot be serialised at all
+    // and would fail its whole upload batch. Should always be 0.
     // Null = the report predates the counter; not measured, not zero.
     public int? EmptyVectors { get; init; }
+
+    // The part of DocsFailed that this pipeline withheld rather than Azure AI Search refusing it
+    // (2026-09-17, D199 A1/A3).
+    //
+    // INCLUDED IN DocsFailed, not additional to it. DocsFailed folds the two causes so that
+    // DocsUploaded + DocsFailed == ChunksProduced stays an identity; this field is the split of
+    // that total, so "refused by Search" is DocsFailed - DocsWithheld, which is the subtraction
+    // the flag does. Summing the two double-counts every withheld chunk.
+    //
+    // Inferring it was the alternative and it was rejected: VectorDimErrors + EmptyVectors does
+    // equal this today, because both sides ask VectorHealth.Classify about the same chunks and
+    // the absent-vector case is structurally zero on the indexing path - but nothing enforces
+    // that, and a reader of the flag would be trusting an arithmetic coincidence between two
+    // stages. The same "equal by convention" shape A0 removed from the predicate itself.
+    //
+    // Null = the report predates the field; not measured, not zero.
+    public int? DocsWithheld { get; init; }
+
+    // Distinct source documents those withheld chunks belong to. Chunk counts cannot show
+    // persistence - a document stuck withholding forever costs one paid Content Understanding
+    // extraction per run (D199 §3/A2), and this is the field that makes "still stuck" readable
+    // across runs without going to the host log for ids.
+    //
+    // A cardinality, not a quantity: it is additive to nothing on this report and never sums with
+    // DocsWithheld. Expect it <= DocsWithheld, equal only when no document withheld two chunks.
+    // Null = the report predates the field; not measured, not zero.
+    public int? DocumentsWithheld { get; init; }
+
+    // Set when the stage failed in a way it could DESCRIBE rather than merely die from
+    // (2026-09-17, D199 §8b item 3). Today that is the total-withhold guard, and the point is
+    // that the rest of this record is still filled in from what the failure knew - DocsWithheld,
+    // DocumentsWithheld, DocsFailed - so a configuration drift shows up in the report's own
+    // columns instead of only inside a stringified exception. Null on a successful run and on any
+    // failure the stage could not describe, which leaves the existing catch path unchanged.
+    public StageFailure? Failure { get; init; }
 
     // Cost and throughput split (2026-09-15). TotalEmbeddingDurationMs above is the whole embed
     // step - cache reads, the batched API calls, cache writes (not upload). These two are its
@@ -75,4 +112,32 @@ public record EmbedUploadStageMetrics(
     // snapshots after upload. This is the figure that counts against the tier's VECTOR quota,
     // which is the one that runs out before StorageSize does. Null = not reported.
     public long? IndexVectorIndexSizeBytesSnapshot { get; init; }
+
+    // --- What VectorCacheDurationMs has to be divided by (2026-09-17, D197 action 4) ---
+    //
+    // The cache timings landed on 2026-09-15 with no divisor beside them, so every reading of
+    // them so far has been ms/op = VectorCacheDurationMs × P / (ChunksProduced + misses) with
+    // BOTH terms assumed. The 2026-09-17 review is what these three fix: it could show only that
+    // 17,224 ms is 34.5 ms/op at P=8 and 138 at P=32, and had to pick between "the change was
+    // never deployed" and "the blob store stopped scaling" on which answer looked ordinary.
+    // With these it is arithmetic: ms/op = VectorCacheDurationMs × MaxCacheParallelism /
+    // VectorCacheOperations, and BuildId says whether two runs are even the same experiment.
+    //
+    // Null on every report written before 2026-09-17 - not measured, not zero, same convention
+    // as EmptyVectors and RateLimitedRetries above.
+
+    // The concurrency the two cache passes ran at (VectorCacheGateway.MaxCacheParallelism as
+    // that build compiled it), not the value in today's source.
+    public int? MaxCacheParallelism { get; init; }
+
+    // Blob round trips the cache passes actually made, counted at the call. NOT derivable from
+    // chunk counts: a PUT was two round trips before 2026-09-16 and one after (D197 action 1c),
+    // and action 2 would remove probes entirely, so the derived version changes basis under
+    // exactly the changes it is used to judge.
+    public int? VectorCacheOperations { get; init; }
+
+    // Which binary produced this run - see BuildIdentity for why it carries an MVID and not just
+    // a version string. Runs with the same BuildId are comparable; a difference means the code
+    // moved, whatever the report's other numbers look like.
+    public string? BuildId { get; init; }
 }

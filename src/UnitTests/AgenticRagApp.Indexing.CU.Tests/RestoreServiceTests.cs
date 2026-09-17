@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using AgenticRagApp.Infrastructure.Clients.Search;
 using Moq;
 using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Indexing.CU.Services;
@@ -45,7 +46,7 @@ public class RestoreServiceTests
     private static Mock<IUploadService> MockUploadService(UploadResult? result = null)
     {
         var mock = new Mock<IUploadService>();
-        mock.Setup(m => m.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(m => m.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(result ?? new UploadResult(0, 0, 0, 0, null, null, []));
         return mock;
     }
@@ -94,9 +95,24 @@ public class RestoreServiceTests
             ValidTo:            null,
             Version:            null);
 
+    // The live index width a restore judges cached vectors against (D201). 2 here, matching the
+    // two-component vectors these tests cache.
+    private static Mock<IIndexService> MockIndexService(int dims = 2, bool fieldPresent = true)
+    {
+        var mock = new Mock<IIndexService>();
+        mock.Setup(m => m.ReadVectorConfigAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new IndexVectorConfig(
+                IndexName: "my-index", FieldName: "content_vector", FieldPresent: fieldPresent,
+                Dimensions: fieldPresent ? dims : null, ConfiguredDimensions: dims,
+                Algorithm: "hnsw", Metric: "cosine", M: 4, EfConstruction: 400, EfSearch: 500,
+                Compression: null, Vectorizer: null, VectorizerModel: null, VectorizerDeployment: null,
+                ConfiguredModelName: "text-embedding-3-large", ReadAtUtc: DateTimeOffset.UtcNow));
+        return mock;
+    }
+
     private static RestoreService BuildService(
         Mock<ISnapshotService> snapshotService, Mock<IVectorCache> vectorCache, Mock<IUploadService> uploadService) =>
-        new(snapshotService.Object, vectorCache.Object, uploadService.Object, Config(), NullLogger<RestoreService>.Instance);
+        new(snapshotService.Object, vectorCache.Object, uploadService.Object, MockIndexService().Object, Config(), NullLogger<RestoreService>.Instance);
 
     [TestMethod]
     public async Task RestoreFromLatestSnapshotAsync_NoSnapshotExists_ReturnsZeroRestoredWithoutUploading()
@@ -111,7 +127,7 @@ public class RestoreServiceTests
         Assert.AreEqual(0, result.ChunksRestored);
         Assert.IsNull(result.SnapshotInstanceId);
         uploadService.Verify(u => u.UploadDocumentsAsync(
-            It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [TestMethod]
@@ -124,9 +140,9 @@ public class RestoreServiceTests
         var service          = BuildService(snapshotService, vectorCache, uploadService);
 
         List<ChunkObject>? uploaded = null;
-        uploadService.Setup(u => u.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<ChunkObject>, IReadOnlyList<string>, IReadOnlyList<FamilyMove>, CancellationToken>(
-                (docs, _, _, _) => uploaded = docs.ToList())
+        uploadService.Setup(u => u.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChunkObject>, IReadOnlyList<string>, IReadOnlyList<FamilyMove>, int, bool, CancellationToken>(
+                (docs, _, _, _, _, _) => uploaded = docs.ToList())
             .ReturnsAsync(new UploadResult(1, 0, 0, 0, 42, 1024, []));
 
         var result = await service.RestoreFromLatestSnapshotAsync();

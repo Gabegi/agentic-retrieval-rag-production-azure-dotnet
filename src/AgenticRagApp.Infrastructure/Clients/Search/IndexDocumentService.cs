@@ -129,7 +129,33 @@ public class IndexDocumentService : IIndexDocumentService
 
                 if (r.Document.TryGetValue("document_id",      out var idObj)   && idObj   is string docId &&
                     r.Document.TryGetValue("last_modified_date", out var dateObj) && dateObj is DateTimeOffset date)
-                    result.TryAdd(docId, date);
+                {
+                    // A document-level rollup over per-chunk rows, so it needs a rule for rows
+                    // that disagree. OLDEST wins: a document is current only if EVERY indexed row
+                    // is current (2026-09-17, D199 A2).
+                    //
+                    // This was TryAdd, i.e. first-seen wins, which - ordered by chunk id - meant
+                    // whichever chunk sorted first decided for the whole document. In the healthy
+                    // case that is invisible, because DocumentStamp puts ONE date on every chunk
+                    // of a document, so oldest == first == newest. It only matters when rows
+                    // disagree, and the ways they can disagree are exactly the ways this codebase
+                    // leaves a row behind: a chunk Search refused (DocsFailed), or one
+                    // UploadService withheld. Under first-seen those documents read as fully
+                    // current forever and were never reprocessed - the stale row could not heal.
+                    //
+                    // Leans on this scan being exhaustive, which it is: keyset pagination on
+                    // "id gt lastId" with no $skip ceiling, terminating only on a short page. A
+                    // capped scan would reintroduce the same bug in a subtler form, since a
+                    // document whose oldest row fell past the cut would read current again.
+                    //
+                    // What it still cannot reach: a chunk with NO row in the index - withheld on
+                    // its first ever run, or after its id changed - contributes no old date, so
+                    // its siblings' fresh date wins and the document reads current. Withholding is
+                    // non-damaging in that case but not self-healing; closing it needs a persisted
+                    // worklist of withheld document ids, not a date rule (D199 §3/A2).
+                    if (!result.TryGetValue(docId, out var seen) || date < seen)
+                        result[docId] = date;
+                }
             }
 
             // A short page means we've reached the end - a full page means there may be more.
