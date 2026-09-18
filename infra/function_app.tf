@@ -136,8 +136,10 @@ resource "azurerm_windows_function_app" "indexer" {
     # so this is whatever tier is actually in use. Default is text-embedding-3-large standard.
     "EMBEDDING_INPUT_PRICE_USD_PER1M_TOKENS" = var.embedding_input_price_usd_per_1m_tokens
 
-    # Windows-only: TimerTrigger crons (ScheduledIndexing's daily 17:00) follow Dutch wall-clock
-    # across DST instead of drifting with UTC.
+    # Windows-only. Was set so ScheduledIndexing's 17:00 TimerTrigger cron followed Dutch
+    # wall-clock across DST; that timer was removed 2026-09-17 (D200 §6i) and nothing else in
+    # the app was checked for a dependency on local time. Kept unchanged for that reason -
+    # dropping it is its own change, with its own plan diff, not a side effect of the removal.
     "WEBSITE_TIME_ZONE" = "W. Europe Standard Time"
   }
 

@@ -83,13 +83,12 @@ app-deploy workflow, private-endpoint + deny-by-default like the Function, no au
 
 | Endpoint | Function | What it does |
 | --- | --- | --- |
-| `POST /api/index?force=&recreate=` | `StartIndexing` ([`PdfIndexingFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/PdfIndexingFunction.cs)) | Start an indexing run (Durable orchestration); flags below |
+| `POST /api/index?force=&recreate=` | `StartIndexing` ([`IndexingFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/IndexingFunction.cs)) | Start an indexing run (Durable orchestration); flags below |
 | `GET /api/index/status?instanceId=` | `GetIndexingStatus` ([`IndexingStatusFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/IndexingStatusFunction.cs)) | Stage-level progress of the latest (or a named) run — see [indexing-run-status.md](src/AgenticRagApp.FunctionApp/indexing-run-status.md) |
 | `POST /api/index/restore` | `StartRestore` ([`IndexRestoreFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/IndexRestoreFunction.cs)) | Wipe the index, repopulate from the rolling full-corpus snapshot |
 | `POST /api/index/full-recreation?confirm=<index-name>` | `FullIndexRecreation` ([`IndexAdminFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/IndexAdminFunction.cs)) | Wipe the index and rebuild it **empty** on the current schema; repopulates nothing. Destructive — `?confirm=` must exactly match the configured index name or the call is refused with `400` |
 | `POST /api/setup-knowledge-base` | `SetupKnowledgeBase` ([`IndexAdminFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/IndexAdminFunction.cs)) | Ensure the knowledge source and knowledge base exist on the current index |
 | `POST /api/query` (JSON body `{"question": "..."}`) | `Query` ([`QueryingFunction.cs`](src/AgenticRagApp.FunctionApp/QueryingFunctions/QueryingFunction.cs)) | Answer a question over the knowledge base with citations |
-| Timer, daily 17:00 Dutch wall-clock | `ScheduledIndexing` ([`PdfIndexingFunction.cs`](src/AgenticRagApp.FunctionApp/IndexingFunctions/PdfIndexingFunction.cs)) | Full drop-and-rebuild indexing run — see [Operations](#operations) |
 
 ## Rebuilding the Whole Index in One Call
 
@@ -99,8 +98,10 @@ POST /api/index?force=true&recreate=true
 
 Drops the index — plus the knowledge source and knowledge base on top of it — rebuilds it empty on
 the current schema, then runs the normal extract → chunk → embed → upload pipeline over the whole
-corpus, all in one Durable orchestration. This is what the daily `ScheduledIndexing` timer sends at
-17:00 Dutch wall-clock time.
+corpus, all in one Durable orchestration. Reserved for schema changes and deliberate resets —
+there is no scheduled rebuild any more (the 17:00 `ScheduledIndexing` timer that sent this daily
+was removed 2026-09-17; the ordinary run is `POST /api/index` with no flags, which re-extracts
+only new and changed documents).
 
 The two query flags are independent:
 
@@ -221,22 +222,21 @@ See [AgenticRagApp.Observability/Reports.md](src/AgenticRagApp.Observability/Rep
 
 ## Operations
 
-### Scheduled Daily Rebuild
+### Rebuild the whole index
 
-`ScheduledIndexing` (`PdfIndexingFunction`) fires once a day at **17:00 Dutch wall-clock time**
-(CRON `0 0 17 * * *` with `WEBSITE_TIME_ZONE`, not UTC) and runs the index from scratch:
+`POST /api/index?force=true&recreate=true` runs the index from scratch:
 `RecreateIndexActivity` drops the knowledge base, the knowledge source and the index and rebuilds
 them empty on the current schema, then the normal extract → chunk → embed → upload pipeline
 repopulates it with `force=true`, so every source document goes through Content Understanding again.
 
-- **The index answers nothing between 17:00 and the run finishing** — it is empty from the
-  recreate until the upload stage lands. Queries during that window return no results.
-- A fixed instance ID (`PdfIndexing`) keeps it single-flight: if a run is still going at the
-  next tick, that tick is skipped rather than overlapping.
-- Same thing on demand: `POST /api/index?force=true&recreate=true`. Without `recreate=true`
-  the run indexes into the existing index as before.
-- Cheaper steady-state once the corpus is stable: drop both flags on the timer (diff-only) and
-  keep the recreate for schema changes. See the TODO on `RunScheduled`.
+There is no scheduled rebuild: the 17:00 `ScheduledIndexing` timer that sent this daily was
+removed 2026-09-17. The ordinary run is `POST /api/index` with no flags, which re-extracts only
+new and changed documents.
+
+- **The index answers nothing until the run finishes** — it is empty from the recreate until the
+  upload stage lands. Queries during that window return no results.
+- Watch it with `GET /api/index/status`. Expect roughly 12–15 minutes on the 51-document sample
+  corpus.
 
 ### Apply a schema change
 
