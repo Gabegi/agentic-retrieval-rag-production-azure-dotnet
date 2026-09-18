@@ -31,7 +31,8 @@ public class IndexDiffService : IIndexDiffService
         _logger               = logger;
     }
 
-    public async Task<IndexDiff> FindDocsNotInIndexAsync(bool forceReindex, CancellationToken ct = default)
+    public async Task<IndexDiff> FindDocsNotInIndexAsync(
+        bool forceReindex, CancellationToken ct = default)
     {
         // What documents exist in blob storage right now - id + LastModified only, no
         // download or content yet. This is the "source" side of the diff.
@@ -41,6 +42,23 @@ public class IndexDiffService : IIndexDiffService
         // the "target" side. Diffing it against sourceListing below is what lets us skip
         // paying for extraction on anything already indexed and unchanged.
         var indexedDates = await _indexDocumentService.GetCurrentlyIndexedDocsIdsNDatesAsync(ct);
+
+        // An empty map means every source document compares as new below and the whole corpus is
+        // re-extracted at full Content Understanding cost. That is CORRECT after a recreate and
+        // after a first run in a fresh environment, and it is the D180 defect otherwise - but the
+        // three are indistinguishable from here, so this stage does not try to tell them apart.
+        //
+        // EmptyIndexStateException used to throw on the difference, using GetStatisticsAsync as
+        // the second opinion. Removed 2026-09-17: it only ran on no-flag runs (the daily timer is
+        // force+recreate, which was carved out), so it never covered a run that actually happens,
+        // and its evidence was the service's own document count - which Azure documents as
+        // approximate and which was observed drifting 3,734 -> 3,739 across forty idle minutes.
+        // A guard asserting a contradiction cannot rest on a number that is allowed to be wrong.
+        // See docs/2609/260918/per-step-blob-storage-findings.md §6c/§6d.
+        if (indexedDates.Count == 0 && sourceListing.Count > 0)
+            _logger.LogWarning(
+                "Index-state read returned no documents — all {Count} source document(s) will be treated as new and re-extracted at full cost. Expected after a recreate or on a first run; otherwise this is the D180 shape.",
+                sourceListing.Count);
 
         // We extract a document if either:
             // 1. It's new — sourceId isn't in indexedDates at all, or

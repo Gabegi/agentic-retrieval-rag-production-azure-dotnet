@@ -33,7 +33,7 @@ public class SnapshotService : ISnapshotService
     private static string PointerPath(string source) => $"_latest-snapshot-{source}.json";
 
     public async Task<SnapshotLiveSet> UpdateAsync<T>(
-        string source, IReadOnlyList<T> newChunks, IReadOnlyList<string> staleDocumentIds, string instanceId, DateTimeOffset startedAt, CancellationToken ct = default)
+        string source, IReadOnlyList<T> newChunks, IReadOnlyList<string> staleDocumentIds, IReadOnlyList<string> processedDocumentIds, string instanceId, DateTimeOffset startedAt, CancellationToken ct = default)
         where T : ISnapshotSource
     {
         await _blobStore.AssertContainerExistsAsync(_container, ct);
@@ -45,14 +45,46 @@ public class SnapshotService : ISnapshotService
             ? await ReadSnapshotAsync(existingEntries[0].Path, ct)
             : [];
 
-        // Drop old entries for any document this run touched (updated or removed), then add
-        // this run's fresh chunks. A document untouched this run keeps its previous entry
-        // unchanged - that's how the snapshot accumulates into a full-corpus picture over time.
-        var staleSet = new HashSet<string>(staleDocumentIds, StringComparer.OrdinalIgnoreCase);
+        // Drop old entries for any document this run touched, then add this run's fresh chunks.
+        // A document untouched this run keeps its previous entry unchanged - that is how the
+        // snapshot accumulates into a full-corpus picture over time.
+        //
+        // "Touched" is the union of two sets, and using only the first was D200 F1 (fixed
+        // 2026-09-17). staleDocumentIds covers documents the diff marked updated or removed -
+        // but on a run that recreates the index first, the diff sees an empty index, every
+        // document reads as NEW, and that list is empty. processedDocumentIds covers what was
+        // actually re-extracted, which is the set whose previous rows are genuinely superseded.
+        //
+        // Union rather than replacement: a REMOVED document is stale but not processed (it no
+        // longer exists to extract), and its rows must still go.
+        var dropSet = new HashSet<string>(staleDocumentIds, StringComparer.OrdinalIgnoreCase);
+
+        // "Processed" means SUCCESSFULLY CHUNKED, not merely attempted - so a processed document
+        // only joins the drop set if it actually produced chunks to replace its old rows with.
+        //
+        // The failure modes are not symmetric. A document that fails somewhere between extraction
+        // and chunking is still in processedDocumentIds; dropping its rows with nothing to re-add
+        // would delete it from the snapshot, and the snapshot is what RestoreService rebuilds the
+        // index from - so a transient failure would silently cost a document on the next restore.
+        // The other direction merely keeps superseded rows for a document that legitimately
+        // produced none, which is the leak this whole change is about and is recoverable on any
+        // later run. Retain the leak, never the data loss.
+        var producedChunks = newChunks
+            .Select(c => c.DocumentId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        dropSet.UnionWith(processedDocumentIds.Where(producedChunks.Contains));
+
         var merged = previous
-            .Where(c => !staleSet.Contains(c.DocumentId))
+            .Where(c => !dropSet.Contains(c.DocumentId))
             .Concat(newChunks.Select(SnapshotChunk.From))
             .ToList();
+
+        // Loud, because silence here is what let 93.4% of the rows accumulate unnoticed: a
+        // merged set far larger than what came in means the drop set is not doing its job.
+        _logger.LogInformation(
+            "Snapshot merge — source '{Source}': {Previous} previous row(s), {Dropped} document(s) in the drop set, {New} new row(s) → {Merged} live",
+            source, previous.Count, dropSet.Count, newChunks.Count, merged.Count);
 
         var path = ReportPath.Build(startedAt, $"snapshot-{source}", instanceId);
         // Streamed - by far the largest payload in the system (the whole corpus's snapshot,

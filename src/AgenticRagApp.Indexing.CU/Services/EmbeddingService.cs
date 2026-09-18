@@ -44,16 +44,19 @@ public class EmbeddingService : IEmbeddingService
 
         var docList = documents.ToList();
 
-        // Two wall-clocks, so the report can say how much of the embed step was the paid API
-        // phase and how much was cache I/O (2026-09-15). The caller's TotalEmbeddingDurationMs
-        // wraps this whole method; these two are the split of it.
-        var cacheClock = System.Diagnostics.Stopwatch.StartNew();
+        // Three wall-clocks, so the report can say how much of the embed step was the paid API
+        // phase and how much was cache I/O (2026-09-15), and since 2026-09-18 (D203 M2b) which
+        // cache PASS: the read clock brackets the split, the write clock the write-back, and
+        // CachePhaseMs stays their sum so its meaning on every earlier report is unchanged. The
+        // caller's TotalEmbeddingDurationMs wraps this whole method; these are the split of it.
+        var readClock = System.Diagnostics.Stopwatch.StartNew();
 
         // A chunk whose content hash is already cached gets its vector back for free - no
         // embedding API call. Only genuinely new/changed chunks (within an updated document,
         // typically just the pages that actually changed) go on to the batch embedder below.
-        var (cached, toEmbed, readOps) = await cache.SplitAsync(docList, ct);
-        cacheClock.Stop();
+        var readPass = await cache.SplitAsync(docList, ct);
+        readClock.Stop();
+        var (cached, toEmbed, readOps) = readPass;
 
         _logger.LogInformation(
             "Embedding {ToEmbed} of {Total} documents in batches of {BatchSize} ({CacheHits} reused from vector cache)",
@@ -66,9 +69,10 @@ public class EmbeddingService : IEmbeddingService
         apiClock.Stop();
         var freshResults = batchResults.SelectMany(b => b.Results).ToArray();
 
-        cacheClock.Start();
-        var writeOps = await cache.WriteFreshAsync(freshResults, ct);
-        cacheClock.Stop();
+        var writeClock = System.Diagnostics.Stopwatch.StartNew();
+        var writePass  = await cache.WriteFreshAsync(freshResults, ct);
+        writeClock.Stop();
+        var writeOps = writePass.Operations;
 
         _logger.LogInformation("Embedding complete — {Fresh} embedded, {Cached} reused", freshResults.Length, cached.Count);
 
@@ -87,7 +91,20 @@ public class EmbeddingService : IEmbeddingService
             EmptyVectors     = freshResults.Count(r => r.EmptyVector),
             ThrottledRetries = batchResults.Sum(b => b.ThrottledRetries),
             ApiPhaseMs   = apiClock.ElapsedMilliseconds,
-            CachePhaseMs = cacheClock.ElapsedMilliseconds,
+            CachePhaseMs = readClock.ElapsedMilliseconds + writeClock.ElapsedMilliseconds,
+            // The split of CachePhaseMs and what happened inside each half (D203 §3). Hashing is
+            // inside the read clock, as it always was - HashMs says how much of it.
+            CacheReadMs         = readClock.ElapsedMilliseconds,
+            CacheWriteMs        = writeClock.ElapsedMilliseconds,
+            HashMs              = readPass.HashMs,
+            CacheBytesRead      = readPass.BytesRead,
+            CacheBytesWritten   = writePass.BytesWritten,
+            VectorDeserializeMs = readPass.DeserializeMs,
+            VectorClassifyMs    = readPass.ClassifyMs,
+            CacheWritesSkipped  = writePass.Skipped,
+            GetHitLatency       = readPass.GetHitLatency,
+            GetMissLatency      = readPass.GetMissLatency,
+            PutLatency          = writePass.PutLatency,
             // What the reused vectors would have billed: the stored count of the exact text a
             // fresh embed would have sent. The tokens the cache saved, in the model's own unit.
             CacheHitTokens = cached.Sum(d => (long)d.TokenCount),

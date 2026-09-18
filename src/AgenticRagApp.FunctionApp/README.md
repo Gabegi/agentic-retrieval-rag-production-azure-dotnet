@@ -8,7 +8,7 @@ HTTP endpoints, a timer, and Durable orchestrations. Deployed as `con-func-idx-c
 Program.cs                                   OpenTelemetry (logs/traces/metrics → App Insights), AddAgenticRagAppInfrastructure,
                                              report/artifact/snapshot writers, AddQuerying, AddIndexing, run-analysis services
 IndexingFunctions/
-  PdfIndexingFunction.cs                     StartIndexing (POST /api/index), ScheduledIndexing (timer), IndexingOrchestrator,
+  IndexingFunction.cs                        StartIndexing (POST /api/index), IndexingOrchestrator, PreflightActivity,
                                              ExtractActivity, ChunkActivity, EmbedAndUploadActivity, SaveIndexReportActivity
   IndexRestoreFunction.cs                    StartRestore (POST /api/index/restore), RestoreOrchestrator, RecreateIndexActivity,
                                              RestoreFromSnapshotActivity, SaveRestoreReportActivity

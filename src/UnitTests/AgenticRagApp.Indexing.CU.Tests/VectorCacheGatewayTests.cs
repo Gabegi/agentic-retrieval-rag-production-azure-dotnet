@@ -22,7 +22,7 @@ public class VectorCacheGatewayTests
     private static Mock<IVectorCache> Cache()
     {
         var mock = new Mock<IVectorCache>();
-        mock.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        mock.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).ReturnsAsync(0L);
         mock.Setup(c => c.AssertContainerExistsAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         return mock;
     }
@@ -86,7 +86,7 @@ public class VectorCacheGatewayTests
     {
         var cache = Cache();
         var hit   = Enumerable.Repeat(0.5f, Dims).ToArray();
-        cache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(hit);
+        cache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector(hit));
         var gateway = new VectorCacheGateway(cache.Object, Dims);
         var doc     = Document("a");
 
@@ -107,10 +107,10 @@ public class VectorCacheGatewayTests
         var narrow  = Document("narrow");
         var zeroes  = Document("zeroes");
         var nan     = Document("nan");
-        cache.Setup(c => c.TryGetAsync(absent.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync((float[]?)null);
-        cache.Setup(c => c.TryGetAsync(narrow.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(new float[Dims - 1]);
-        cache.Setup(c => c.TryGetAsync(zeroes.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(new float[Dims]);
-        cache.Setup(c => c.TryGetAsync(nan.ContentHash,    It.IsAny<CancellationToken>())).ReturnsAsync([1f, float.NaN, 1f, 1f]);
+        cache.Setup(c => c.TryGetAsync(absent.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync((CachedVector?)null);
+        cache.Setup(c => c.TryGetAsync(narrow.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector(new float[Dims - 1]));
+        cache.Setup(c => c.TryGetAsync(zeroes.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector(new float[Dims]));
+        cache.Setup(c => c.TryGetAsync(nan.ContentHash,    It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector([1f, float.NaN, 1f, 1f]));
         var gateway = new VectorCacheGateway(cache.Object, Dims);
 
         var (cached, toEmbed, _) = await gateway.SplitAsync([absent, narrow, zeroes, nan], CancellationToken.None);
@@ -134,8 +134,8 @@ public class VectorCacheGatewayTests
         var hit   = Enumerable.Repeat(0.5f, Dims).ToArray();
         var found = Document("found");
         var miss  = Document("miss");
-        cache.Setup(c => c.TryGetAsync(found.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(hit);
-        cache.Setup(c => c.TryGetAsync(miss.ContentHash,  It.IsAny<CancellationToken>())).ReturnsAsync((float[]?)null);
+        cache.Setup(c => c.TryGetAsync(found.ContentHash, It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector(hit));
+        cache.Setup(c => c.TryGetAsync(miss.ContentHash,  It.IsAny<CancellationToken>())).ReturnsAsync((CachedVector?)null);
         var gateway = new VectorCacheGateway(cache.Object, Dims);
 
         var (cached, toEmbed, operations) = await gateway.SplitAsync([found, miss], CancellationToken.None);
@@ -165,7 +165,7 @@ public class VectorCacheGatewayTests
         var gateway = new VectorCacheGateway(cache.Object, Dims);
         var results = new[] { Fresh(Document("a")), Fresh(Document("b")), Fresh(Document("c")) };
 
-        var operations = await gateway.WriteFreshAsync(results, CancellationToken.None);
+        var operations = (await gateway.WriteFreshAsync(results, CancellationToken.None)).Operations;
 
         Assert.AreEqual(4, operations, "1 AssertContainerExists + 3 SetAsync");
     }
@@ -183,7 +183,7 @@ public class VectorCacheGatewayTests
             Fresh(Document("empty"), emptyVector: true),
         };
 
-        var operations = await gateway.WriteFreshAsync(results, CancellationToken.None);
+        var operations = (await gateway.WriteFreshAsync(results, CancellationToken.None)).Operations;
 
         Assert.AreEqual(2, operations, "1 AssertContainerExists + 1 SetAsync");
     }
@@ -193,7 +193,117 @@ public class VectorCacheGatewayTests
     {
         var gateway = new VectorCacheGateway(Cache().Object, Dims);
 
-        Assert.AreEqual(0, await gateway.WriteFreshAsync([Fresh(Document("dim"), dimError: true)], CancellationToken.None));
-        Assert.AreEqual(0, await gateway.WriteFreshAsync([], CancellationToken.None));
+        Assert.AreEqual(0, (await gateway.WriteFreshAsync([Fresh(Document("dim"), dimError: true)], CancellationToken.None)).Operations);
+        Assert.AreEqual(0, (await gateway.WriteFreshAsync([], CancellationToken.None)).Operations);
+    }
+
+    // --- What the passes measure about themselves (2026-09-18, D203 §3) ---
+
+    // Skipped is the write gate firing: results the embedder judged wrong-width or unusable, so
+    // never PUT. It is counted even when nothing at all was written - the pass that skips its
+    // only result reports 0 operations and 1 skipped, not nothing.
+    [TestMethod]
+    public async Task WriteFreshAsync_CountsTheVectorsTheGateRefused()
+    {
+        var cache   = Cache();
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+        var results = new[]
+        {
+            Fresh(Document("good")),
+            Fresh(Document("dim"),   dimError: true),
+            Fresh(Document("empty"), emptyVector: true),
+        };
+
+        var pass = await gateway.WriteFreshAsync(results, CancellationToken.None);
+
+        Assert.AreEqual(2, pass.Skipped);
+        Assert.AreEqual(1, (await gateway.WriteFreshAsync([Fresh(Document("dim"), dimError: true)], CancellationToken.None)).Skipped);
+    }
+
+    // BytesWritten is what SetAsync reported per PUT, summed - the cache's own figure for the
+    // payload, not a size derived from the vector width.
+    [TestMethod]
+    public async Task WriteFreshAsync_SumsTheBytesTheCacheReportedWriting()
+    {
+        var cache = Cache();
+        cache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).ReturnsAsync(40_000L);
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+
+        var pass = await gateway.WriteFreshAsync([Fresh(Document("a")), Fresh(Document("b"))], CancellationToken.None);
+
+        Assert.AreEqual(80_000L, pass.BytesWritten);
+    }
+
+    // BytesRead sums only the GETs that returned a body: a miss weighs nothing. A hit that the
+    // health check then rejects still weighed what it weighed - the bytes were downloaded.
+    [TestMethod]
+    public async Task SplitAsync_SumsBytesOfEveryReadThatReturnedABody_HitOrRejected()
+    {
+        var cache    = Cache();
+        var healthy  = Document("healthy");
+        var rejected = Document("rejected");
+        var missing  = Document("missing");
+        cache.Setup(c => c.TryGetAsync(healthy.ContentHash,  It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new CachedVector(Enumerable.Repeat(0.5f, Dims).ToArray(), Bytes: 100, DeserializeTicks: 0));
+        cache.Setup(c => c.TryGetAsync(rejected.ContentHash, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new CachedVector(new float[Dims], Bytes: 50, DeserializeTicks: 0));
+        cache.Setup(c => c.TryGetAsync(missing.ContentHash,  It.IsAny<CancellationToken>()))
+             .ReturnsAsync((CachedVector?)null);
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+
+        var pass = await gateway.SplitAsync([healthy, rejected, missing], CancellationToken.None);
+
+        Assert.AreEqual(1, pass.Cached.Count);
+        Assert.AreEqual(2, pass.ToEmbed.Count);
+        Assert.AreEqual(150L, pass.BytesRead);
+        Assert.IsTrue(pass.HashMs >= 0 && pass.DeserializeMs >= 0 && pass.ClassifyMs >= 0);
+    }
+
+    // Per-op latency by kind rides the pass (D203 §6c): one sample per hit, one per miss, one
+    // per PUT; a kind with no operations has no summary rather than a zero one.
+    [TestMethod]
+    public async Task Passes_SummariseLatencyPerOperationKind()
+    {
+        var cache = Cache();
+        var hit   = Document("hit");
+        var miss  = Document("miss");
+        cache.Setup(c => c.TryGetAsync(hit.ContentHash,  It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new CachedVector(Enumerable.Repeat(0.5f, Dims).ToArray()));
+        cache.Setup(c => c.TryGetAsync(miss.ContentHash, It.IsAny<CancellationToken>()))
+             .ReturnsAsync((CachedVector?)null);
+        var gateway = new VectorCacheGateway(cache.Object, Dims);
+
+        var readPass  = await gateway.SplitAsync([hit, miss], CancellationToken.None);
+        var writePass = await gateway.WriteFreshAsync([Fresh(Document("a")), Fresh(Document("b"))], CancellationToken.None);
+        var emptyWrite = await gateway.WriteFreshAsync([], CancellationToken.None);
+
+        Assert.AreEqual(1, readPass.GetHitLatency!.Count);
+        Assert.AreEqual(1, readPass.GetMissLatency!.Count);
+        Assert.AreEqual(2, writePass.PutLatency!.Count);
+        Assert.IsTrue(readPass.GetHitLatency.MaxMs >= 0 && writePass.PutLatency.P95Ms >= 0);
+        Assert.IsNull(emptyWrite.PutLatency);
+    }
+
+    [TestMethod]
+    public async Task SplitAsync_NoDocuments_HasNoLatencySummaries()
+    {
+        var pass = await new VectorCacheGateway(Cache().Object, Dims).SplitAsync([], CancellationToken.None);
+
+        Assert.IsNull(pass.GetHitLatency);
+        Assert.IsNull(pass.GetMissLatency);
+    }
+
+    // The three-way deconstruction every earlier caller used still holds, so the record is a
+    // superset of the old tuple rather than a replacement for it.
+    [TestMethod]
+    public async Task SplitAsync_StillDeconstructsToCachedToEmbedAndOperations()
+    {
+        var gateway = new VectorCacheGateway(Cache().Object, Dims);
+
+        var (cached, toEmbed, operations) = await gateway.SplitAsync([Document("a")], CancellationToken.None);
+
+        Assert.AreEqual(0, cached.Count);
+        Assert.AreEqual(1, toEmbed.Count);
+        Assert.AreEqual(1, operations);
     }
 }

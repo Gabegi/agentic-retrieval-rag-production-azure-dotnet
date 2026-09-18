@@ -192,7 +192,26 @@ public static class Instrumentation
     public static readonly Counter<long> EmptyVectors =
         Meter.CreateCounter<long>("indexer.empty_vectors", description: "Chunks whose embedding vector is unusable: all-zero, or non-finite (tag: verdict)");
 
+    // One blob round trip against the vector cache, by kind (2026-09-18, D203 M2a). Tags: op
+    // (get_hit|get_miss|put|delete|list). The bracket is the SDK call alone - no JSON, no health
+    // check - so p50/p95 here IS the store's latency by operation, measured. Until this existed
+    // the only latency figure was VectorCacheDurationMs × P / VectorCacheOperations, a wall-clock
+    // average that cannot say whether a hit costs more than a miss (payload) or the same (round
+    // trip), and that D197 §5 had to read at two parallelism settings to conclude "contention".
+    // A histogram rather than a span per op: ~4,000 ops per run is noise in the trace view; the
+    // per-pass spans (vector_cache.read/write/evict) carry the totals there.
+    public static readonly Histogram<double> VectorCacheOpMs =
+        Meter.CreateHistogram<double>("indexer.vector_cache_op_ms", unit: "ms", description: "Wall-clock of one vector-cache blob operation, SDK call only (tag: op = get_hit|get_miss|put|delete|list)");
+
     // ── Upload ────────────────────────────────────────────────────────────────
+
+    // One Azure AI Search push-API batch, wall-clock of the UploadDocuments call (2026-09-18,
+    // D203 M7). Tags: batch (full = the 1,000-document maximum, tail = the remainder). The Search
+    // upload was 28 s on both force runs that measured it against 20 s of cache - the largest
+    // number in embed_upload and the only one with nothing inside it. This says whether that is
+    // four slow batches or one, and whether the tail batch costs in proportion to its size.
+    public static readonly Histogram<double> SearchUploadBatchMs =
+        Meter.CreateHistogram<double>("indexer.search_upload_batch_ms", unit: "ms", description: "Wall-clock of one Azure AI Search UploadDocuments batch (tag: batch = full|tail)");
 
     // Chunks this pipeline refused to SEND to Azure AI Search because their vector failed
     // VectorHealth.Classify — as opposed to UploadFailures, which is Search rejecting what we did

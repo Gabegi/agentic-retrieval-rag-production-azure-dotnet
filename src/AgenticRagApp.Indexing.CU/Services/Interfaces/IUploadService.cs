@@ -70,4 +70,20 @@ public record UploadResult(
     // vector bytes from to infer graph overhead. Init property so every existing construction
     // site and test stays untouched. Null = the service did not report it, or stats failed.
     public long? IndexVectorIndexSizeBytesSnapshot { get; init; }
+
+    // The Search push-API batches this run sent and the slowest of them (2026-09-18, D203 M7).
+    // SearchUploadDurationMs on the report wraps the whole UploadService call - upsert, stale
+    // cleanup, family patching, stats - and was 28 s on every force run that measured it, with
+    // nothing inside it. Batches × ~1,000 is the send shape; MaxMs against SearchUploadDurationMs
+    // says whether one batch or all of them carried the time. Per-batch values are on the
+    // indexer.search_upload_batch_ms histogram. Null MaxMs = nothing was sent.
+    public int   SearchUploadBatches    { get; init; }
+    public long? SearchUploadBatchMaxMs { get; init; }
+
+    // Serialized bytes the upsert batches put on the wire, counted by the SearchClient's
+    // request-size policy (2026-09-18, D203 §8). The payload half of the upload question:
+    // SearchUploadDurationMs was 28-31 s on every force run, uniform across four batches, and
+    // this is the first reading of what those batches weighed. Null = not attributable, see
+    // UpsertResult.BytesSent; never an estimate.
+    public long? SearchUploadBytes { get; init; }
 };

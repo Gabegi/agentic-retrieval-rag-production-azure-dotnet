@@ -13,6 +13,9 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // unit tests can mock it, not to support a second implementation.
 public interface IIndexDiffService
 {
+    // Took an indexWasRecreated flag until 2026-09-17, solely to carve the daily recreate run out
+    // of EmptyIndexStateException. That guard is gone (see IndexDiffService), and nothing else in
+    // the diff ever cared whether this run emptied the index or found it empty.
     Task<IndexDiff> FindDocsNotInIndexAsync(bool forceReindex, CancellationToken ct = default);
 }
 

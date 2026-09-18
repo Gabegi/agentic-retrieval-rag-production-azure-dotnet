@@ -46,8 +46,8 @@ public class EmbeddingServiceTests
     private static Mock<IVectorCache> MockVectorCache()
     {
         var mock = new Mock<IVectorCache>();
-        mock.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((float[]?)null);
-        mock.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        mock.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((CachedVector?)null);
+        mock.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).ReturnsAsync(0L);
         return mock;
     }
 
@@ -169,8 +169,8 @@ public class EmbeddingServiceTests
         // A zero vector cached before this check existed would otherwise be trusted forever -
         // the cache is keyed by content hash and the chunk never changes.
         var vectorCache = new Mock<IVectorCache>();
-        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new float[4]);
-        vectorCache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector(new float[4]));
+        vectorCache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).ReturnsAsync(0L);
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
@@ -339,7 +339,7 @@ public class EmbeddingServiceTests
     {
         var cachedVector = new float[] { 1, 2, 3, 4 };
         var vectorCache  = new Mock<IVectorCache>();
-        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(cachedVector);
+        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector(cachedVector));
         var embeddingClient = MockEmbeddingClient();
         var service   = BuildService(embeddingClient, vectorCache: vectorCache);
         var docs      = new[] { Document("d1", "content one") };
@@ -359,7 +359,7 @@ public class EmbeddingServiceTests
         // CacheHits says how many chunks; CacheHitTokens says how much they would have billed -
         // the stored count of the exact text a fresh embed would have sent.
         var vectorCache = new Mock<IVectorCache>();
-        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new float[] { 1, 2, 3, 4 });
+        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector([1, 2, 3, 4]));
         var service = BuildService(MockEmbeddingClient(), vectorCache: vectorCache);
         var docs    = new[]
         {
@@ -412,8 +412,8 @@ public class EmbeddingServiceTests
         // Cached under an older embedding config (2 dims); current config expects 4 -
         // must not be trusted blindly, has to fall back to a real embedding call.
         var vectorCache = new Mock<IVectorCache>();
-        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new float[] { 1, 2 });
-        vectorCache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        vectorCache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new CachedVector([1, 2]));
+        vectorCache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).ReturnsAsync(0L);
         var embeddingClient = MockEmbeddingClient();
         embeddingClient
             .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
@@ -470,7 +470,7 @@ public class EmbeddingServiceTests
         var embeddingClient = MockEmbeddingClient();
         var cache           = MockVectorCache();
         cache.Setup(c => c.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-             .ReturnsAsync(Enumerable.Repeat(1f, 4).ToArray());
+             .ReturnsAsync(new CachedVector(Enumerable.Repeat(1f, 4).ToArray()));
         var service = BuildService(embeddingClient, vectorCache: cache);
 
         var result = await service.EmbedDocumentsAsync(
@@ -486,6 +486,73 @@ public class EmbeddingServiceTests
         var result = await BuildService(MockEmbeddingClient()).EmbedDocumentsAsync([], Dims);
 
         Assert.AreEqual(0, result.CacheOperations);
+    }
+
+    // --- The cache phase in pieces (2026-09-18, D203 §3) ---
+
+    // CachePhaseMs keeps its meaning on every earlier report: it IS the two pass clocks summed,
+    // by construction rather than by a third stopwatch that could drift from them.
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_CachePhaseIsTheSumOfTheReadAndWritePasses()
+    {
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
+        var service = BuildService(embeddingClient);
+
+        var result = await service.EmbedDocumentsAsync([Document("d1", "content one")], Dims);
+
+        Assert.AreEqual(result.CacheReadMs + result.CacheWriteMs, result.CachePhaseMs);
+        Assert.IsTrue(result.HashMs >= 0 && result.VectorDeserializeMs >= 0 && result.VectorClassifyMs >= 0);
+    }
+
+    // The write gate's refusals ride the result (D203 M4). A 2-wide vector against a 4-wide index
+    // is a dimension error, so it is not cached - and the report says so directly rather than
+    // leaving VectorDimErrors + EmptyVectors to imply it.
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_ReportsTheFreshVectorsTheCacheRefusedToWrite()
+    {
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) =>
+                (texts.Select(_ => new float[] { 1f, 2f }).ToArray(), 0, 0, (long?)null));
+        var cache   = MockVectorCache();
+        var service = BuildService(embeddingClient, vectorCache: cache);
+
+        var result = await service.EmbedDocumentsAsync(
+            [Document("d1", "content one"), Document("d2", "content two")], Dims);
+
+        Assert.AreEqual(2, result.VectorDimErrors);
+        Assert.AreEqual(2, result.CacheWritesSkipped);
+        Assert.AreEqual(0L, result.CacheBytesWritten);
+        cache.Verify(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Bytes ride up from the cache's own figures, both directions.
+    [TestMethod]
+    public async Task EmbedDocumentsAsync_CarriesTheBytesTheCacheReadAndWrote()
+    {
+        var embeddingClient = MockEmbeddingClient();
+        embeddingClient
+            .Setup(c => c.EmbedWithRetryAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string> texts, CancellationToken _) => (Vectors(texts.Count), 0, 0, null));
+        var cache = new Mock<IVectorCache>();
+        var hit   = Document("hit", "cached content");
+        var miss  = Document("miss", "fresh content");
+        cache.Setup(c => c.TryGetAsync(hit.ContentHash,  It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new CachedVector(Enumerable.Repeat(1f, Dims).ToArray(), Bytes: 40_000, DeserializeTicks: 0));
+        cache.Setup(c => c.TryGetAsync(miss.ContentHash, It.IsAny<CancellationToken>()))
+             .ReturnsAsync((CachedVector?)null);
+        cache.Setup(c => c.SetAsync(It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>())).ReturnsAsync(12_288L);
+        var service = BuildService(embeddingClient, vectorCache: cache);
+
+        var result = await service.EmbedDocumentsAsync([hit, miss], Dims);
+
+        Assert.AreEqual(40_000L, result.CacheBytesRead);
+        Assert.AreEqual(12_288L, result.CacheBytesWritten);
+        Assert.AreEqual(0, result.CacheWritesSkipped);
     }
 
     // The run reports the width it ran at, so a reader never has to assume which build produced

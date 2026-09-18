@@ -22,7 +22,11 @@ locals {
     # (IndexService.BuildVectorSearch) and Content Understanding via the account default
     # model->deployment mapping (function_app.tf). Headroom, not a fix for an observed 429: the
     # measured cold re-embeds (95-166 s embed step) ran at 0 retries against the old 350
-    # (docs/2609/260916/vector-cache-performance.md section 4a).
+    # (docs/2609/260918/vector-cache-performance.md section 4a). Corroborated 2026-09-18 by the
+    # first cold run carrying the phase split (docs/2609/260918/vector-cache-step-timing.md
+    # section 7c): 3,710 fresh embeddings, 1,030,258 tokens, 4,688 ms of API, 0 retries. Note the
+    # 95-166 s in that older figure is the whole embed step, NOT API time - it was never a quota
+    # signal, and the 0 retries is the part that argued for headroom.
     embedding = {
       name          = var.openai_embedding_deployment
       model_name    = "text-embedding-3-large"

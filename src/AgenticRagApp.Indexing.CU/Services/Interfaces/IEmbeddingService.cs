@@ -57,4 +57,31 @@ public record EmbeddingRunResult(
     // What a re-embed actually costs is wall-clock and throttling, so this is the number to watch
     // on a full rebuild - not the dollars, which are noise at this corpus size.
     public int ThrottledRetries { get; init; }
+
+    // ── What CachePhaseMs is made of (2026-09-18, D203 §3) ──────────────────────────────────
+    //
+    // CachePhaseMs was one number and every reading of it a derivation. These are its measured
+    // parts: the two pass clocks (their sum IS CachePhaseMs), and inside the read pass the hash
+    // cost, the bytes the hits weighed, and the CPU spent parsing and health-checking them.
+    // DeserializeMs and ClassifyMs are summed across MaxCacheParallelism parallel probes, so they
+    // are CPU-seconds and may exceed CacheReadMs on a multi-core host - on EP1 (1 vCPU) they
+    // cannot, and a large share of the read clock in them means the store is not the bottleneck.
+    public long CacheReadMs         { get; init; }
+    public long CacheWriteMs        { get; init; }
+    public long HashMs              { get; init; }
+    public long CacheBytesRead      { get; init; }
+    public long CacheBytesWritten   { get; init; }
+    public long VectorDeserializeMs { get; init; }
+    public long VectorClassifyMs    { get; init; }
+
+    // Fresh vectors the write pass refused to cache because the embedder judged them wrong-width
+    // or unusable (D203 M4). Equals VectorDimErrors + EmptyVectors by construction today; carried
+    // separately so the report states the gate fired rather than leaving it to be inferred.
+    public int  CacheWritesSkipped  { get; init; }
+
+    // Per-op latency by kind from the two passes (D203 §6c): the store's round trip for a hit
+    // (body, parse subtracted), a miss (no body) and a PUT. Null = no operations of that kind.
+    public AgenticRagApp.Observability.Reports.LatencySummary? GetHitLatency  { get; init; }
+    public AgenticRagApp.Observability.Reports.LatencySummary? GetMissLatency { get; init; }
+    public AgenticRagApp.Observability.Reports.LatencySummary? PutLatency     { get; init; }
 }

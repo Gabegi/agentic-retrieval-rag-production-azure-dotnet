@@ -40,7 +40,7 @@ public class UploadServiceTests
     {
         var mock = new Mock<IIndexDocumentService>();
         mock.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<SearchUploadChunk>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((succeeded, failed, 1));
+            .ReturnsAsync(new UpsertResult(succeeded, failed, 1, [0L]));
         mock.Setup(m => m.GetChunkIdsForDocumentsAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingChunkIds ?? []);
         mock.Setup(m => m.DeleteChunksByIdAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
@@ -89,6 +89,40 @@ public class UploadServiceTests
         Mock<IIndexStatsMonitor>? indexStatsMonitor = null) =>
         new(indexDocumentService.Object, (indexStatsMonitor ?? MockIndexStatsMonitor()).Object,
             NullLogger<UploadService>.Instance);
+
+    // The upload batches and the slowest of them ride the result (2026-09-18, D203 M7): two
+    // batches at 120 and 450 ms report 2 and 450. Against SearchUploadDurationMs on the report
+    // that is what says whether one batch or all of them carried the 28 s.
+    [TestMethod]
+    public async Task UploadDocumentsAsync_ReportsBatchCountAndTheSlowestBatch()
+    {
+        var indexService = MockIndexDocumentService(succeeded: 3, failed: 0);
+        indexService.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<SearchUploadChunk>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UpsertResult(3, 0, 2, [120L, 450L], BytesSent: 4_500_000));
+        var service = BuildService(indexService);
+
+        var result = await service.UploadDocumentsAsync([Document("c1"), Document("c2"), Document("c3")], [], [], Dims);
+
+        Assert.AreEqual(2, result.SearchUploadBatches);
+        Assert.AreEqual(450L, result.SearchUploadBatchMaxMs);
+        Assert.AreEqual(4_500_000L, result.SearchUploadBytes, "the payload the index service attributed to this call (D203 §8)");
+    }
+
+    // Nothing sent, nothing to be slowest: null, not 0, so a report reader cannot mistake an
+    // empty run for a fast one.
+    [TestMethod]
+    public async Task UploadDocumentsAsync_NoBatches_ReportsNullSlowestBatch()
+    {
+        var indexService = MockIndexDocumentService(succeeded: 0, failed: 0);
+        indexService.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<SearchUploadChunk>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UpsertResult(0, 0, 0, []));
+        var service = BuildService(indexService);
+
+        var result = await service.UploadDocumentsAsync([], [], [], Dims);
+
+        Assert.AreEqual(0, result.SearchUploadBatches);
+        Assert.IsNull(result.SearchUploadBatchMaxMs);
+    }
 
     [TestMethod]
     public async Task UploadDocumentsAsync_ReturnsSucceededAndFailedCountsFromIndexService()

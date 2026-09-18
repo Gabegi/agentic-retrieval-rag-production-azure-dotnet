@@ -39,7 +39,7 @@ public class RestoreServiceTests
         var mock = new Mock<IVectorCache>();
         mock.Setup(m => m.TryGetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string hash, CancellationToken _) =>
-                vectorsByHash is not null && vectorsByHash.TryGetValue(hash, out var v) ? v : null);
+                vectorsByHash is not null && vectorsByHash.TryGetValue(hash, out var v) ? new CachedVector(v) : null);
         return mock;
     }
 

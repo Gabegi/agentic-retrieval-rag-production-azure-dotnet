@@ -130,8 +130,17 @@ public static class ServiceCollectionExtensions
 
         // All three pin the api-version explicitly - see SearchServiceVersion for why the SDK
         // default is not good enough here.
-        services.AddSingleton(_ =>
-            new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential, SearchServiceVersion.Options()));
+        //
+        // The document-side SearchClient also carries the request-size policy (2026-09-18, D203
+        // §8): every byte it sends is counted by path, and IndexDocumentService reads the delta
+        // around its batch loop so the upload payload lands on the run report. One counter per
+        // host, so the delta is only clean while one run is uploading at a time - the report
+        // field goes null rather than wrong when the request count does not match the batches.
+        services.AddSingleton<SearchRequestByteCounter>();
+        services.AddSingleton(sp => new SearchRequestSizePolicy(sp.GetRequiredService<SearchRequestByteCounter>()));
+        services.AddSingleton(sp =>
+            new SearchClient(new Uri(config.SearchEndpoint), config.SearchIndexName, credential,
+                SearchServiceVersion.Options(sp.GetRequiredService<SearchRequestSizePolicy>())));
         services.AddSingleton(_ =>
             new SearchIndexClient(new Uri(config.SearchEndpoint), credential, SearchServiceVersion.Options()));
         services.AddSingleton(_ =>

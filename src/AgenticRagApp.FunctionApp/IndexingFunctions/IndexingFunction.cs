@@ -94,10 +94,12 @@ public class IndexingFunction
         [DurableClient] DurableTaskClient client)
     {
         var forceReindex = req.Query["force"] == "true";
-        // The same drop-and-rebuild the daily scheduled run does (see RunScheduled), exposed
-        // here so that path can be triggered on demand instead of only at its 17:00 tick. No
-        // ?confirm= guard like FullIndexRecreation's: that one leaves the index empty, this
-        // one repopulates it in the same run.
+        // Drop and rebuild the index first (RecreateIndexActivity), then repopulate it in the
+        // same run. Until 2026-09-17 the ScheduledIndexing timer sent exactly this every day at
+        // 17:00; the timer is gone (D200 §6i - the diff-only path works, so a daily full rebuild
+        // at 871 CU pages no longer earns its cost) and this flag is now the only way to
+        // recreate-and-refill. No ?confirm= guard like FullIndexRecreation's: that one leaves
+        // the index empty, this one repopulates it.
         var recreateIndex = req.Query["recreate"] == "true";
 
         var instanceId = await client.ScheduleNewOrchestrationInstanceAsync(
@@ -107,43 +109,17 @@ public class IndexingFunction
         return client.CreateCheckStatusResponse(req, instanceId);
     }
 
-    // Manual-upload path (Zenya source connection isn't live yet) - the timer provides the
-    // cadence, ExtractAsync's own new/updated diff is the "check for changes" step, so no
-    // separate polling logic is needed here. Fixed instance ID makes this a singleton: a run
-    // longer than a day just causes the next tick to skip rather than overlap, which is what
-    // keeps SnapshotService's read-merge-write safe - runs never race each other.
+    // ScheduledIndexing - a 17:00 TimerTrigger sending ForceReindex: true, RecreateIndex: true
+    // as the singleton instance "PdfIndexing" - lived here from the manual-upload days until
+    // 2026-09-17. Its rebuild-from-scratch semantics were a stand-in for change detection that
+    // did not work: the index-state read had returned an empty map since 2026-07-30, so the
+    // diff-only path had never once run (D200 §6h). With the read fixed and the incremental run
+    // verified (§6i: 51 skipped, nothing billed, 6 s), a daily 871-page Content Understanding
+    // rebuild that also left the index empty from 17:00 until refill had nothing left to pay
+    // for. Cadence now comes from whatever calls POST /api/index; there is no timer.
     //
-    // Once daily at 17:00 - relies on WEBSITE_TIME_ZONE = "W. Europe Standard Time"
-    // (function_app.tf) so this means 17:00 Dutch wall-clock time, not UTC.
-    [Function("ScheduledIndexing")]
-    public async Task RunScheduled(
-        [TimerTrigger("0 0 17 * * *")] TimerInfo timer,
-        [DurableClient] DurableTaskClient client)
-    {
-        const string instanceId = "PdfIndexing";
-
-        var existing = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
-        if (existing is null
-            || existing.RuntimeStatus is OrchestrationRuntimeStatus.Completed
-                or OrchestrationRuntimeStatus.Failed
-                or OrchestrationRuntimeStatus.Terminated)
-        {
-            // Rebuild-from-scratch semantics, deliberately: the daily run drops the index
-            // (and the knowledge source/base on top of it) and re-extracts the whole corpus,
-            // rather than applying the new/updated diff to what is already there. Two costs
-            // ride along with that and are accepted, not overlooked - every source document
-            // goes through Content Understanding again on every run, and the index answers
-            // nothing from 17:00 until the run completes, because RecreateIndexActivity
-            // leaves it empty and only EmbedAndUploadActivity refills it.
-            //
-            // TODO: revisit once this is stable in production - the cheap steady-state shape
-            // is ForceReindex: false, RecreateIndex: false (diff-only), with the recreate
-            // reserved for schema changes via POST /api/index?force=true&recreate=true.
-            await client.ScheduleNewOrchestrationInstanceAsync(
-                "IndexingOrchestrator", new IndexRequest(ForceReindex: true, RecreateIndex: true),
-                new StartOrchestrationOptions { InstanceId = instanceId });
-        }
-    }
+    // WEBSITE_TIME_ZONE in function_app.tf existed for that cron and is kept for now - see the
+    // comment there.
 
     [Function("IndexingOrchestrator")]
     public async Task RunOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)
@@ -155,6 +131,10 @@ public class IndexingFunction
         var docsBlob     = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/extracted.json";
         var chunksBlob   = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/chunks.json";
         var staleIdsBlob = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/stale-document-ids.json";
+        // Documents this run actually re-extracted. Travels by blob for the same reason the stale
+        // list does - only the name goes through Durable Table Storage. Consumed by the snapshot
+        // merge as the drop set (D200 R1).
+        var processedIdsBlob = $"{startedAt:yyyy/MM/dd}/{context.InstanceId}/processed-document-ids.json";
         // Written by chunking, read by upload: documents whose family_id changed because OTHER
         // documents' clustering moved them. Same payload-by-blob-name pattern as the two above,
         // for the same reason - though this list is small, it travels the way its siblings do.
@@ -208,7 +188,7 @@ public class IndexingFunction
             vectorConfig = await context.CallActivityAsync<IndexVectorConfig>("PreflightActivity", context.InstanceId);
 
             var extractStart = context.CurrentUtcDateTime;
-            extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, context.InstanceId, startedAt));
+            extractResults = await context.CallActivityAsync<ExtractionStageMetrics>("ExtractActivity",        new ExtractRequest(input.ForceReindex, docsBlob, staleIdsBlob, processedIdsBlob, context.InstanceId, startedAt));
             stageDurations["extract"] = (long)(context.CurrentUtcDateTime - extractStart).TotalMilliseconds;
             context.SetCustomStatus(new IndexingProgress(IndexingProgress.Chunking, startedAt,
                 DocsExtracted: extractResults.DocsToProcess));
@@ -220,7 +200,7 @@ public class IndexingFunction
                 DocsExtracted: extractResults.DocsToProcess, ChunksProduced: chunkResults.ChunksProduced));
 
             var embedStart = context.CurrentUtcDateTime;
-            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, context.InstanceId, startedAt, vectorConfig!.Dimensions!.Value));
+            embedResults   = await context.CallActivityAsync<EmbedUploadStageMetrics>("EmbedAndUploadActivity", new EmbedUploadRequest(chunksBlob, staleIdsBlob, familyMovesBlob, processedIdsBlob, context.InstanceId, startedAt, vectorConfig!.Dimensions!.Value));
             stageDurations["embed_upload"] = (long)(context.CurrentUtcDateTime - embedStart).TotalMilliseconds;
 
             // A stage that could describe its own failure returns it instead of throwing, so that
@@ -261,7 +241,7 @@ public class IndexingFunction
             {
                 Run = new RunIdentity(
                     context.InstanceId, startedAt, context.CurrentUtcDateTime,
-                    input.ForceReindex, success, error, errorType),
+                    input.ForceReindex, success, error, errorType, input.RecreateIndex),
                 Extraction = extractResults,
                 Chunking   = chunkResults,
                 Embedding  = embedResults,
@@ -338,16 +318,23 @@ public class IndexingFunction
                 req.ForceReindex, req.InstanceId, context.CancellationToken);
             await WriteBlobAsync(req.OutputBlob, docs, context.CancellationToken);
             await WriteBlobAsync(req.StaleIdsBlob, stats.StaleDocumentIds, context.CancellationToken);
+            // Every document this run re-extracted, INCLUDING any that produced no chunks: the
+            // snapshot drops their previous rows, and a document with no chunks left should lose
+            // its rows rather than keep superseded ones (D200 R1). Sourced from the extracted
+            // docs rather than from the chunks for exactly that reason.
+            await WriteBlobAsync(req.ProcessedIdsBlob, docs.Select(d => d.SourceId).ToList(), context.CancellationToken);
 
             await _artifactWriter.WriteArtifactAsync(
                 ReportPath.Build(req.StartedAt, "extraction-artifact", req.InstanceId), new { Docs = docs, Stats = stats }, context.CancellationToken);
 
             _logger.LogInformation("Extracted {Count} docs → {Blob}", docs.Count, req.OutputBlob);
 
-            // Stale IDs already went to req.StaleIdsBlob above; stripped here so they don't
+            // Stale IDs already went to req.StaleIdsBlob above; stripped here so they do not
             // also ride along on this activity's own Durable-persisted return value - see
-            // the class comment and finding #3 of the 2026-07-29 extraction review.
-            return stats with { StaleDocumentIds = [] };
+            // the class comment and finding #3 of the 2026-07-29 extraction review. The COUNT
+            // survives (2026-09-17): without it a report cannot tell "the orphan delete found
+            // nothing" from "nothing was stale, so it never ran".
+            return stats with { StaleDocumentIds = [], StaleDocumentCount = stats.StaleDocumentIds.Count };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -409,6 +396,8 @@ public class IndexingFunction
         {
             var chunks         = await ReadBlobAsync<List<ChunkObject>>(req.ChunksBlob, context.CancellationToken);
             var staleDocumentIds = await ReadBlobAsync<List<string>>(req.StaleIdsBlob, context.CancellationToken);
+            // The drop set for the snapshot merge - see SnapshotService.UpdateAsync (D200 R1).
+            var processedDocumentIds = await ReadBlobAsync<List<string>>(req.ProcessedIdsBlob, context.CancellationToken);
             // Documents the chunking stage re-homed into a different family. Usually empty, and
             // usually about documents that are NOT in `chunks` - see UploadService.
             var familyMoves    = await ReadFamilyMovesAsync(req.FamilyMovesBlob, context.CancellationToken);
@@ -447,8 +436,14 @@ public class IndexingFunction
                 },
                 context.CancellationToken);
 
+            // D200 R2. embed_upload was 75.4 s on run 9/260917/2, of which the embed step
+            // accounted for 24.9 s (cache 23.9, API 0.7) and nothing measured the other ~50 s.
+            // Two days of cache tuning went into the smaller half because the smaller half was
+            // the only one instrumented. These four clocks close that.
+            var uploadClock = System.Diagnostics.Stopwatch.StartNew();
             var uploadResult = await _uploadService.UploadDocumentsAsync(
                 embeddedDocs, staleDocumentIds, familyMoves, req.VectorDimensions, ct: context.CancellationToken);
+            uploadClock.Stop();
             LogProcessMemory("upload complete", chunks.Count);
 
             // Rolling full-corpus snapshot (source-scoped) + the two evictions that ride along
@@ -456,25 +451,36 @@ public class IndexingFunction
             // upsert is still folded into the snapshot as if it succeeded (UploadService
             // doesn't report which specific chunks failed, only the count) - rare,
             // self-corrects whenever that document is next reprocessed.
+            var snapshotClock = System.Diagnostics.Stopwatch.StartNew();
             var live = await _snapshotService.UpdateAsync(
-                Source, embeddedDocs, staleDocumentIds, req.InstanceId, req.StartedAt, context.CancellationToken);
+                Source, embeddedDocs, staleDocumentIds, processedDocumentIds, req.InstanceId, req.StartedAt, context.CancellationToken);
+            snapshotClock.Stop();
 
-            var evictedCount = await _vectorCache.EvictOrphanedAsync(live.ContentHashes, context.CancellationToken);
+            // EvictionDurationMs keeps wrapping both stores, as it has since D200 R2; the vector
+            // cache's list/delete split and the identity store's own clock ride beside it
+            // (2026-09-18, D203 M5a) so the two stop hiding behind one number.
+            var evictClock = System.Diagnostics.Stopwatch.StartNew();
+            var eviction   = await _vectorCache.EvictOrphanedAsync(live.ContentHashes, context.CancellationToken);
+            var evictedCount = eviction.Deleted;
             if (evictedCount > 0)
-                _logger.LogInformation("Vector cache eviction — {Count} orphaned entr{Suffix} deleted",
-                    evictedCount, evictedCount == 1 ? "y" : "ies");
+                _logger.LogInformation("Vector cache eviction — {Count} orphaned entr{Suffix} deleted in {DeleteMs} ms after listing {Listed} in {ListMs} ms",
+                    evictedCount, evictedCount == 1 ? "y" : "ies", eviction.DeleteMs, eviction.Listed, eviction.ListMs);
 
             // Same treatment for the identity store, which until now was the one corpus-scoped
             // store that never forgot a deleted document. A ghost identity record keeps
             // clustering: single-linkage means one sitting between two live documents merges
             // their families, and it can even be the family's id.
-            var evictedIdentities = await _identityStore.EvictOrphanedAsync(live.DocumentIds, context.CancellationToken);
+            var identityEvictClock = System.Diagnostics.Stopwatch.StartNew();
+            var evictedIdentities  = await _identityStore.EvictOrphanedAsync(live.DocumentIds, context.CancellationToken);
+            identityEvictClock.Stop();
+            evictClock.Stop();
             if (evictedIdentities > 0)
                 _logger.LogInformation("Identity store eviction — {Count} orphaned record(s) deleted",
                     evictedIdentities);
 
             await DeleteBlobAsync(req.ChunksBlob, context.CancellationToken);
             await DeleteBlobAsync(req.StaleIdsBlob, context.CancellationToken);
+            await DeleteBlobAsync(req.ProcessedIdsBlob, context.CancellationToken);
             await DeleteBlobAsync(req.FamilyMovesBlob, context.CancellationToken);
 
             return new EmbedUploadStageMetrics(
@@ -505,6 +511,11 @@ public class IndexingFunction
                 // leaving a reader to infer it from VectorDimErrors + EmptyVectors.
                 DocsWithheld           = uploadResult.DocsWithheld,
                 DocumentsWithheld      = uploadResult.DocumentsWithheld,
+                // D200 R2 - the previously unmeasured half of this stage.
+                SearchUploadDurationMs = uploadClock.ElapsedMilliseconds,
+                SnapshotDurationMs     = snapshotClock.ElapsedMilliseconds,
+                SnapshotRows           = live.ContentHashes.Count,
+                EvictionDurationMs     = evictClock.ElapsedMilliseconds,
                 EmbeddingApiDurationMs = embeddingResult.ApiPhaseMs,
                 VectorCacheDurationMs  = embeddingResult.CachePhaseMs,
                 VectorCacheHitTokens   = embeddingResult.CacheHitTokens,
@@ -518,6 +529,31 @@ public class IndexingFunction
                 MaxCacheParallelism   = embeddingResult.CacheParallelism,
                 VectorCacheOperations = embeddingResult.CacheOperations,
                 BuildId               = BuildIdentity.For(typeof(IEmbeddingService).Assembly),
+                // The cache phase in pieces, the eviction split, and the upload batches (D203 §3).
+                HashMs                    = embeddingResult.HashMs,
+                VectorCacheReadMs         = embeddingResult.CacheReadMs,
+                VectorCacheBytesRead      = embeddingResult.CacheBytesRead,
+                VectorDeserializeMs       = embeddingResult.VectorDeserializeMs,
+                VectorClassifyMs          = embeddingResult.VectorClassifyMs,
+                VectorCacheWriteMs        = embeddingResult.CacheWriteMs,
+                VectorCacheBytesWritten   = embeddingResult.CacheBytesWritten,
+                VectorCacheWritesSkipped  = embeddingResult.CacheWritesSkipped,
+                VectorCacheListMs         = eviction.ListMs,
+                VectorCacheListedBlobs    = eviction.Listed,
+                VectorCacheDeleteMs       = eviction.DeleteMs,
+                VectorCacheBlobBytesTotal = eviction.BlobBytesTotal,
+                VectorCacheBlobBytesP50   = eviction.BlobBytesP50,
+                IdentityEvictionMs        = identityEvictClock.ElapsedMilliseconds,
+                SearchUploadBatches       = uploadResult.SearchUploadBatches,
+                SearchUploadBatchMaxMs    = uploadResult.SearchUploadBatchMaxMs,
+                SearchUploadBytes         = uploadResult.SearchUploadBytes,
+                // The histogram's content, on the report, because the histogram is unreadable
+                // to this team (D203 §6c).
+                VectorCacheOpLatency      = new VectorCacheOpLatency(
+                    GetHit:  embeddingResult.GetHitLatency,
+                    GetMiss: embeddingResult.GetMissLatency,
+                    Put:     embeddingResult.PutLatency,
+                    Delete:  eviction.DeleteLatency),
             };
         }
         // Returned as data, not thrown (2026-09-17, D199 §8b item 3). The total-withhold guard is

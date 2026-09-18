@@ -326,8 +326,7 @@ public class RagEvaluationTests
         {
             Assert.Fail(
                 $"Index '{config.SearchIndexName}' does not exist. Nothing has created it: run " +
-                "POST /api/index?force=true&recreate=true on the Function App, or wait for the " +
-                "17:00 scheduled rebuild.");
+                "POST /api/index?force=true&recreate=true on the Function App.");
             return;
         }
 
@@ -339,7 +338,7 @@ public class RagEvaluationTests
             Environment.NewLine +
             "A schema change only reaches an existing index through a recreate (IndexService is " +
             "get-or-create by design). Run POST /api/index?force=true&recreate=true on the Function " +
-            "App and re-run this suite once it completes, or wait for the 17:00 scheduled rebuild.");
+            "App and re-run this suite once it completes.");
     }
 
     // Closes the window the pipeline's own knowledge-base gate cannot see. That gate runs

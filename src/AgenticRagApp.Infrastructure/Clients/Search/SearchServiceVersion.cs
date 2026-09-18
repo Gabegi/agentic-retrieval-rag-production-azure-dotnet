@@ -28,4 +28,13 @@ public static class SearchServiceVersion
     // ownership of the options they're constructed with, so sharing one across clients would
     // let a later mutation leak between them.
     public static SearchClientOptions Options() => new(Current);
+
+    // Same pin, plus one pipeline policy. Used for the document-side SearchClient only (2026-09-18,
+    // D203 §8): the request-size counter that puts the upload payload on the run report.
+    public static SearchClientOptions Options(Azure.Core.Pipeline.HttpPipelinePolicy perCallPolicy)
+    {
+        var options = Options();
+        options.AddPolicy(perCallPolicy, Azure.Core.HttpPipelinePosition.PerCall);
+        return options;
+    }
 }

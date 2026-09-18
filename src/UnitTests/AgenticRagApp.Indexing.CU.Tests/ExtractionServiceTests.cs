@@ -255,6 +255,48 @@ public class ExtractionServiceTests
         Assert.IsFalse(stats.RedFlags.Any(f => f.StartsWith("high_new_doc_fraction")));
     }
 
+    // The D180 shape, now reported rather than thrown on (D200 §6d). EmptyIndexStateException
+    // used to fail the run here; the flag is what is left, so these three pin that it reaches the
+    // report at all, that force does not suppress it, and that it stays quiet when the source is
+    // empty and there is consequently no bill and nothing to diagnose.
+    [TestMethod]
+    public async Task EmptyIndexStateRead_WithSourceDocuments_AddsRedFlag()
+    {
+        var blobStore = MockBlobStore(
+            ("doc1.pdf", DateTimeOffset.Parse("2024-01-01")),
+            ("doc2.pdf", DateTimeOffset.Parse("2024-01-01")));
+        var indexService = MockIndexService([]);
+        var service      = BuildService(blobStore, OkFile, indexService, MockReportWriter(isEnabled: false));
+
+        var (_, stats) = await service.ExtractAsync(forceReindex: false);
+
+        Assert.IsTrue(stats.RedFlags.Any(f => f.StartsWith("index_state_read_empty")));
+    }
+
+    // Unlike high_new_doc_fraction. An empty read leaves ToDeleteChunks empty whether or not the
+    // re-extraction was asked for, so nothing is marked stale and orphans accumulate either way.
+    [TestMethod]
+    public async Task EmptyIndexStateRead_OnForceReindex_StillAddsRedFlag()
+    {
+        var blobStore    = MockBlobStore(("doc1.pdf", DateTimeOffset.Parse("2024-01-01")));
+        var indexService = MockIndexService([]);
+        var service      = BuildService(blobStore, OkFile, indexService, MockReportWriter(isEnabled: false));
+
+        var (_, stats) = await service.ExtractAsync(forceReindex: true);
+
+        Assert.IsTrue(stats.RedFlags.Any(f => f.StartsWith("index_state_read_empty")));
+    }
+
+    [TestMethod]
+    public async Task EmptyIndexStateRead_WithNoSourceDocuments_DoesNotAddRedFlag()
+    {
+        var service = BuildService(MockBlobStore(), OkFile, MockIndexService([]), MockReportWriter(isEnabled: false));
+
+        var (_, stats) = await service.ExtractAsync(forceReindex: false);
+
+        Assert.IsFalse(stats.RedFlags.Any(f => f.StartsWith("index_state_read_empty")));
+    }
+
     [TestMethod]
     public async Task HighNewDocFraction_OnForceReindex_DoesNotAddRedFlag()
     {

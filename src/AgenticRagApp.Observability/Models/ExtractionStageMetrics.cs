@@ -63,4 +63,17 @@ public record ExtractionStageMetrics(
     // real run's distribution is its own step (A11).
     public int?    SummariesPresent      { get; init; }
     public double? SummaryConfidenceMean { get; init; }
+
+    // How many documents this run marked stale — the COUNT of StaleDocumentIds, kept because the
+    // list itself is stripped before the report is written (IndexingFunction: the raw ids would
+    // breach Durable's 64KB row limit) and the count is what a reader actually needs.
+    //
+    // Without it, ChunksRemoved = 0 is ambiguous on every report ever written: "the orphan delete
+    // ran and found nothing" and "the orphan delete never ran, because nothing was stale" look
+    // identical. With it they separate — 0 stale means the cleanup never executed, >0 stale with
+    // 0 removed means it ran and there was nothing to remove (2026-09-17).
+    //
+    // Distinct from StaleDocCount above, which is a CSV-era source-attention flag and is null for
+    // every PDF run. Null here = the report predates this field.
+    public int?    StaleDocumentCount    { get; init; }
 }

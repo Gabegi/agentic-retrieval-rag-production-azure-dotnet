@@ -22,7 +22,7 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfExtractRequest_Constructor_PropagatesAllFields()
     {
-        var request = new ExtractRequest(true, "docs-blob", "stale-ids-blob", "instance-1", StartedAt);
+        var request = new ExtractRequest(true, "docs-blob", "stale-ids-blob", "processed-ids-blob", "instance-1", StartedAt);
 
         Assert.IsTrue(request.ForceReindex);
         Assert.AreEqual("docs-blob", request.OutputBlob);
@@ -34,8 +34,8 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfExtractRequest_RecordEquality_SameValues_AreEqual()
     {
-        var a = new ExtractRequest(false, "docs-blob", "stale-ids-blob", "instance-1", StartedAt);
-        var b = new ExtractRequest(false, "docs-blob", "stale-ids-blob", "instance-1", StartedAt);
+        var a = new ExtractRequest(false, "docs-blob", "stale-ids-blob", "processed-ids-blob", "instance-1", StartedAt);
+        var b = new ExtractRequest(false, "docs-blob", "stale-ids-blob", "processed-ids-blob", "instance-1", StartedAt);
 
         Assert.AreEqual(a, b);
     }
@@ -64,7 +64,7 @@ public class PdfActivityRequestRecordsTests
     [TestMethod]
     public void PdfEmbedUploadRequest_Constructor_PropagatesAllFields()
     {
-        var request = new EmbedUploadRequest("chunks-blob", "stale-ids-blob", "moves-blob", "instance-1", StartedAt, 3072);
+        var request = new EmbedUploadRequest("chunks-blob", "stale-ids-blob", "moves-blob", "processed-ids-blob", "instance-1", StartedAt, 3072);
 
         Assert.AreEqual("chunks-blob", request.ChunksBlob);
         Assert.AreEqual("stale-ids-blob", request.StaleIdsBlob);

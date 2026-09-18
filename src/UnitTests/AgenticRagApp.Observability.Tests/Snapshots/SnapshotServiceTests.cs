@@ -36,7 +36,7 @@ public class SnapshotServiceTests
         var service = BuildService(blobStore);
         var newChunks = new List<TestChunk> { new("id1", "doc1", "Title", null, "content", null, 0, 0, "hash1") };
 
-        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-1", StartedAt);
+        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-1", startedAt: StartedAt);
 
         Assert.AreEqual(1, hashes.ContentHashes.Count);
         Assert.IsTrue(hashes.ContentHashes.Contains("hash1"));
@@ -55,7 +55,7 @@ public class SnapshotServiceTests
         var service = BuildService(blobStore);
         var newChunks = new List<TestChunk> { new("new-id", "doc-new", "New", null, "new content", null, 0, 0, "new-hash") };
 
-        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], instanceId: "run-2", StartedAt);
+        var hashes = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
 
         Assert.AreEqual(2, hashes.ContentHashes.Count);
         Assert.IsTrue(hashes.ContentHashes.Contains("old-hash"));
@@ -83,7 +83,7 @@ public class SnapshotServiceTests
             .ReturnsAsync(previousChunks);
         var service = BuildService(blobStore);
 
-        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2", StartedAt);
+        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
 
         Assert.AreEqual(1, hashes.ContentHashes.Count);
         Assert.IsTrue(hashes.ContentHashes.Contains("keep-hash"));
@@ -105,7 +105,7 @@ public class SnapshotServiceTests
             .ReturnsAsync(previousChunks);
         var service = BuildService(blobStore);
 
-        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], instanceId: "run-2", StartedAt);
+        var hashes = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: ["doc-stale"], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
 
         Assert.AreEqual(0, hashes.ContentHashes.Count);
         Assert.AreEqual(0, hashes.DocumentIds.Count);
@@ -118,7 +118,7 @@ public class SnapshotServiceTests
         SetupNoExistingPointer(blobStore);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-1", startedAt: StartedAt);
 
         blobStore.Verify(s => s.UploadJsonAsync(
             It.IsAny<BlobContainerClient>(), "2024/03/15/20240315T000000000Z-snapshot-pdf-run-1.json", It.IsAny<List<SnapshotChunk>>(),
@@ -132,7 +132,7 @@ public class SnapshotServiceTests
         SetupNoExistingPointer(blobStore);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-1", startedAt: StartedAt);
 
         blobStore.Verify(s => s.AssertContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -147,7 +147,7 @@ public class SnapshotServiceTests
             .ReturnsAsync(true);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-1", StartedAt);
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-1", startedAt: StartedAt);
 
         blobStore.Verify(s => s.SaveJsonWithETagAsync(
             It.IsAny<BlobContainerClient>(), PointerPath,
@@ -165,7 +165,7 @@ public class SnapshotServiceTests
             .ReturnsAsync([]);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-2", StartedAt);
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
 
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -186,11 +186,141 @@ public class SnapshotServiceTests
             .ReturnsAsync([]);
         var service = BuildService(blobStore);
 
-        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], instanceId: "run-new", StartedAt);
+        await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-new", startedAt: StartedAt);
 
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "2024/02/01/ts-snapshot-pdf-instance-2.json", It.IsAny<CancellationToken>()), Times.Once);
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-1.json", It.IsAny<CancellationToken>()), Times.Once);
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "2024/04/01/ts-snapshot-pdf-instance-4.json", It.IsAny<CancellationToken>()), Times.Never);
         blobStore.Verify(s => s.DeleteIfExistsAsync(It.IsAny<BlobContainerClient>(), "2024/03/01/ts-snapshot-pdf-instance-3.json", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── The drop set (D200 R1, 2026-09-17) ───────────────────────────────────
+
+    private static Mock<IBlobStore> WithPrevious(params SnapshotChunk[] previous)
+    {
+        var blobStore = new Mock<IBlobStore>();
+        SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
+        blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
+                It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(previous.ToList());
+        return blobStore;
+    }
+
+    // THE regression test for D200 F1.
+    //
+    // On the daily run the index is recreated first, so the diff sees an empty index, every
+    // document reads as NEW rather than updated, and staleDocumentIds is empty. Before the fix
+    // that meant nothing was dropped and each run's whole corpus was appended to the last: 65,728
+    // rows against ~3,700 live chunks by 09-15, 93.4% superseded, +8 MB every run. The blast
+    // radius was not the size - EvictOrphanedAsync received every hash ever recorded, so no cache
+    // entry could ever look orphaned and eviction was silently dead.
+    //
+    // If this test ever fails by growing, that is the defect coming back.
+    [TestMethod]
+    public async Task UpdateAsync_ReprocessedDocumentWithNoStaleIds_DropsItsPreviousRows()
+    {
+        var blobStore = WithPrevious(
+            TestChunk.Snapshot("doc1-c1", "doc1.pdf", "Doc 1", "old content", "old-hash-1"),
+            TestChunk.Snapshot("doc1-c2", "doc1.pdf", "Doc 1", "old content", "old-hash-2"),
+            TestChunk.Snapshot("doc2-c1", "doc2.pdf", "Doc 2", "untouched", "keep-hash"));
+        var service = BuildService(blobStore);
+
+        // doc1 was re-extracted; doc2 was not touched. staleDocumentIds is empty, as it is on
+        // every recreate run.
+        var live = await service.UpdateAsync(
+            "pdf",
+            new List<TestChunk> { new("doc1-c1", "doc1.pdf", "Doc 1", null, "new content", null, 0, 0, "new-hash-1") },
+            staleDocumentIds: [],
+            processedDocumentIds: ["doc1.pdf"],
+            instanceId: "run-2", startedAt: StartedAt);
+
+        // doc1's two superseded rows are gone, its one fresh row is in, doc2 is untouched.
+        Assert.AreEqual(2, live.ContentHashes.Count, "one fresh doc1 row plus doc2's untouched row");
+        Assert.IsTrue(live.ContentHashes.Contains("new-hash-1"));
+        Assert.IsTrue(live.ContentHashes.Contains("keep-hash"), "a document this run did not touch keeps its rows");
+        Assert.IsFalse(live.ContentHashes.Contains("old-hash-1"), "superseded rows must not survive — this is D200 F1");
+        Assert.IsFalse(live.ContentHashes.Contains("old-hash-2"));
+    }
+
+    // A document that was processed but produced NO chunks KEEPS its rows.
+    //
+    // The two failure modes are not symmetric, and this test is the asymmetry. A document that
+    // fails between extraction and chunking is still in processedDocumentIds; dropping its rows
+    // with nothing to re-add deletes it from the snapshot, and the snapshot is what a restore
+    // rebuilds the index from - so one transient failure would cost a document at the next
+    // restore. Keeping superseded rows for a genuinely chunk-less document is only the leak this
+    // change exists to reduce, and any later run fixes it.
+    //
+    // Retain the leak, never the data loss.
+    [TestMethod]
+    public async Task UpdateAsync_ProcessedDocumentThatProducedNoChunks_KeepsItsRows()
+    {
+        var blobStore = WithPrevious(
+            TestChunk.Snapshot("doc1-c1", "doc1.pdf", "Doc 1", "old content", "old-hash-1"));
+        var service = BuildService(blobStore);
+
+        var live = await service.UpdateAsync(
+            "pdf", new List<TestChunk>(),
+            staleDocumentIds: [], processedDocumentIds: ["doc1.pdf"],
+            instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(1, live.ContentHashes.Count,
+            "a processed document that produced no chunks must not be deleted from the snapshot — restore reads this");
+        Assert.IsTrue(live.ContentHashes.Contains("old-hash-1"));
+    }
+
+    // But an EXPLICITLY stale document with no chunks still goes: the diff said it was updated or
+    // removed, which is a statement about the document, not an accident of the chunker.
+    [TestMethod]
+    public async Task UpdateAsync_StaleDocumentThatProducedNoChunks_StillLosesItsRows()
+    {
+        var blobStore = WithPrevious(
+            TestChunk.Snapshot("doc1-c1", "doc1.pdf", "Doc 1", "old content", "old-hash-1"));
+        var service = BuildService(blobStore);
+
+        var live = await service.UpdateAsync(
+            "pdf", new List<TestChunk>(),
+            staleDocumentIds: ["doc1.pdf"], processedDocumentIds: ["doc1.pdf"],
+            instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(0, live.ContentHashes.Count);
+    }
+
+    // Union, not replacement: a REMOVED document is stale but never processed - it no longer
+    // exists to extract - and its rows still have to go.
+    [TestMethod]
+    public async Task UpdateAsync_StaleButNotProcessed_StillDropped()
+    {
+        var blobStore = WithPrevious(
+            TestChunk.Snapshot("gone-c1", "removed.pdf", "Removed", "old content", "gone-hash"));
+        var service = BuildService(blobStore);
+
+        var live = await service.UpdateAsync(
+            "pdf", new List<TestChunk>(),
+            staleDocumentIds: ["removed.pdf"], processedDocumentIds: [],
+            instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(0, live.ContentHashes.Count);
+    }
+
+    // Casing must not decide whether rows are superseded, and there are now THREE spellings that
+    // have to agree: the previous row's DocumentId, the processed list's SourceId, and the new
+    // chunk's DocumentId. All three differ here on purpose.
+    [TestMethod]
+    public async Task UpdateAsync_ProcessedDocumentIds_MatchedCaseInsensitively()
+    {
+        var blobStore = WithPrevious(
+            TestChunk.Snapshot("doc1-c1", "Doc1.PDF", "Doc 1", "old content", "old-hash"));
+        var service = BuildService(blobStore);
+
+        var live = await service.UpdateAsync(
+            "pdf",
+            new List<TestChunk> { new("doc1-c1", "DOC1.pdf", "Doc 1", null, "new content", null, 0, 0, "new-hash") },
+            staleDocumentIds: [], processedDocumentIds: ["doc1.pdf"],
+            instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(1, live.ContentHashes.Count, "SourceId casing must not decide whether rows are superseded");
+        Assert.IsTrue(live.ContentHashes.Contains("new-hash"));
+        Assert.IsFalse(live.ContentHashes.Contains("old-hash"));
     }
 }

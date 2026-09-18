@@ -19,9 +19,15 @@ namespace AgenticRagApp.Functions;
 // Optional with a false default deliberately: an orchestration queued by an earlier
 // deployment has no such property in its persisted JSON input, and must still deserialize.
 public record IndexRequest(bool ForceReindex, bool RecreateIndex = false);
-public record ExtractRequest(bool ForceReindex, string OutputBlob, string StaleIdsBlob, string InstanceId, DateTimeOffset StartedAt);
+// Carried a RecreateIndex flag until 2026-09-17, for EmptyIndexStateException's carve-out only.
+// The guard is gone and the extract stage does not otherwise care how the index got to be empty,
+// so the flag went with it. IndexRequest.RecreateIndex stays - the ORCHESTRATOR still decides
+// whether to call RecreateIndexActivity, and the run report still records that it did.
+public record ExtractRequest(bool ForceReindex, string OutputBlob, string StaleIdsBlob, string ProcessedIdsBlob, string InstanceId, DateTimeOffset StartedAt);
 public record ChunkRequest(string InputBlob, string OutputBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt);
 // VectorDimensions is the LIVE index field width, read once at preflight and threaded down rather
 // than re-read or taken from configuration (D201). It is what the embed and upload stages judge a
 // vector against, because the index is the only thing that can actually reject one.
-public record EmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string InstanceId, DateTimeOffset StartedAt, int VectorDimensions);
+// ProcessedIdsBlob: the documents this run re-extracted, written by ExtractActivity. The
+// snapshot merge drops their previous rows before adding this run's (D200 R1).
+public record EmbedUploadRequest(string ChunksBlob, string StaleIdsBlob, string FamilyMovesBlob, string ProcessedIdsBlob, string InstanceId, DateTimeOffset StartedAt, int VectorDimensions);

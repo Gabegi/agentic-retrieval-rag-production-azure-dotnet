@@ -55,7 +55,7 @@ public class RestoreService : IRestoreService
 
         foreach (var s in snapshotChunks)
         {
-            var vector = await _vectorCache.TryGetAsync(s.ContentHash, ct);
+            var vector = (await _vectorCache.TryGetAsync(s.ContentHash, ct))?.Vector;
             if (vector is null) missingVector++;
 
             // Every field the index holds is restored, because the snapshot now records every

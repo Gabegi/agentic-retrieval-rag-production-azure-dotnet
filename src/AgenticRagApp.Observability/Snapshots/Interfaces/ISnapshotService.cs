@@ -23,10 +23,26 @@ public interface ISnapshotService
     // the document-identity store. Eviction itself is deliberately NOT done here — it's
     // indexing-pipeline infra, not an observability concern — the caller (which owns both
     // stores) uses this return value for its own EvictOrphanedAsync calls.
+    // processedDocumentIds: every document this run re-extracted, whether or not it went on to
+    // produce chunks. Its previous rows are dropped before this run's are added (2026-09-17,
+    // D200 R1).
+    //
+    // staleDocumentIds alone was not enough, and the gap was silent: on the daily run the index
+    // is recreated first, so the diff sees an empty index, every document reads as NEW rather
+    // than updated, and the stale list is empty. Nothing was ever dropped, so each run appended
+    // its whole corpus to the last - 65,728 rows against ~3,700 live chunks by 09-15, 93.4%
+    // superseded, +8 MB per run forever. Worse than the size: EvictOrphanedAsync receives every
+    // content hash the snapshot ever held, so no cache entry can ever look orphaned and eviction
+    // is dead.
+    //
+    // Sourced from the EXTRACTED document list rather than from newChunks: a document that
+    // extracted but produced zero chunks belongs in the drop set (it has no live chunks), and
+    // deriving the set from the chunks would silently keep its superseded rows instead.
     Task<SnapshotLiveSet> UpdateAsync<T>(
         string                source,
         IReadOnlyList<T>      newChunks,
         IReadOnlyList<string> staleDocumentIds,
+        IReadOnlyList<string> processedDocumentIds,
         string                instanceId,
         DateTimeOffset        startedAt,
         CancellationToken     ct = default) where T : ISnapshotSource;

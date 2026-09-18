@@ -27,11 +27,11 @@ public class IndexDocumentServiceTests
     };
 
     private static (IndexDocumentService Service, Mock<SearchClient> Client, Mock<SearchIndexClient> IndexClient)
-        BuildService()
+        BuildService(SearchRequestByteCounter? requestBytes = null)
     {
         var client      = new Mock<SearchClient>();
         var indexClient = new Mock<SearchIndexClient>();
-        var service     = new IndexDocumentService(Config(), client.Object, indexClient.Object, NullLogger<IndexDocumentService>.Instance);
+        var service     = new IndexDocumentService(Config(), client.Object, indexClient.Object, NullLogger<IndexDocumentService>.Instance, requestBytes);
 
         return (service, client, indexClient);
     }
@@ -71,11 +71,99 @@ public class IndexDocumentServiceTests
         client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(UploadResponse(("c1", true), ("c2", false)));
 
-        var (succeeded, failed, batches) = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1"), new FakeUploadChunk("c2") });
+        var (succeeded, failed, batches, batchDurationsMs) = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1"), new FakeUploadChunk("c2") });
 
         Assert.AreEqual(1, succeeded);
         Assert.AreEqual(1, failed);
         Assert.AreEqual(1, batches);
+        Assert.AreEqual(1, batchDurationsMs.Count, "one wall-clock reading per batch sent (D203 M7)");
+    }
+
+    // --- The upload payload (D203 §8) ---
+    //
+    // BytesSent is the counter's delta across the batch loop, trusted only when the counter moved
+    // by exactly this call's batches with every length known. The mocked SearchClient never
+    // touches a pipeline, so the counter is fed here from the mock's callback - the same thing
+    // the policy does on a real client, once per push request.
+
+    [TestMethod]
+    public async Task UpsertDocumentsAsync_WithACounterFedOncePerBatch_ReportsTheBytesSent()
+    {
+        var counter = new SearchRequestByteCounter();
+        var (service, client, _) = BuildService(counter);
+        client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
+            .Callback(() => counter.Record("/indexes('index')/docs/search.index", 39_000_000))
+            .ReturnsAsync((IEnumerable<FakeUploadChunk> batch, IndexDocumentsOptions _, CancellationToken _) =>
+                UploadResponse(batch.Select(c => (c.Id, true)).ToArray()));
+
+        var result = await service.UpsertDocumentsAsync(Enumerable.Range(0, 1001).Select(i => new FakeUploadChunk($"c{i}")));
+
+        Assert.AreEqual(2, result.Batches);
+        Assert.AreEqual(78_000_000L, result.BytesSent);
+    }
+
+    [TestMethod]
+    public async Task UpsertDocumentsAsync_NoCounterWired_ReportsBytesSentAsNull()
+    {
+        var (service, client, _) = BuildService();
+        client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(UploadResponse(("c1", true)));
+
+        var result = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1") });
+
+        Assert.IsNull(result.BytesSent);
+    }
+
+    // A counter that did not move by exactly the batches sent cannot attribute its bytes to this
+    // call - here it never moved at all (a client without the policy) - so the answer is null,
+    // not the delta and not zero.
+    [TestMethod]
+    public async Task UpsertDocumentsAsync_CounterDidNotMatchTheBatches_ReportsBytesSentAsNull()
+    {
+        var counter = new SearchRequestByteCounter();
+        var (service, client, _) = BuildService(counter);
+        client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(UploadResponse(("c1", true)));
+
+        var result = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1") });
+
+        Assert.AreEqual(1, result.Batches);
+        Assert.IsNull(result.BytesSent);
+    }
+
+    // A batch the SDK could not size poisons the window: the total would be an undercount, so
+    // it is withheld rather than reported low.
+    [TestMethod]
+    public async Task UpsertDocumentsAsync_ABatchWithoutAComputableLength_ReportsBytesSentAsNull()
+    {
+        var counter = new SearchRequestByteCounter();
+        var (service, client, _) = BuildService(counter);
+        client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
+            .Callback(() => counter.Record("/indexes('index')/docs/search.index", null))
+            .ReturnsAsync(UploadResponse(("c1", true)));
+
+        var result = await service.UpsertDocumentsAsync(new[] { new FakeUploadChunk("c1") });
+
+        Assert.IsNull(result.BytesSent);
+    }
+
+    // One duration per push-API batch, in send order - the shape that lets a reader tell four
+    // slow batches from one. 1,001 documents is two batches: the 1,000 maximum and a tail of 1.
+    [TestMethod]
+    public async Task UpsertDocumentsAsync_ReturnsOneDurationPerBatchSent()
+    {
+        var (service, client, _) = BuildService();
+        client.Setup(c => c.UploadDocumentsAsync(It.IsAny<IEnumerable<FakeUploadChunk>>(), It.IsAny<IndexDocumentsOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IEnumerable<FakeUploadChunk> batch, IndexDocumentsOptions _, CancellationToken _) =>
+                UploadResponse(batch.Select(c => (c.Id, true)).ToArray()));
+
+        var (succeeded, _, batches, batchDurationsMs) = await service.UpsertDocumentsAsync(
+            Enumerable.Range(0, 1001).Select(i => new FakeUploadChunk($"c{i}")));
+
+        Assert.AreEqual(1001, succeeded);
+        Assert.AreEqual(2, batches);
+        Assert.AreEqual(2, batchDurationsMs.Count);
+        Assert.IsTrue(batchDurationsMs.All(ms => ms >= 0));
     }
 
     // Rolls chunk rows up to one date per document, keeping the OLDEST (2026-09-17, D199 A2).

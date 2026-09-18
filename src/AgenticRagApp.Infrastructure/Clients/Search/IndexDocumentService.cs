@@ -12,27 +12,39 @@ public class IndexDocumentService : IIndexDocumentService
     private readonly SearchIndexClient             _indexClient;
     private readonly IndexerConfig                 _config;
     private readonly ILogger<IndexDocumentService> _logger;
+    private readonly SearchRequestByteCounter?     _requestBytes;
 
+    // requestBytes: the counter the SearchClient's request-size policy feeds (D203 §8). Optional
+    // so a client built without the policy - tests, tools - still works; BytesSent is then null.
     public IndexDocumentService(
-        IndexerConfig config, SearchClient client, SearchIndexClient indexClient, ILogger<IndexDocumentService> logger)
+        IndexerConfig config, SearchClient client, SearchIndexClient indexClient, ILogger<IndexDocumentService> logger,
+        SearchRequestByteCounter? requestBytes = null)
     {
-        _client      = client;
-        _indexClient = indexClient;
-        _config      = config;
-        _logger      = logger;
+        _client       = client;
+        _indexClient  = indexClient;
+        _config       = config;
+        _logger       = logger;
+        _requestBytes = requestBytes;
     }
 
     // Batches internally (1000 per call — the Search push API limit).
-    public async Task<(int Succeeded, int Failed, int Batches)> UpsertDocumentsAsync<T>(IEnumerable<T> documents, CancellationToken ct = default)
+    public async Task<UpsertResult> UpsertDocumentsAsync<T>(IEnumerable<T> documents, CancellationToken ct = default)
     {
         var succeeded = 0;
         var failed    = 0;
         var batches   = 0;
+        var durations = new List<long>();
+        var before    = _requestBytes?.Read();
 
         foreach (var batch in documents.ToList().Chunk(1000))
         {
             batches++;
+            // The SDK call alone - serialisation happens inside it, so this is the whole cost of
+            // the batch as this code experiences it, not the service-side indexing time.
+            var clock    = System.Diagnostics.Stopwatch.StartNew();
             var response = await _client.UploadDocumentsAsync(batch, cancellationToken: ct);
+            clock.Stop();
+            durations.Add(clock.ElapsedMilliseconds);
             foreach (var result in response.Value.Results)
             {
                 if (result.Succeeded)
@@ -47,8 +59,26 @@ public class IndexDocumentService : IIndexDocumentService
             }
         }
 
-        _logger.LogInformation("Upsert complete — {Succeeded} succeeded, {Failed} failed ({Batches} batch(es))", succeeded, failed, batches);
-        return (succeeded, failed, batches);
+        // The payload, as the pipeline saw it leave. Trusted only when the counter moved by
+        // exactly this call's batches with every length computable; anything else is null, not
+        // an estimate - see UpsertResult.
+        long? bytesSent = null;
+        if (before is { } b && _requestBytes is not null)
+        {
+            var after = _requestBytes.Read();
+            var requests   = after.IndexDocsRequests   - b.IndexDocsRequests;
+            var unmeasured = after.IndexDocsUnmeasured - b.IndexDocsUnmeasured;
+            if (requests == batches && unmeasured == 0)
+                bytesSent = after.IndexDocsBytes - b.IndexDocsBytes;
+            else
+                _logger.LogWarning(
+                    "Upsert payload not attributable: {Requests} push requests counted against {Batches} batches, {Unmeasured} without a computable length",
+                    requests, batches, unmeasured);
+        }
+
+        _logger.LogInformation("Upsert complete — {Succeeded} succeeded, {Failed} failed ({Batches} batch(es), {Bytes} bytes sent)",
+            succeeded, failed, batches, bytesSent?.ToString() ?? "unmeasured");
+        return new UpsertResult(succeeded, failed, batches, durations, bytesSent);
     }
 
     // Same batching as the upsert above, different action: MergeDocuments overwrites only the
@@ -108,6 +138,21 @@ public class IndexDocumentService : IIndexDocumentService
         var result = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         string? lastId = null;
 
+        // Diagnostics for D200 §6e: this method returned 0 against an index holding 3,734
+        // documents, every incremental run therefore re-extracted the whole corpus at full
+        // Content Understanding cost, and the report could not say WHICH of the two possible
+        // causes it was. rawHits separates them with no extra request: 0 means the query matched
+        // nothing, >0 with an empty result means every row failed the document_id +
+        // last_modified_date pair below. firstDocShape then names the field and the CLR type that
+        // did it. Both are only logged when the read comes back empty.
+        //
+        // The cause was found the same day by other means (D200 §6h: the SDK returns the date as
+        // a string, see the pair check below) and fixed, so this should now fire only on a
+        // genuinely empty index. Kept: it costs nothing, and an empty read is exactly the event
+        // that needs its shape recorded when it does happen.
+        var     rawHits      = 0;
+        string? firstDocShape = null;
+
         while (true)
         {
             var options = new SearchOptions
@@ -124,11 +169,31 @@ public class IndexDocumentService : IIndexDocumentService
             await foreach (var r in response.Value.GetResultsAsync().WithCancellation(ct))
             {
                 pageCount++;
+                rawHits++;
+                firstDocShape ??= string.Join(", ", r.Document.Select(kv =>
+                    $"{kv.Key}={(kv.Value is null ? "null" : kv.Value.GetType().Name)}"));
+
                 if (r.Document.TryGetValue("id", out var idValue) && idValue is string chunkId)
                     lastId = chunkId;
 
-                if (r.Document.TryGetValue("document_id",      out var idObj)   && idObj   is string docId &&
-                    r.Document.TryGetValue("last_modified_date", out var dateObj) && dateObj is DateTimeOffset date)
+                // GetDateTimeOffset, never `is DateTimeOffset` (2026-09-17, D200 §6h). Over the wire
+                // the SDK (11.8.0-beta.1) hands a DateTimeOffset field back as a STRING -
+                // "2026-08-06T13:46:46Z" - and the pattern match that stood here matched none of
+                // them, so this method returned an empty map against a populated index on every
+                // run. Every source document then compared as new: runs 9/260917/4 and /5 each
+                // re-extracted all 51 documents (871 billed pages) for nothing, and reported
+                // success. Proven on the service's actual bytes in IndexStateReadWireTests; the
+                // in-test SearchDocuments of IndexDocumentServiceTests carry CLR values and could
+                // never have seen it.
+                //
+                // ContainsKey gates the accessor: GetDateTimeOffset throws KeyNotFoundException on
+                // an ABSENT member and returns null for a PRESENT null, and both must stay
+                // "dateless row, skip" (the tests below pin that a dateless row is ignored, never
+                // treated as oldest). The string check on document_id is fine as it was - strings
+                // are the one type the SDK does hand back as themselves.
+                if (r.Document.TryGetValue("document_id", out var idObj) && idObj is string docId &&
+                    r.Document.ContainsKey("last_modified_date") &&
+                    r.Document.GetDateTimeOffset("last_modified_date") is { } stamped)
                 {
                     // A document-level rollup over per-chunk rows, so it needs a rule for rows
                     // that disagree. OLDEST wins: a document is current only if EVERY indexed row
@@ -153,8 +218,8 @@ public class IndexDocumentService : IIndexDocumentService
                     // its siblings' fresh date wins and the document reads current. Withholding is
                     // non-damaging in that case but not self-healing; closing it needs a persisted
                     // worklist of withheld document ids, not a date rule (D199 §3/A2).
-                    if (!result.TryGetValue(docId, out var seen) || date < seen)
-                        result[docId] = date;
+                    if (!result.TryGetValue(docId, out var seen) || stamped < seen)
+                        result[docId] = stamped;
                 }
             }
 
@@ -163,6 +228,19 @@ public class IndexDocumentService : IIndexDocumentService
         }
 
         _logger.LogInformation("Found {Count} documents currently in index", result.Count);
+
+        // Only on the empty read - the case that costs a full re-extraction. Names the branch and
+        // the index the client is actually bound to: IndexDocumentService takes a SearchClient
+        // bound once at startup to IndexerConfig.SearchIndexName, while the query side resolves
+        // the live generation through ICurrentIndexNameProvider, so a promoted generation would
+        // leave this method reading a different index than the one being queried. That is a
+        // hypothesis, not a diagnosis - this line is what turns it into one either way.
+        if (result.Count == 0)
+            _logger.LogWarning(
+                "Index-state read returned no documents — raw hits {RawHits}, index '{IndexName}' (configured '{ConfiguredIndexName}'), first row shape: {Shape}. "
+                + "Raw hits 0 = the query matched nothing; raw hits > 0 = every row failed the document_id + last_modified_date check, and the shape says which field. See D200 §6e.",
+                rawHits, _client.IndexName, _config.SearchIndexName, firstDocShape ?? "(no rows returned)");
+
         return result;
     }
 

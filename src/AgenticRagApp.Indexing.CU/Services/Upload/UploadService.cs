@@ -59,7 +59,19 @@ public class UploadService : IUploadService
         // the last possible moment before handing off to the generic (doc-type-agnostic)
         // upload path - see SearchUploadChunk's own comment.
         var uploadBatch = publishable.Select(SearchUploadChunk.From).ToList();
-        var (succeeded, refused, batches) = await _indexDocumentService.UpsertDocumentsAsync(uploadBatch, ct);
+        var upsert = await _indexDocumentService.UpsertDocumentsAsync(uploadBatch, ct);
+        var (succeeded, refused, batches, batchDurationsMs) = upsert;
+
+        // Per-batch wall-clock onto the histogram (D203 M7). Every batch but the last is the
+        // 1,000-document maximum; the last is whatever remained, and tagging it apart is what
+        // keeps a 711-document tail from reading as a fast full batch.
+        var lastBatchIsFull = uploadBatch.Count % 1000 == 0;
+        for (var i = 0; i < batchDurationsMs.Count; i++)
+        {
+            var isLast = i == batchDurationsMs.Count - 1;
+            Instrumentation.SearchUploadBatchMs.Record(batchDurationsMs[i],
+                new KeyValuePair<string, object?>("batch", isLast && !lastBatchIsFull ? "tail" : "full"));
+        }
 
         _logger.LogInformation("Upload complete — {Succeeded} succeeded, {Failed} refused by Search, {Withheld} withheld",
             succeeded, refused, withheld.Count);
@@ -143,6 +155,9 @@ public class UploadService : IUploadService
             IndexVectorIndexSizeBytesSnapshot = indexVectorBytes,
             DocsWithheld                      = withheld.Count,
             DocumentsWithheld                 = withheld.Select(w => w.DocumentId).Distinct().Count(),
+            SearchUploadBatches               = batches,
+            SearchUploadBatchMaxMs            = batchDurationsMs.Count > 0 ? batchDurationsMs.Max() : null,
+            SearchUploadBytes                 = upsert.BytesSent,
         };
     }
 

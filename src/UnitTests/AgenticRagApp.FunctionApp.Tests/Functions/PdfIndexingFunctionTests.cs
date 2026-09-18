@@ -20,6 +20,15 @@ public class PdfIndexingFunctionTests
 {
     private sealed class Deps
     {
+        // EvictOrphanedAsync returns a record since 2026-09-18 (D203 M5a); an unsetup Moq
+        // returns null for it, which the activity would dereference. Every test starts from
+        // "nothing listed, nothing evicted" and overrides where the eviction is the subject.
+        public Deps()
+        {
+            VectorCache.Setup(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(VectorCacheEviction.None);
+        }
+
         public Mock<IExtractionService>      ExtractionService = new();
         public Mock<IChunkingService>        ChunkingService   = new();
         public Mock<IEmbeddingService>       EmbeddingService  = new();
@@ -243,14 +252,28 @@ public class PdfIndexingFunctionTests
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
+        var result = await function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow), context);
 
-        Assert.AreEqual(stats, result);
+        // Returned unchanged EXCEPT for the two fields this activity fills in on the way out:
+        // the stale id list is stripped (Durable row-size limit) and its count is kept in its
+        // place, so a report can tell "the orphan cleanup found nothing" from "nothing was
+        // stale, so it never ran" (2026-09-17).
+        Assert.AreEqual(stats with { StaleDocumentIds = [], StaleDocumentCount = 0 }, result);
+        Assert.AreEqual(0, result.StaleDocumentCount);
+
+        // The processed-document list is written for the snapshot's drop set (D200 R1). Without
+        // it the snapshot never drops superseded rows and orphan eviction is silently dead.
+        deps.BlobStore.Verify(b => b.UploadJsonAsync(
+            It.IsAny<BlobContainerClient>(), "processed-ids.json", It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
+
         // Index provisioning moved to PreflightActivity (D201) and must not happen here as well -
         // two writers of the same object is what that change removed, and a second get-or-create
         // here is also what could quietly resurrect an index a recreate had just dropped.
         deps.IndexService.Verify(s => s.EnsureIndexAsync(), Times.Never);
-        deps.BlobStore.Verify(b => b.AssertContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+        // Three writes now: extracted docs, stale ids, and the processed-document list the
+        // snapshot uses as its drop set (D200 R1). One container assert each.
+        deps.BlobStore.Verify(b => b.AssertContainerExistsAsync(It.IsAny<BlobContainerClient>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
         deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "extracted.json", It.IsAny<IReadOnlyList<PdfExtractionDocument>>(), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
         deps.BlobStore.Verify(b => b.UploadJsonAsync(It.IsAny<BlobContainerClient>(), "stale-ids.json", It.IsAny<IReadOnlyList<string>>(), It.IsAny<System.Text.Json.JsonSerializerOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -265,7 +288,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
 
         StringAssert.Contains(ex.Message, "ExtractActivity failed");
     }
@@ -280,7 +303,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
-            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
+            function.ExtractActivity(new ExtractRequest(false, "extracted.json", "stale-ids.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow), context));
     }
 
     // ── ChunkActivity ────────────────────────────────────────────────────────
@@ -425,20 +448,40 @@ public class PdfIndexingFunctionTests
         deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunkFamiliesPatched: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
         deps.SnapshotService.Setup(s => s.UpdateAsync(
-                "pdf", It.IsAny<IReadOnlyList<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                "pdf", It.IsAny<IReadOnlyList<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SnapshotLiveSet(
                 new HashSet<string> { "hash1" },
                 new HashSet<string> { "doc1.pdf" }));
-        deps.VectorCache.Setup(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>())).ReturnsAsync(2);
+        deps.VectorCache.Setup(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new VectorCacheEviction(Listed: 5, Deleted: 2, ListMs: 30, DeleteMs: 40, BlobBytesTotal: 200_000, BlobBytesP50: 40_000,
+                DeleteLatency: new LatencySummary(Count: 2, P50Ms: 15.0, P95Ms: 25.0, MaxMs: 25.0)));
         deps.IdentityStore.Setup(s => s.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>())).ReturnsAsync(1);
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow, 4), context);
+        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow, 4), context);
 
         Assert.AreEqual(1, result.DocsUploaded);
         Assert.AreEqual(1, result.VectorCacheHits);
         deps.VectorCache.Verify(c => c.EvictOrphanedAsync(It.IsAny<IReadOnlySet<string>>(), It.IsAny<CancellationToken>()), Times.Once);
+
+        // The eviction split rides the report as the cache reported it (D203 M5a): ChunksEvicted
+        // keeps meaning "deleted", the listing and clocks land beside it, and the identity store
+        // gets its own clock rather than hiding inside EvictionDurationMs.
+        Assert.AreEqual(2, result.ChunksEvicted);
+        Assert.AreEqual(5, result.VectorCacheListedBlobs);
+        Assert.AreEqual(30L, result.VectorCacheListMs);
+        Assert.AreEqual(40L, result.VectorCacheDeleteMs);
+        Assert.AreEqual(200_000L, result.VectorCacheBlobBytesTotal);
+        Assert.AreEqual(40_000L, result.VectorCacheBlobBytesP50);
+        Assert.IsNotNull(result.IdentityEvictionMs);
+        Assert.IsNotNull(result.EvictionDurationMs);
+        // The per-op latency block is always present and carries the cache's delete summary
+        // (D203 §6c); the embed-side kinds are null here because the mocked embed result has none.
+        Assert.IsNotNull(result.VectorCacheOpLatency);
+        Assert.AreEqual(2, result.VectorCacheOpLatency!.Delete!.Count);
+        Assert.AreEqual(15.0, result.VectorCacheOpLatency.Delete.P50Ms);
+        Assert.IsNull(result.VectorCacheOpLatency.GetHit);
 
         // The identity store is evicted against the snapshot's live DOCUMENT ids, not its
         // content hashes - the two stores are keyed differently and passing the wrong grain
@@ -470,12 +513,12 @@ public class PdfIndexingFunctionTests
         deps.UploadService.Setup(s => s.UploadDocumentsAsync(It.IsAny<IEnumerable<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<FamilyMove>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new UploadResult(DocsUploaded: 1, DocsFailed: 0, ChunksRemoved: 0, ChunkFamiliesPatched: 0, IndexDocumentCountSnapshot: 10, IndexStorageSizeBytesSnapshot: 100, RedFlags: []));
         deps.SnapshotService.Setup(s => s.UpdateAsync(
-                "pdf", It.IsAny<IReadOnlyList<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                "pdf", It.IsAny<IReadOnlyList<ChunkObject>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), "instance-1", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SnapshotLiveSet(new HashSet<string>(), new HashSet<string>()));
         var function = deps.Build();
         var context  = new FakeFunctionContext();
 
-        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow, 4), context);
+        var result = await function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow, 4), context);
 
         Assert.AreEqual(1, result.DocsUploaded);
         deps.UploadService.Verify(s => s.UploadDocumentsAsync(
@@ -505,7 +548,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow, 4), context));
+            function.EmbedAndUploadActivity(new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow, 4), context));
 
         StringAssert.Contains(ex.Message, "EmbedAndUploadActivity failed");
     }
@@ -535,7 +578,7 @@ public class PdfIndexingFunctionTests
         var context  = new FakeFunctionContext();
 
         var result = await function.EmbedAndUploadActivity(
-            new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "instance-1", DateTimeOffset.UtcNow, 4), context);
+            new EmbedUploadRequest("chunks.json", "stale-ids.json", "family-moves.json", "processed-ids.json", "instance-1", DateTimeOffset.UtcNow, 4), context);
 
         // The payoff: a drift reports like an ordinary run that withheld everything, so it is
         // visible in the report's own columns rather than only inside a stringified exception.

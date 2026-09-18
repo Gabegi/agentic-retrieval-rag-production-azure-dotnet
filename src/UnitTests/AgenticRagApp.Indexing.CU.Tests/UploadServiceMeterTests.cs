@@ -55,7 +55,7 @@ public class UploadServiceMeterTests
     {
         var indexService = new Mock<IIndexDocumentService>();
         indexService.Setup(m => m.UpsertDocumentsAsync(It.IsAny<IEnumerable<SearchUploadChunk>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((1, 0, 1));
+            .ReturnsAsync(new UpsertResult(1, 0, 1, [0L]));
         indexService.Setup(m => m.GetStatisticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync((0L, 0L, (long?)null));
 

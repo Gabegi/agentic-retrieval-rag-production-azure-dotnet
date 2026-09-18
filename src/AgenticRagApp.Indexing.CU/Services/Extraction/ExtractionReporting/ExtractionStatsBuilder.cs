@@ -39,6 +39,7 @@ internal static class ExtractionStatsBuilder
 
         IReadOnlyList<string> extras =
         [
+            .. IndexStateReadEmptyRedFlag(diff.SourceCount, diff.IndexedCount),
             .. HighNewDocFractionRedFlag(diff.SourceCount, diff.IndexedCount, diff.NewCount, forceReindex),
             .. extraRedFlag is null ? Array.Empty<string>() : [extraRedFlag],
         ];
@@ -66,6 +67,32 @@ internal static class ExtractionStatsBuilder
 
         return [.. diff.ToDeleteChunks
             .Where(id => !diff.EntriesToProcess.ContainsKey(id) || extractedSourceIds.Contains(id))];
+    }
+
+    // The index-state read came back empty while the source has documents, so every one of them
+    // compares as new below: the whole corpus is re-extracted at full Content Understanding cost,
+    // nothing is marked stale, and no orphaned chunk is removed.
+    //
+    // Reported, not judged. It is CORRECT after a recreate and on a first run in a fresh
+    // environment, and it is the D180 defect otherwise - the three are indistinguishable from
+    // here, and Run.RecreateIndex on the same report is what separates them. EmptyIndexStateException
+    // used to fail the run on this condition; removed 2026-09-17 (D200 §6d) because its second
+    // opinion was the service's own approximate document count. This line is what replaced it.
+    //
+    // Deliberately NOT gated on forceReindex, unlike its sibling below. Force changes whether the
+    // re-extraction was asked for; it does not change that an empty read leaves ToDeleteChunks
+    // empty, so nothing is marked stale and orphans accumulate - which is the D200 F1 mechanism
+    // and applies just as much to a force run. It will therefore also fire on the daily
+    // force+recreate run, where it is expected; the text says so rather than the flag being
+    // suppressed into silence on the one run that happens every day.
+    //
+    // Sibling flag HighNewDocFractionRedFlag cannot cover this: it returns early on
+    // indexedCount == 0, which is exactly this case.
+    internal static IReadOnlyList<string> IndexStateReadEmptyRedFlag(int sourceCount, int indexedCount)
+    {
+        if (indexedCount > 0 || sourceCount == 0) return [];
+
+        return [$"index_state_read_empty: the index-state read returned 0 documents, so all {sourceCount} source document(s) compare as new and are re-extracted at full cost, nothing is marked stale and no orphan is removed - expected when Run.RecreateIndex is true or on a first run, otherwise an index-state read failure (D180)"];
     }
 
     internal static IReadOnlyList<string> HighNewDocFractionRedFlag(

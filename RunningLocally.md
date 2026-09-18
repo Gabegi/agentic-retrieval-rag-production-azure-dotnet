@@ -89,7 +89,7 @@ environment variable.
 | `RunAnalysis__Enabled` | `true` | Master switch for the per-run `run-analysis` blob |
 | `RunAnalysis__CalibrationMode` | `true` | While true, flags with uncalibrated thresholds render their value but do not fire |
 | `GUARDS_LOG_ONLY` | `true` | Query-time guards (prompt injection, PII) log but do not block. Only an explicit `false` makes them block; anything unparsable counts as absent. `"true"` in `function_app.tf` — the log-only decision is `docs/2608/260812/guards-review.md` (D091) |
-| `WEBSITE_TIME_ZONE` | — | Set to `W. Europe Standard Time` in `function_app.tf` so the 17:00 timer is Dutch wall-clock time |
+| `WEBSITE_TIME_ZONE` | — | `W. Europe Standard Time` in `function_app.tf`. Existed for the 17:00 `ScheduledIndexing` timer, removed 2026-09-17; still set, see the comment in `function_app.tf` |
 
 ### Getting dev values
 
