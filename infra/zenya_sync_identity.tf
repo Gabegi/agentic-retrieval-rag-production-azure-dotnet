@@ -6,8 +6,9 @@
 #   - It outlives the app: a system-assigned identity is destroyed with its Function App and comes
 #     back with a new client_id, silently breaking auth. This one can also attach to a second
 #     resource later without re-registering.
-#   - Holds no role assignments here; it gets grants where that access is defined (blob write on
-#     the documents container).
+#   - Its role assignments live at the bottom of this file rather than beside the resources they
+#     scope to: all three exist for Track A's sake, and keeping them together is what makes it
+#     readable which access disappears when Track B retires that path.
 resource "azurerm_user_assigned_identity" "zenya_sync" {
   name                = "con-id-zenyasync-cap-${local.env}-${local.region}-${local.instance}"
   location            = var.location
@@ -62,9 +63,13 @@ resource "azurerm_federated_identity_credential" "zenya_sync_ado" {
 
 # ADO's "Verify" on the connection reads the subscription through ARM; any role assignment inside
 # the subscription makes it visible, so Reader on the data RG (where this identity's resources
-# live) is enough and stays narrower than a subscription-scope grant. Blob contributor on the data
-# account is what the sync itself needs: it writes the documents container (storage.tf) from the
-# ADO agent in Track A and from the Function App in Track B - same identity, one grant.
+# live) is enough and stays narrower than a subscription-scope grant. Blob contributor on the docs
+# account is what the sync itself needs: it writes the zenya-documents container (storage.tf) from
+# the ADO agent in Track A and from the Function App in Track B - same identity, one grant.
+#
+# 2026-09-21 (D206): both storage grants moved from the data account to the docs account. Nothing
+# this identity does has ever touched pipeline-reports, pipeline-artifacts, test-questions or
+# eval-results, and the account split is what finally lets the grants say so.
 resource "azurerm_role_assignment" "zenya_sync_reader_data_rg" {
   scope                = data.azurerm_resource_group.data.id
   role_definition_name = "Reader"
@@ -73,21 +78,24 @@ resource "azurerm_role_assignment" "zenya_sync_reader_data_rg" {
 }
 
 resource "azurerm_role_assignment" "zenya_sync_blob_contributor" {
-  scope                = azurerm_storage_account.data.id
+  scope                = azurerm_storage_account.docs.id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = azurerm_user_assigned_identity.zenya_sync.principal_id
   principal_type       = "ServicePrincipal"
 }
 
-# Track A only: the ADO agent has no VNet path to the data account (public access denied,
-# storage.tf), so zenya-document-sync.yml opens the account firewall for the runner IP and closes it
-# again. `az storage account update` / `network-rule add` need Microsoft.Storage/storageAccounts/write,
-# which neither Reader nor Storage Blob Data Contributor carries. Storage Account Contributor is the
-# narrowest built-in role that does; it also permits listKeys, which is why the scope is this one
-# account and not the resource group. Added 2026-09-11 when the Sync stage moved from con-cap-app-dev
-# (a connection we hold no role on) to con-cap-zenyasync-<env>. Track B never needs it.
+# Track A only: the ADO agent has no VNet path to the docs account, so zenya-document-sync.yml
+# widens that account's firewall around each run and restores it after. `az storage account update`
+# needs Microsoft.Storage/storageAccounts/write, which neither Reader nor Storage Blob Data
+# Contributor carries. Storage Account Contributor is the narrowest built-in role that does; it also
+# permits listKeys, which is why the scope is one account and not the resource group. Added
+# 2026-09-11 when the Sync stage moved from con-cap-app-dev (a connection we hold no role on) to
+# con-cap-zenyasync-<env>. Track B never needs it.
+#
+# 2026-09-21 (D206): that scope is now the docs account, so the listKeys this role carries reaches
+# a corpus we can rebuild and no longer reaches the vector cache, the reports or the eval history.
 resource "azurerm_role_assignment" "zenya_sync_storage_account_contributor" {
-  scope                = azurerm_storage_account.data.id
+  scope                = azurerm_storage_account.docs.id
   role_definition_name = "Storage Account Contributor"
   principal_id         = azurerm_user_assigned_identity.zenya_sync.principal_id
   principal_type       = "ServicePrincipal"

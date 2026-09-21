@@ -179,6 +179,11 @@ locals {
     # RunReportWriter writes one blob per query into pipeline-reports (AssertContainerExistsAsync +
     # UploadJsonAsync). Account-scoped like the Function's grant; narrow to the container if the API
     # ever needs to be kept away from the other containers on this account. Added 2026-09-16.
+    #
+    # Deliberately no grant on the docs account (2026-09-21, D206): the API queries the search index
+    # and writes its own report, and never reads the source corpus - so it also gets no
+    # DOCUMENTS_STORAGE_ACCOUNT_URL setting below. The keyed "source-documents" client is registered
+    # as a factory, so a host that never resolves it never builds it.
     data_storage_contributor = {
       scope = azurerm_storage_account.data.id
       role  = "Storage Blob Data Contributor"

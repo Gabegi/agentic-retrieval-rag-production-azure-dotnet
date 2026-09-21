@@ -92,8 +92,37 @@ resource "azurerm_windows_function_app" "indexer" {
     "WEBSITE_CONTENTOVERVNET"                  = "1"
     "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING" = azurerm_storage_account.func.primary_connection_string
     "WEBSITE_CONTENTSHARE"                     = azurerm_storage_share.func_content.name
-    "ProtocolsStorage__blobServiceUri"         = azurerm_storage_account.data.primary_blob_endpoint
+    # Two blob accounts since 2026-09-21 (D206), and the app settings are the only thing that says
+    # which is which - see the "source-documents" keyed registration in
+    # Infrastructure/Clients/ServiceCollectionExtensions.cs.
+    #   STORAGE_ACCOUNT_URL           reports, artifacts, eval history (the data account)
+    #   DOCUMENTS_STORAGE_ACCOUNT_URL the source corpus (the docs account)
+    #   STORAGE_CONTAINER             which container on the docs account is the corpus. Set
+    #                                 explicitly: it was previously unset here and fell through to
+    #                                 IndexerConfig's "protocols" default, so RunReportAssembler was
+    #                                 handed a container terraform never created while the indexer
+    #                                 read a hardcoded "documents" next to it.
+    #
+    # 2026-09-21: STORAGE_CONTAINER points at "zenya-documents" - the indexed corpus is what the
+    # Zenya sync mirrors, not the hand-uploaded PDFs any more. This is D202 §6 decision 1, which was
+    # deferred on 2026-09-17 ("not yet, design only"), and it is a one-line change here only because
+    # the fix above made this setting actually reach the indexer - it previously ignored it and read
+    # a hardcoded "documents". Two consequences, both fine but neither obvious:
+    #   - SourceId IS the blob name (ExtractionReporter: BlobName = d.SourceId), so every id changes
+    #     shape, from "Some Title.pdf" to "pdf/{zenya document_id}.pdf". Every document therefore
+    #     looks new and every old chunk looks removed. That is a full reindex, not an incremental
+    #     one, and it is why this had to wait for an index recreate.
+    #   - NOTHING triggers indexing on a schedule. The 17:00 ForceReindex+RecreateIndex timer was
+    #     removed on 2026-09-17 (D200 §6i); IndexingFunction.cs:112 is its tombstone comment, not a
+    #     live trigger. Cadence comes from whatever calls POST /api/index, so the first run after
+    #     this change happens when someone asks for it. A plain POST /api/index (force=false,
+    #     recreate=false) is enough - the diff sees every zenya-documents id as new and every old
+    #     "documents" id as removed, and converges in one run without a recreate.
+    # The "documents" container still exists and 5-upload-sample-pdfs.yml still fills it; it is the
+    # test corpus now, indexed only by pointing this setting back at it.
     "STORAGE_ACCOUNT_URL"                      = azurerm_storage_account.data.primary_blob_endpoint
+    "DOCUMENTS_STORAGE_ACCOUNT_URL"            = azurerm_storage_account.docs.primary_blob_endpoint
+    "STORAGE_CONTAINER"                        = "zenya-documents"
     "SEARCH_ENDPOINT"                          = "https://${azurerm_search_service.main.name}.search.windows.net"
     "OPENAI_ENDPOINT"                          = data.azurerm_cognitive_account.foundry.endpoint
     "OPENAI_EMBEDDING_DEPLOYMENT"              = var.openai_embedding_deployment
@@ -140,6 +169,11 @@ resource "azurerm_windows_function_app" "indexer" {
     # wall-clock across DST; that timer was removed 2026-09-17 (D200 §6i) and nothing else in
     # the app was checked for a dependency on local time. Kept unchanged for that reason -
     # dropping it is its own change, with its own plan diff, not a side effect of the removal.
+    #
+    # 2026-09-21 (D206 §9): load-bearing again. ScheduledIndexing is back as a diff-only timer at
+    # "0 0 21 * * *", and that cron means 21:00 Amsterdam ONLY because of this setting. Remove or
+    # change it and the run silently moves to 21:00 UTC - which in summer is 23:00 local and, more
+    # to the point, would no longer sit after the Zenya sync it is sequenced against.
     "WEBSITE_TIME_ZONE" = "W. Europe Standard Time"
   }
 
@@ -242,10 +276,19 @@ locals {
       scope = azurerm_storage_account.func.id
       role  = "Storage Table Data Contributor"
     }
-    # Reads source documents, writes chunks/reports/state.
+    # Writes chunks/reports/state. Reading the source corpus is docs_storage_contributor below -
+    # two grants since the 2026-09-21 account split (D206), where it used to be this one.
     data_storage_contributor = {
       scope = azurerm_storage_account.data.id
       role  = "Storage Blob Data Contributor"
+    }
+    # Reads the source corpus, and only reads it: the indexing path lists the container
+    # (IndexDiffService) and downloads blobs from it (ExtractionService), and nothing in this app
+    # writes there - the corpus is written by 5-upload-sample-pdfs.yml and the ZenyaSync tool.
+    # Becomes Storage Blob Data Contributor when Track B moves the sync into this app.
+    docs_storage_reader = {
+      scope = azurerm_storage_account.docs.id
+      role  = "Storage Blob Data Reader"
     }
     search_index_contributor = {
       scope = azurerm_search_service.main.id
