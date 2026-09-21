@@ -68,9 +68,45 @@ public class ServiceCollectionExtensionsTests
 
         var config = services.AddAgenticRagAppInfrastructure(configuration);
 
-        Assert.AreEqual("protocols", config.StorageContainer);
+        // "zenya-documents", not the "protocols" this asserted until 2026-09-21 (D206). That old default
+        // was only ever reached by the deployed Function App, because function_app.tf never set
+        // STORAGE_CONTAINER - and it pointed RunReportAssembler at a container terraform had never
+        // created. Terraform sets the value explicitly now; this default matches it.
+        Assert.AreEqual("zenya-documents", config.StorageContainer);
         Assert.AreEqual("text-embedding-3-large", config.OpenAiEmbeddingModelName);
         Assert.AreEqual(3072, config.OpenAiEmbeddingDimensions);
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_DocumentsAccountUrlOmitted_FallsBackToTheReportsAccount()
+    {
+        // The corpus moved to its own storage account on 2026-09-21 (D206), but the split is
+        // opt-in per environment: a host that sets only STORAGE_ACCOUNT_URL (local.settings.json,
+        // the eval harness, any single-account environment) must keep resolving the corpus on that
+        // one account rather than failing to start.
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration();
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration);
+
+        Assert.AreEqual("https://storage.example.com", config.DocumentsStorageAccountUrl);
+    }
+
+    [TestMethod]
+    public void AddAgenticRagAppInfrastructure_DocumentsAccountUrlSet_IsUsedForTheCorpus()
+    {
+        var services      = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["DOCUMENTS_STORAGE_ACCOUNT_URL"] = "https://docs.example.com",
+        });
+
+        var config = services.AddAgenticRagAppInfrastructure(configuration);
+
+        // Distinct from StorageAccountUrl: the whole point of the split is that reports and the
+        // corpus resolve to different accounts.
+        Assert.AreEqual("https://docs.example.com", config.DocumentsStorageAccountUrl);
+        Assert.AreEqual("https://storage.example.com", config.StorageAccountUrl);
     }
 
     [TestMethod]

@@ -138,9 +138,10 @@ public class ChunkObjectTests
 
         var actualKeys = doc.RootElement.EnumerateObject().Select(p => p.Name).ToHashSet();
 
-        // Mirrors IndexService.BuildIndexDefinition exactly. The CSV-era fields (summary,
-        // department, quick_code, relative_path, check_date) are deliberately absent - PDF and
-        // CSV no longer share an index (action-plan.md B2).
+        // Mirrors IndexService.BuildIndexDefinition exactly. The CSV-era fields (department,
+        // relative_path) are deliberately absent - PDF and CSV no longer share an index
+        // (action-plan.md B2). summary, quick_code and check_date are BACK since 2026-09-21, but
+        // as Zenya source facts off blob metadata (D204 §9), not the CSV columns they once were.
         var expectedKeys = new HashSet<string>
         {
             // identity and position: *_id names a thing, *_index names a position within a
@@ -170,6 +171,11 @@ public class ChunkObjectTests
             "hyperlinks", "annotations",
             // quality flags
             "is_overlap", "heading_located",
+            // source-system facts (Zenya, 2026-09-21, D204 §9) - the persons the chunk also
+            // carries are deliberately NOT here (D204 §3d)
+            "source_document_id", "source_version", "source_revision", "source_status", "source_active",
+            "source_title", "source_language", "quick_code", "folder_path", "folder_name",
+            "source_type", "source_document_type", "summary", "check_date", "attention_flags",
         };
 
         CollectionAssert.AreEquivalent(expectedKeys.ToList(), actualKeys.ToList());

@@ -12,8 +12,7 @@
   },
   "extensions": {
     "durableTask": {
-      "hubName": "IndexingHub",
-      "activityFunctionTimeout": "01:00:00"
+      "hubName": "IndexingHub"
     }
   }
 }

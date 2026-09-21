@@ -93,7 +93,23 @@ public class RestoreServiceTests
             PageCount:          null,
             ValidFrom:          null,
             ValidTo:            null,
-            Version:            null);
+            Version:            null,
+            // Source-system facts (Zenya, 2026-09-21)
+            SourceDocumentId:   null,
+            SourceVersion:      null,
+            SourceRevision:     null,
+            SourceStatus:       null,
+            SourceActive:       null,
+            SourceTitle:        null,
+            SourceLanguage:     null,
+            QuickCode:          null,
+            FolderPath:         null,
+            FolderName:         null,
+            SourceType:         null,
+            SourceDocumentType: null,
+            Summary:            null,
+            CheckDate:          null,
+            AttentionFlags:     []);
 
     // The live index width a restore judges cached vectors against (D201). 2 here, matching the
     // two-component vectors these tests cache.

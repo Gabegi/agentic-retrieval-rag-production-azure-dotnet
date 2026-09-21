@@ -89,4 +89,26 @@ public interface ISnapshotSource : IChunk
     DateTimeOffset? ValidFrom { get; }
     DateTimeOffset? ValidTo   { get; }
     string?         Version   { get; }
+
+    // -- Source-system facts (Zenya, 2026-09-21) ------------------------------
+    // Fifteen index fields stamped from the blob's zenya_* metadata by the producing pipeline.
+    // The far side has no blob listing to re-read them from, so per the rule at the top of
+    // this interface they travel. Null on every chunk of the manual corpus. The persons the
+    // chunk also carries are NOT here: they are not on the index schema (D204 §3d).
+
+    string?               SourceDocumentId   { get; }
+    string?               SourceVersion      { get; }
+    string?               SourceRevision     { get; }
+    string?               SourceStatus       { get; }
+    bool?                 SourceActive       { get; }
+    string?               SourceTitle        { get; }
+    string?               SourceLanguage     { get; }
+    string?               QuickCode          { get; }
+    string?               FolderPath         { get; }
+    string?               FolderName         { get; }
+    string?               SourceType         { get; }
+    string?               SourceDocumentType { get; }
+    string?               Summary            { get; }
+    DateTimeOffset?       CheckDate          { get; }
+    IReadOnlyList<string> AttentionFlags     { get; }
 }

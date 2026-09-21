@@ -128,4 +128,14 @@ public sealed record PdfExtractionDocument(
     // Text lines the service reported, counted for the file-facts report (2026-09-09; the
     // LineInfo list it replaces is explained on PdfDocumentStructure). Zero on a blob written
     // before the count existed.
-    int LineCount = 0);
+    int LineCount = 0,
+
+    // ── Source-system facts (2026-09-21, D204 §9) ───────────────────────────
+    // What Zenya says about this document, decoded off the blob's zenya_* metadata by
+    // IndexDiffService's listing and carried here through PdfBlobInfo - the same entry the
+    // loop was already handed, so extraction reads no second listing and calls no API.
+    // The WHOLE record rides on the document; DocumentStamp picks the document-level subset
+    // that belongs on every chunk. Null on any blob the sync did not write - the entire
+    // manual "protocols" corpus - which is absent, not "Zenya said nothing": the same
+    // distinction Author/CreatedAt/ModDate above draw for the PDF Info dictionary.
+    ZenyaMetadata? Zenya = null);

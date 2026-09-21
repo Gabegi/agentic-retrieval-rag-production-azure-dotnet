@@ -27,7 +27,41 @@ public sealed record DocumentStamp(
     int?                  PageCount,
     DateTimeOffset?       ValidFrom,
     DateTimeOffset?       ValidTo,
-    string?               Version)
+    string?               Version,
+
+    // ── Source-system facts (2026-09-21, D204 §9) ──────────────────────────
+    // Off doc.Zenya - the blob's zenya_* metadata, decoded by IndexDiffService. All null on
+    // the manual corpus. Kept SEPARATE from the fields above that look like them, on purpose:
+    //   SourceTitle    vs Title    - D182 holds the MissingTitle decision; not pre-empted here.
+    //   SourceLanguage vs Language - Zenya's language FORMAT is unmeasured ("nl"? "Nederlands"?);
+    //                                mixing it into a field whose vocabulary is ISO 639-1 would
+    //                                corrupt the facet. Measured first, merged later, if ever.
+    //   SourceVersion  vs Version  - D202 §6.2 decided this: the title-parsed "(Versie N)" and
+    //                                Zenya's integer are different things.
+    //   CheckDate      vs ValidTo  - "next due for review" is not "stops applying". Overloading
+    //                                valid_to would be the same wrong-meaning mistake D202 rejected
+    //                                for version, so check_date is its own field. This corrects
+    //                                D204 §3a, which had mapped it onto valid_to.
+    string?               SourceDocumentId,
+    string?               SourceVersion,
+    string?               SourceRevision,
+    string?               SourceStatus,
+    bool?                 SourceActive,
+    string?               SourceTitle,
+    string?               SourceLanguage,
+    string?               QuickCode,
+    string?               FolderPath,
+    string?               FolderName,
+    string?               SourceType,
+    string?               SourceDocumentType,
+    string?               Summary,
+    DateTimeOffset?       CheckDate,
+    IReadOnlyList<string> AttentionFlags,
+    // Persons: on the chunk for traceability, never Search-indexed (D204 §3d) - the same
+    // treatment Author has had all along.
+    IReadOnlyList<string> Authors,
+    IReadOnlyList<string> Authorizers,
+    IReadOnlyList<string> DocumentAdministrators)
 {
     // route is the strategy's own Name, passed in by ChunkingService - it is step 2's answer
     // and this class has no way to re-derive it. A size_class was stamped here too until
@@ -36,6 +70,7 @@ public sealed record DocumentStamp(
     {
         // Parsed once - the title answers three fields and the regexes are not free.
         var validity = DocumentValidityParser.Parse(doc.Title);
+        var zenya    = doc.Zenya;
 
         return new DocumentStamp(
             DocumentId:       doc.SourceId,
@@ -53,13 +88,36 @@ public sealed record DocumentStamp(
 
             LastModifiedDate: doc.LastModifiedDate,
             CreatedAt:        doc.CreatedAt,
-            ModDate:          doc.ModDate,
+            // The ONE place a Zenya value fills an existing slot. ModDate's documented meaning is
+            // "when the content was actually last edited" - which is exactly Zenya's
+            // last_modified_datetime - and its only previous producer (the PdfPig Info-dictionary
+            // read) is gone, so this is a fact filling an empty field, not a substitution.
+            ModDate:          doc.ModDate ?? zenya?.LastModified,
             PageCount:        doc.PageCount,
 
             // From the TITLE.
             ValidFrom:        validity.From,
             ValidTo:          validity.To,
-            Version:          validity.Version);
+            Version:          validity.Version,
+
+            SourceDocumentId:   zenya?.DocumentId,
+            SourceVersion:      zenya?.Version?.ToString(),
+            SourceRevision:     zenya?.Revision?.ToString(),
+            SourceStatus:       zenya?.Status,
+            SourceActive:       zenya?.Active,
+            SourceTitle:        zenya?.Title,
+            SourceLanguage:     zenya?.Language,
+            QuickCode:          zenya?.QuickCode,
+            FolderPath:         zenya?.FolderPath,
+            FolderName:         zenya?.FolderName,
+            SourceType:         zenya?.Type,
+            SourceDocumentType: zenya?.DocumentType,
+            Summary:            zenya?.Summary,
+            CheckDate:          zenya?.CheckDate,
+            AttentionFlags:     zenya?.AttentionFlags ?? [],
+            Authors:                zenya?.Authors ?? [],
+            Authorizers:            zenya?.Authorizers ?? [],
+            DocumentAdministrators: zenya?.DocumentAdministrators ?? []);
     }
 
     // No source_path: DocumentId already IS the blob name, and a second copy is a second thing
@@ -84,5 +142,24 @@ public sealed record DocumentStamp(
         metadata.ValidFrom        = ValidFrom;
         metadata.ValidTo          = ValidTo;
         metadata.Version          = Version;
+
+        metadata.SourceDocumentId   = SourceDocumentId;
+        metadata.SourceVersion      = SourceVersion;
+        metadata.SourceRevision     = SourceRevision;
+        metadata.SourceStatus       = SourceStatus;
+        metadata.SourceActive       = SourceActive;
+        metadata.SourceTitle        = SourceTitle;
+        metadata.SourceLanguage     = SourceLanguage;
+        metadata.QuickCode          = QuickCode;
+        metadata.FolderPath         = FolderPath;
+        metadata.FolderName         = FolderName;
+        metadata.SourceType         = SourceType;
+        metadata.SourceDocumentType = SourceDocumentType;
+        metadata.Summary            = Summary;
+        metadata.CheckDate          = CheckDate;
+        metadata.AttentionFlags     = AttentionFlags;
+        metadata.Authors                = Authors;
+        metadata.Authorizers            = Authorizers;
+        metadata.DocumentAdministrators = DocumentAdministrators;
     }
 }

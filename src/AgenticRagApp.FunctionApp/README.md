@@ -19,7 +19,7 @@ RunAnalysis/SaveRunAnalysisActivity.cs       after either report activity: assem
 Models/
   IndexingProgress.cs                        the Durable custom-status payload (stage + counts) that /api/index/status reads
   PdfActivityRequests.cs                     the activity inputs (blob names, instance id, started-at)
-host.json                                    functionTimeout -1, activityFunctionTimeout 01:00:00, OpenTelemetry telemetry mode
+host.json                                    functionTimeout -1 (EP1, no activity time bound), OpenTelemetry telemetry mode
 ```
 
 The endpoint table with flags and operating procedures is in the

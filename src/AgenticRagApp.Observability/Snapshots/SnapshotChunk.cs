@@ -86,7 +86,29 @@ public record SnapshotChunk(
     // re-derive them once the title is all that is left.
     DateTimeOffset? ValidFrom,
     DateTimeOffset? ValidTo,
-    string? Version)
+    string? Version,
+
+    // Source-system facts (Zenya, 2026-09-21): index fields the far side cannot re-derive - they
+    // came off the source container's blob metadata, which a restore never lists. Nullable, like
+    // Hyperlinks/Annotations above, so snapshots written before they existed still deserialize
+    // (an absent constructor parameter reads as default); a restore from such a snapshot rebuilds
+    // them null, which is what the index held for those rows anyway. No default values, per the
+    // rule TestChunk states: a schema field is added here positionally, in the same change.
+    string?                SourceDocumentId,
+    string?                SourceVersion,
+    string?                SourceRevision,
+    string?                SourceStatus,
+    bool?                  SourceActive,
+    string?                SourceTitle,
+    string?                SourceLanguage,
+    string?                QuickCode,
+    string?                FolderPath,
+    string?                FolderName,
+    string?                SourceType,
+    string?                SourceDocumentType,
+    string?                Summary,
+    DateTimeOffset?        CheckDate,
+    IReadOnlyList<string>? AttentionFlags)
 {
     public static SnapshotChunk From<T>(T doc) where T : ISnapshotSource => new(
         Id:                 doc.Id,
@@ -125,5 +147,20 @@ public record SnapshotChunk(
         PageCount:          doc.PageCount,
         ValidFrom:          doc.ValidFrom,
         ValidTo:            doc.ValidTo,
-        Version:            doc.Version);
+        Version:            doc.Version,
+        SourceDocumentId:   doc.SourceDocumentId,
+        SourceVersion:      doc.SourceVersion,
+        SourceRevision:     doc.SourceRevision,
+        SourceStatus:       doc.SourceStatus,
+        SourceActive:       doc.SourceActive,
+        SourceTitle:        doc.SourceTitle,
+        SourceLanguage:     doc.SourceLanguage,
+        QuickCode:          doc.QuickCode,
+        FolderPath:         doc.FolderPath,
+        FolderName:         doc.FolderName,
+        SourceType:         doc.SourceType,
+        SourceDocumentType: doc.SourceDocumentType,
+        Summary:            doc.Summary,
+        CheckDate:          doc.CheckDate,
+        AttentionFlags:     doc.AttentionFlags);
 }

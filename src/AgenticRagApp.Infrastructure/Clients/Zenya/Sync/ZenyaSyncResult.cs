@@ -14,6 +14,7 @@ public sealed record ZenyaSyncResult(
     int Failed,             // per-document errors; the run continued past them
     int ForeignBlobs,       // blobs in the container without zenya_document_id - reported, never touched
     int PdfWithoutMagic,    // routed to pdf/ by content type but the bytes do not start with %PDF (D173 q3)
+    int MetadataDropped,    // metadata keys removed to fit Azure's 8 KiB cap (D204); >0 means a blob is missing a field
     long BytesDownloaded,
     IReadOnlyDictionary<string, int> WrittenByExtension,
     IReadOnlyList<ZenyaSyncFailure> Failures,

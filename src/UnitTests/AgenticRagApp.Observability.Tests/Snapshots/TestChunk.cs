@@ -50,6 +50,23 @@ internal sealed record TestChunk(
     public DateTimeOffset? ValidTo   => null;
     public string?         Version   => null;
 
+    // Source-system facts (Zenya, 2026-09-21) - the loud break this class exists to produce.
+    public string?               SourceDocumentId   => null;
+    public string?               SourceVersion      => null;
+    public string?               SourceRevision     => null;
+    public string?               SourceStatus       => null;
+    public bool?                 SourceActive       => null;
+    public string?               SourceTitle        => null;
+    public string?               SourceLanguage     => null;
+    public string?               QuickCode          => null;
+    public string?               FolderPath         => null;
+    public string?               FolderName         => null;
+    public string?               SourceType         => null;
+    public string?               SourceDocumentType => null;
+    public string?               Summary            => null;
+    public DateTimeOffset?       CheckDate          => null;
+    public IReadOnlyList<string> AttentionFlags     => [];
+
 
     // SnapshotChunk has no optional parameters by design - the record's own comment says a
     // field added to the index schema is added here in the same change, because the nine-field

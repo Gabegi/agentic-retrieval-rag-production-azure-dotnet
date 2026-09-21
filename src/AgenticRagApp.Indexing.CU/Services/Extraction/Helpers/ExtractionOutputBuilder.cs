@@ -10,9 +10,9 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // analyzer, no parallelism. That is what makes the whole shape of this stage's output testable
 // from hand-built ExtractedFiles, which is what ExtractionOutputBuilderTests does.
 //
-// The per-blob facts (LastModified) come in as the same
-// IReadOnlyDictionary<string, PdfBlobInfo> the run was handed. The extraction loop used to copy
-// those two fields into two side dictionaries as it went; the copies carried nothing the input
+// The per-blob facts (LastModified, and since 2026-09-21 the decoded Zenya metadata) come in as
+// the same IReadOnlyDictionary<string, PdfBlobInfo> the run was handed. The extraction loop used
+// to copy those fields into side dictionaries as it went; the copies carried nothing the input
 // did not already have.
 internal static class ExtractionOutputBuilder
 {
@@ -66,7 +66,10 @@ internal static class ExtractionOutputBuilder
                     Language:         f.Language,
                     Barcodes:         structure?.Barcodes ?? [],
                     Formulas:         structure?.Formulas ?? [],
-                    LineCount:        structure?.LineCount ?? 0);
+                    LineCount:        structure?.LineCount ?? 0,
+                    // Off the same listing entry as LastModifiedDate - see PdfBlobInfo. Null
+                    // on the manual corpus, decoded zenya_* facts on a synced blob.
+                    Zenya:            entry?.Zenya);
             })];
 
     // Maps the extracted files into the source-agnostic PdfExtractionOutput returned to the

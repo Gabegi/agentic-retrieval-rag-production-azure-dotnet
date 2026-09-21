@@ -130,10 +130,15 @@ var host = new HostBuilder()
 
         services.AddSingleton<RunAnalysisAgent>();
 
+        // The corpus container comes from the keyed "source-documents" registration, not from
+        // GetBlobContainerClient(config.StorageContainer) as it did until 2026-09-21 (D206). That
+        // call resolved against the unkeyed (reports) account and against StorageContainer's
+        // "protocols" default, because function_app.tf never set STORAGE_CONTAINER - so this
+        // assembler was reading a container that did not exist while the indexer read "documents".
         services.AddSingleton(sp => new RunReportAssembler(
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(config.StorageContainer),
+            sp.GetRequiredKeyedService<BlobContainerClient>("source-documents"),
             runAnalysisOptions,
             sp.GetRequiredService<ILogger<RunReportAssembler>>()));
 

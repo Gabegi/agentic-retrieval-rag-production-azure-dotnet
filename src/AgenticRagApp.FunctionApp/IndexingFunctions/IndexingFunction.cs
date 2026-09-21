@@ -120,6 +120,52 @@ public class IndexingFunction
     //
     // WEBSITE_TIME_ZONE in function_app.tf existed for that cron and is kept for now - see the
     // comment there.
+    //
+    // 2026-09-21: a timer is back, but not that one. The old TODO on the removed version named the
+    // shape exactly - "the cheap steady-state shape is ForceReindex: false, RecreateIndex: false
+    // (diff-only), with the recreate reserved for schema changes via
+    // POST /api/index?force=true&recreate=true" - and that is what this is. What the 2026-09-17
+    // removal rejected was the daily 871-page rebuild, not having a cadence; with the corpus now
+    // arriving by itself from the Zenya sync, no cadence means new documents sit unindexed until
+    // someone remembers to POST.
+    [Function("ScheduledIndexing")]
+    public async Task RunScheduled(
+        // 21:00 Dutch wall-clock, not UTC - WEBSITE_TIME_ZONE = "W. Europe Standard Time"
+        // (function_app.tf) is what makes that true, so it must not be dropped without moving this.
+        // Timed to land after the Zenya sync, which is an ADO cron and therefore UTC-only: 18:00
+        // UTC is 20:00 Amsterdam under CEST and 19:00 under CET (zenya-document-sync.yml). 21:00
+        // clears both by an hour without needing a seasonal edit on either side.
+        [TimerTrigger("0 0 21 * * *")] TimerInfo timer,
+        [DurableClient] DurableTaskClient client)
+    {
+        const string instanceId = "PdfIndexing";
+
+        // Fixed instance ID makes this a singleton: a run still going at the next tick makes that
+        // tick skip rather than overlap. That is not tidiness - SnapshotService does a
+        // read-merge-write on one blob, so two concurrent runs would lose one side's changes.
+        var existing = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
+        if (existing is null
+            || existing.RuntimeStatus is OrchestrationRuntimeStatus.Completed
+                or OrchestrationRuntimeStatus.Failed
+                or OrchestrationRuntimeStatus.Terminated)
+        {
+            // Diff-only, both flags false - the whole point of this timer.
+            //   ForceReindex: false   already-indexed documents whose blob is not newer are
+            //                         skipped, so Content Understanding is billed for new and
+            //                         changed documents only (D200 §6i measured the skip path at
+            //                         51 skipped, nothing billed, 6 s).
+            //   RecreateIndex: false  the index is never dropped, so it keeps answering queries
+            //                         throughout the run - the other half of what made the old
+            //                         17:00 rebuild expensive.
+            // "New only" is the intent but not quite the behaviour, and the difference matters:
+            // IndexDiffService also reprocesses documents whose blob is NEWER than the indexed
+            // date, and deletes chunks for documents that have left the listing. Change detection
+            // is by blob LastModified, not Zenya's zenya_version - that is D202 §5, design only.
+            await client.ScheduleNewOrchestrationInstanceAsync(
+                "IndexingOrchestrator", new IndexRequest(ForceReindex: false, RecreateIndex: false),
+                new StartOrchestrationOptions { InstanceId = instanceId });
+        }
+    }
 
     [Function("IndexingOrchestrator")]
     public async Task RunOrchestrator([OrchestrationTrigger] TaskOrchestrationContext context)

@@ -60,15 +60,14 @@ public class ExtractionServiceTests
         BlobContainerClient         documentsContainer,
         BlobContainerClient         stateContainer,
         IBlobStore                  blobStore,
-        ExtractionReporter          reporter,
-        TimeSpan?                   corpusWallClockLimit)
+        ExtractionReporter          reporter)
         : ExtractionService(
             diffService, documentsContainer,
             // The analyzer is never resolved: ExtractFileAsync is overridden below, and it is the
             // only thing that touches it or the documents container.
             null!,
             stateContainer, blobStore, reporter,
-            NullLogger<ExtractionService>.Instance, corpusWallClockLimit)
+            NullLogger<ExtractionService>.Instance)
     {
         private readonly List<string> _submitted = [];
 
@@ -112,8 +111,7 @@ public class ExtractionServiceTests
     // IndexDiffServiceTests covers the same logic directly, at the unit level.
     private static TestExtractionService BuildService(
         Mock<IBlobStore> blobStore, Func<string, ExtractedFile> extract,
-        Mock<IIndexDocumentService> indexService, Mock<IRunReportWriter> reportWriter,
-        TimeSpan? corpusWallClockLimit = null) =>
+        Mock<IIndexDocumentService> indexService, Mock<IRunReportWriter> reportWriter) =>
         new(extract,
             BuildDiffService(blobStore, indexService),
             // Documents container. Only ExtractFileAsync reads from it, and that is overridden.
@@ -128,8 +126,7 @@ public class ExtractionServiceTests
             blobStore.Object,
             // The real reporter over the mocked writer: the report assertions below are about
             // what the stage writes, and a mocked reporter would assert nothing about that.
-            new ExtractionReporter(reportWriter.Object, NullLogger<ExtractionReporter>.Instance),
-            corpusWallClockLimit);
+            new ExtractionReporter(reportWriter.Object, NullLogger<ExtractionReporter>.Instance));
 
     private static IndexDiffService BuildDiffService(
         Mock<IBlobStore> blobStore, Mock<IIndexDocumentService> indexService) =>
@@ -485,34 +482,6 @@ public class ExtractionServiceTests
 
         Assert.AreEqual(1, stats.DocsDeleted);
         CollectionAssert.Contains(stats.StaleDocumentIds.ToList(), "doc2.pdf");
-        CollectionAssert.DoesNotContain(stats.StaleDocumentIds.ToList(), "doc1.pdf");
-    }
-
-    [TestMethod]
-    public async Task CorpusWallClockLimitReached_DocumentIsNeitherSubmittedNorMarkedStale()
-    {
-        // The likelier way an updated document ends a run with no replacement content: the run
-        // stopped submitting new files before reaching it. Same conclusion as a failed
-        // extraction - nothing to swap in, so nothing may be deleted - but it arrives without any
-        // error being recorded, which is exactly why the filter keys on "did this run produce a
-        // document for it" rather than on the error list.
-        //
-        // A negative limit rather than TimeSpan.Zero: the elapsed check is `> limit`, and with an
-        // all-mocked diff the clock can still read zero ticks by the time the loop starts.
-        var blobStore    = MockBlobStore(("doc1.pdf", DateTimeOffset.Parse("2024-06-01")));
-        var indexService = MockIndexService(new() { ["doc1.pdf"] = DateTimeOffset.Parse("2024-01-01") });
-        var service      = BuildService(
-            blobStore, OkFile, indexService, MockReportWriter(isEnabled: false),
-            corpusWallClockLimit: TimeSpan.FromTicks(-1));
-
-        var (docs, stats) = await service.ExtractAsync(forceReindex: false);
-
-        Assert.AreEqual(0, service.Submitted.Count);
-        Assert.AreEqual(0, docs.Count);
-        // Not an error, and still counted as updated by the diff - it simply did not run.
-        Assert.AreEqual(1, stats.DocsUpdated);
-        Assert.AreEqual(0, stats.ValidationErrors);
-
         CollectionAssert.DoesNotContain(stats.StaleDocumentIds.ToList(), "doc1.pdf");
     }
 }

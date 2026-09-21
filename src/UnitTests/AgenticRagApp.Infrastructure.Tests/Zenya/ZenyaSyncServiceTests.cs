@@ -364,4 +364,115 @@ public class ZenyaSyncServiceTests
         Assert.AreEqual("bin",  ZenyaBlobLayout.ExtensionFor(null, null, "application/x-unknown"));
         Assert.AreEqual("bin",  ZenyaBlobLayout.ExtensionFor(null, "../etc", null), "non-alphanumeric declared extension is not trusted");
     }
+
+    // ---- D204 fields ----------------------------------------------------------------------------
+
+    // Every field below rides the per-document GET the sync already makes; this pins that each one
+    // reaches blob metadata, with the right encoding, and that the flattening of the non-scalar
+    // shapes (folder, person lists, flags, lock info) is what the reader will have to undo.
+    [TestMethod]
+    public void BuildMetadata_CarriesEveryFieldFromTheDocumentDto()
+    {
+        var metadata = ZenyaBlobLayout.BuildMetadata(FullDocument(), "application/pdf", SyncedAt);
+
+        Assert.AreEqual(Uri.EscapeDataString("Contoso/Zorg/Hygiëne"), metadata[ZenyaBlobLayout.FolderPathKey]);
+        Assert.AreEqual(Uri.EscapeDataString("Hygiëne"), metadata[ZenyaBlobLayout.FolderNameKey]);
+        Assert.AreEqual("42", metadata[ZenyaBlobLayout.FolderIdKey]);
+        Assert.AreEqual(Uri.EscapeDataString("Korte samenvatting."), metadata[ZenyaBlobLayout.SummaryKey]);
+        Assert.AreEqual("20270101", metadata[ZenyaBlobLayout.CheckDateKey]);
+        Assert.AreEqual("check_date_approaches,needs_review", metadata[ZenyaBlobLayout.AttentionKey]);
+        Assert.AreEqual("true", metadata[ZenyaBlobLayout.CanCheckKey]);
+        Assert.AreEqual("nl", metadata[ZenyaBlobLayout.LanguageKey]);
+        Assert.AreEqual("file", metadata[ZenyaBlobLayout.OriginalTypeKey]);
+        Assert.AreEqual("7", metadata[ZenyaBlobLayout.RevisionKey]);
+        Assert.AreEqual("true", metadata[ZenyaBlobLayout.ActiveKey]);
+        Assert.AreEqual("false", metadata[ZenyaBlobLayout.DownloadAsPdfKey]);
+        Assert.AreEqual(Uri.EscapeDataString("Kop"), metadata[ZenyaBlobLayout.ParsedHeaderKey]);
+        Assert.AreEqual("true", metadata[ZenyaBlobLayout.PrintHeaderKey]);
+        Assert.AreEqual(Uri.EscapeDataString("Ana Jansen; Bo de Vries"), metadata[ZenyaBlobLayout.AuthorsKey]);
+        Assert.AreEqual(Uri.EscapeDataString("Cas Smit"), metadata[ZenyaBlobLayout.AuthorizersKey]);
+        Assert.AreEqual("true", metadata[ZenyaBlobLayout.LockedKey]);
+        Assert.AreEqual("2026-09-20T10:00:00Z", metadata[ZenyaBlobLayout.LockedSinceKey]);
+        Assert.AreEqual(Uri.EscapeDataString("Dex Bos"), metadata[ZenyaBlobLayout.LockedByKey]);
+        Assert.AreEqual("false", metadata[ZenyaBlobLayout.FavoriteKey]);
+        Assert.IsTrue(metadata.Values.All(v => v.All(c => c < 128)), "every metadata value must be ASCII");
+    }
+
+    // A null attribute is omitted by Zenya, so an absent field must produce an absent KEY - never
+    // an empty string, which a reader cannot tell from "Zenya said empty".
+    [TestMethod]
+    public void BuildMetadata_OmitsKeysForFieldsZenyaDidNotReturn()
+    {
+        var metadata = ZenyaBlobLayout.BuildMetadata(
+            new ZenyaDocumentMetadata(PdfId, 1, null, "Titel", "file", null, null, null, null, true, false, null, null, null, null),
+            "application/pdf", SyncedAt);
+
+        foreach (var key in new[]
+                 {
+                     ZenyaBlobLayout.FolderPathKey, ZenyaBlobLayout.SummaryKey, ZenyaBlobLayout.CheckDateKey,
+                     ZenyaBlobLayout.AttentionKey, ZenyaBlobLayout.LanguageKey, ZenyaBlobLayout.RevisionKey,
+                     ZenyaBlobLayout.ActiveKey, ZenyaBlobLayout.AuthorsKey, ZenyaBlobLayout.LockedKey,
+                 })
+            Assert.IsFalse(metadata.ContainsKey(key), $"{key} should be absent, not empty");
+
+        // An empty person list is the same case: no names means no key.
+        Assert.IsFalse(
+            ZenyaBlobLayout.BuildMetadata(FullDocument() with { Authors = [] }, null, SyncedAt)
+                .ContainsKey(ZenyaBlobLayout.AuthorsKey));
+    }
+
+    // Azure rejects the whole upload over the 8 KiB cap, so an oversized summary must cost the
+    // summary, not the document. The drop order is declared, so the same document always loses
+    // the same key, and the caller is told which.
+    [TestMethod]
+    public void BuildMetadata_DropsDeclaredKeysInOrder_RatherThanBustingTheLimit()
+    {
+        // Dropping the header alone gets it under budget, so the summary survives: the aim is a
+        // successful upload carrying as much as will fit, not a minimal one.
+        var dropped = new List<string>();
+        var metadata = ZenyaBlobLayout.BuildMetadata(
+            FullDocument() with { Summary = new string('a', 6_000), UnparsedHeader = new string('b', 3_000) },
+            "application/pdf", SyncedAt, dropped.Add);
+
+        Assert.IsTrue(Size(metadata) <= ZenyaBlobLayout.MetadataByteBudget);
+        CollectionAssert.AreEqual(new[] { ZenyaBlobLayout.UnparsedHeaderKey }, dropped, "headers go first, and nothing more is dropped once it fits");
+        Assert.IsTrue(metadata.ContainsKey(ZenyaBlobLayout.SummaryKey));
+
+        // A summary that busts the budget on its own costs the summary - never the document.
+        dropped.Clear();
+        metadata = ZenyaBlobLayout.BuildMetadata(
+            FullDocument() with { Summary = new string('a', 9_000) }, "application/pdf", SyncedAt, dropped.Add);
+
+        Assert.IsTrue(Size(metadata) <= ZenyaBlobLayout.MetadataByteBudget);
+        Assert.AreEqual(ZenyaBlobLayout.SummaryKey, dropped[^1], "summary is the last resort, dropped only after the rest");
+        Assert.IsFalse(metadata.ContainsKey(ZenyaBlobLayout.SummaryKey));
+        Assert.IsTrue(dropped.All(k => k != ZenyaBlobLayout.DocumentIdKey && k != ZenyaBlobLayout.VersionKey),
+            "identity and the change signal are never droppable");
+        Assert.AreEqual(PdfId, metadata[ZenyaBlobLayout.DocumentIdKey]);
+        Assert.AreEqual("3", metadata[ZenyaBlobLayout.VersionKey]);
+
+        static int Size(IReadOnlyDictionary<string, string> m) =>
+            m.Sum(kv => "x-ms-meta-".Length + kv.Key.Length + kv.Value.Length);
+    }
+
+    private static readonly DateTimeOffset SyncedAt = new(2026, 9, 21, 8, 0, 0, TimeSpan.Zero);
+
+    private static ZenyaDocumentMetadata FullDocument() => new(
+        PdfId, 3, 7, "Handhygiëne protocol", "file", new ZenyaDocumentTypeMini(3, "Protocol"),
+        "application/pdf", "pdf", false, true, false, "HH-01", true, "published", "20260901120000",
+        Folder: new ZenyaFolderMini(42, "Hygiëne", "Contoso/Zorg/Hygiëne"),
+        Summary: "Korte samenvatting.",
+        CheckDate: "20270101",
+        AttentionRequiredFlags: ["check_date_approaches", "needs_review"],
+        CanCheckDocument: true,
+        CheckTaskDelegatedToUser: new ZenyaUserMini("u-9", "Eef Mol"),
+        Language: "nl",
+        OriginalType: "file",
+        ParsedHeader: "Kop",
+        UnparsedHeader: "Kop onbewerkt",
+        PrintHeaderRequired: true,
+        Authors: [new ZenyaUserMini("u-1", "Ana Jansen"), new ZenyaUserMini("u-2", "Bo de Vries")],
+        Authorizers: [new ZenyaUserMini("u-3", "Cas Smit")],
+        LockInfo: new ZenyaLockInfo(true, "2026-09-20T10:00:00Z", new ZenyaUserMini("u-4", "Dex Bos")),
+        MarkedAsFavorite: false);
 }

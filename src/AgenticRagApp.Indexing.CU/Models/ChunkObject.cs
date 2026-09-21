@@ -152,6 +152,23 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     [JsonIgnore] public IReadOnlyList<string> Hyperlinks  => Metadata.Hyperlinks;
     [JsonIgnore] public IReadOnlyList<string> Annotations => Metadata.Annotations;
 
+    // Source-system facts (2026-09-21) - index fields, so the snapshot must carry them.
+    [JsonIgnore] public string?               SourceDocumentId   => Metadata.SourceDocumentId;
+    [JsonIgnore] public string?               SourceVersion      => Metadata.SourceVersion;
+    [JsonIgnore] public string?               SourceRevision     => Metadata.SourceRevision;
+    [JsonIgnore] public string?               SourceStatus       => Metadata.SourceStatus;
+    [JsonIgnore] public bool?                 SourceActive       => Metadata.SourceActive;
+    [JsonIgnore] public string?               SourceTitle        => Metadata.SourceTitle;
+    [JsonIgnore] public string?               SourceLanguage     => Metadata.SourceLanguage;
+    [JsonIgnore] public string?               QuickCode          => Metadata.QuickCode;
+    [JsonIgnore] public string?               FolderPath         => Metadata.FolderPath;
+    [JsonIgnore] public string?               FolderName         => Metadata.FolderName;
+    [JsonIgnore] public string?               SourceType         => Metadata.SourceType;
+    [JsonIgnore] public string?               SourceDocumentType => Metadata.SourceDocumentType;
+    [JsonIgnore] public string?               Summary            => Metadata.Summary;
+    [JsonIgnore] public DateTimeOffset?       CheckDate          => Metadata.CheckDate;
+    [JsonIgnore] public IReadOnlyList<string> AttentionFlags     => Metadata.AttentionFlags;
+
     // ── Derived from Content ────────────────────────────────────────────────
 
     // Stored alongside Metadata.TokenCount, not derived from it: chars/token is not constant
@@ -350,6 +367,82 @@ public sealed class ChunkMetadata
     // with by FamilyId (Medido/Medimo) - a possible-confusion flag, not a family relationship.
     [JsonPropertyName("confusable_with")]
     public IReadOnlyList<string> ConfusableWith { get; set; } = [];
+
+    // ── Source-system facts (Zenya, 2026-09-21, D204 §9) ────────────────────
+    // Stamped by DocumentStamp from the blob's zenya_* metadata; null on every chunk of the
+    // manual corpus. The `source_` prefix marks "what the source system says" as distinct from
+    // what this pipeline derived - source_version is Zenya's integer, version is the title
+    // regex; source_title is Zenya's, title is CU's; source_language is Zenya's raw value,
+    // language is the detector's ISO code. DocumentStamp explains why each pair stays apart.
+
+    // Zenya's document GUID. DocumentId above is the blob name (pdf/{guid}.pdf on the synced
+    // container), so on that corpus the two agree up to the prefix; on the manual corpus this
+    // is null and DocumentId is the human-named file.
+    [JsonPropertyName("source_document_id")]
+    public string? SourceDocumentId { get; set; }
+
+    // Zenya's version and revision, as strings so they round-trip through SearchDocument the
+    // way D200 §6h showed dates do not (D202 §3).
+    [JsonPropertyName("source_version")]
+    public string? SourceVersion { get; set; }
+
+    [JsonPropertyName("source_revision")]
+    public string? SourceRevision { get; set; }
+
+    // Lifecycle: the `state` string ("published") and the authoritative `active` flag.
+    [JsonPropertyName("source_status")]
+    public string? SourceStatus { get; set; }
+
+    [JsonPropertyName("source_active")]
+    public bool? SourceActive { get; set; }
+
+    [JsonPropertyName("source_title")]
+    public string? SourceTitle { get; set; }
+
+    [JsonPropertyName("source_language")]
+    public string? SourceLanguage { get; set; }
+
+    // Snelcode ("NW-46-42") - the identifier staff use. Filterable so a pasted code finds the
+    // document; nothing else in the index carries it.
+    [JsonPropertyName("quick_code")]
+    public string? QuickCode { get; set; }
+
+    // Zenya's folder tree: the full breadcrumb and the leaf. A human-curated classification -
+    // the candidate to be measured against the LLM domain_tag (D204 §5), not a replacement yet.
+    [JsonPropertyName("folder_path")]
+    public string? FolderPath { get; set; }
+
+    [JsonPropertyName("folder_name")]
+    public string? FolderName { get; set; }
+
+    // Zenya `type` (file | structured_document | ...) and document_type.name ("Protocol").
+    [JsonPropertyName("source_type")]
+    public string? SourceType { get; set; }
+
+    [JsonPropertyName("source_document_type")]
+    public string? SourceDocumentType { get; set; }
+
+    // Author-written abstract. Searchable: document-level triage before chunk-level retrieval.
+    [JsonPropertyName("summary")]
+    public string? Summary { get; set; }
+
+    // When the document is next due for review. NOT valid_to: overdue-for-review is not
+    // no-longer-applies, and overloading valid_to would be the wrong-meaning mistake D202 §6.2
+    // rejected for version.
+    [JsonPropertyName("check_date")]
+    public DateTimeOffset? CheckDate { get; set; }
+
+    // Zenya's own attention flags (e.g. check_date_approaches) - its staleness verdict.
+    [JsonPropertyName("attention_flags")]
+    public IReadOnlyList<string> AttentionFlags { get; set; } = [];
+
+    // Persons, from Zenya. On the chunk for traceability and deliberately NOT Search-indexed -
+    // named individuals in a retrieval index is a privacy decision for the PO (D204 §3d), and
+    // the same treatment Author above has always had. No JsonPropertyName: not on the index
+    // schema, so not in the projection.
+    public IReadOnlyList<string> Authors                { get; set; } = [];
+    public IReadOnlyList<string> Authorizers            { get; set; } = [];
+    public IReadOnlyList<string> DocumentAdministrators { get; set; } = [];
 
     // ── Dates and lifecycle ─────────────────────────────────────────────────
 

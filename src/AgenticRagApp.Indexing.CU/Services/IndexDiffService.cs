@@ -34,8 +34,8 @@ public class IndexDiffService : IIndexDiffService
     public async Task<IndexDiff> FindDocsNotInIndexAsync(
         bool forceReindex, CancellationToken ct = default)
     {
-        // What documents exist in blob storage right now - id + LastModified only, no
-        // download or content yet. This is the "source" side of the diff.
+        // What documents exist in blob storage right now - id + LastModified + the blob's own
+        // metadata, no download or content yet. This is the "source" side of the diff.
         var sourceListing = await ListDocumentsInBlobAsync(ct);
 
         // What documents are already in the Search index - id + last-indexed date. This is
@@ -88,7 +88,7 @@ public class IndexDiffService : IIndexDiffService
         var result = new Dictionary<string, PdfBlobInfo>(StringComparer.OrdinalIgnoreCase);
         var blobs  = await _blobStore.ListBlobsAsync(_container, ct: ct);
 
-        foreach (var (name, lastModified, contentLength, _) in blobs)
+        foreach (var (name, lastModified, contentLength, metadata) in blobs)
         {
             if (!name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) continue;
 
@@ -98,7 +98,13 @@ public class IndexDiffService : IIndexDiffService
                     "'{Blob}' has no LastModified from blob storage — treating as never-modified so it isn't reprocessed every run.",
                     name);
 
-            result[name] = new PdfBlobInfo(lastModified ?? DateTimeOffset.MinValue, contentLength);
+            // The custom metadata was discarded here (`_`) until 2026-09-21. It is the sync's
+            // zenya_* contract (ZenyaBlobLayout), decoded once per blob and carried on the entry so
+            // extraction and chunking can stamp it without a second listing. Null when the blob
+            // carries no zenya_document_id - i.e. every blob in the manual corpus - so the diff
+            // and everything after it behave exactly as before on "protocols".
+            var zenya = ZenyaMetadata.FromBlobMetadata(metadata);
+            result[name] = new PdfBlobInfo(lastModified ?? DateTimeOffset.MinValue, contentLength, zenya.IsPresent ? zenya : null);
         }
 
         return result;

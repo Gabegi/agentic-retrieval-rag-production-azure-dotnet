@@ -51,7 +51,6 @@ public class ExtractionService : IExtractionService
     private readonly IBlobStore                   _blobStore;
     private readonly ExtractionReporter           _reporter;
     private readonly ILogger<ExtractionService>   _logger;
-    private readonly TimeSpan                     _corpusWallClockLimit;
     // Nullable for tests only; the DI registration always passes it. See the red flag below.
     private readonly ContentUnderstandingDefaultsState? _cuDefaultsState;
     // The index's `language` producer - CU reports no language at all (see
@@ -79,12 +78,6 @@ public class ExtractionService : IExtractionService
     // limit, which DocumentLanguageDetector enforces independently.
     private const int LanguageSampleMaxChars = 1_200;
 
-    // Below host.json's durableTask.activityFunctionTimeout (60 minutes) - a fixed margin under
-    // it so a file that is already mid-download/mid-analyze when the corpus wall clock is
-    // checked still has room to finish before Durable's own timeout would redeliver and re-bill
-    // the whole activity.
-    private static readonly TimeSpan CorpusWallClockLimit = TimeSpan.FromMinutes(50);
-
     // The first analysis's raw response body this run, for the cu-raw-response report - the
     // capture CUHelper's typed mapping is verified against. One per run (first writer wins via
     // Interlocked), so memory never scales with the corpus; written in ExtractAsync alongside
@@ -110,7 +103,6 @@ public class ExtractionService : IExtractionService
         IBlobStore                   blobStore,
         ExtractionReporter           reporter,
         ILogger<ExtractionService>   logger,
-        TimeSpan?                    corpusWallClockLimit = null,
         ContentUnderstandingDefaultsState? cuDefaultsState = null,
         IDocumentLanguageDetector?   languageDetector = null)
     {
@@ -121,7 +113,6 @@ public class ExtractionService : IExtractionService
         _blobStore            = blobStore;
         _reporter             = reporter;
         _logger               = logger;
-        _corpusWallClockLimit = corpusWallClockLimit ?? CorpusWallClockLimit;
         _cuDefaultsState      = cuDefaultsState;
         _languageDetector     = languageDetector;
     }
@@ -192,31 +183,9 @@ public class ExtractionService : IExtractionService
                     // in-flight tasks, discarding paid calls mid-flight.
                     try
                     {
-                        // Corpus-level wall-clock guard: a partial run that stops submitting new
-                        // files here completes cleanly well inside Durable's
-                        // activityFunctionTimeout; a run that keeps submitting until that timeout
-                        // fires gets the WHOLE activity redelivered, re-billing every
-                        // already-completed analysis in this run, not just whichever file was
-                        // still in flight. Checked per file (not just once) since this loop runs
-                        // MaxExtractionParallelism-wide and stays open for the whole corpus.
-                        //
-                        // Deliberately not recorded as a failure: this is an intentional,
-                        // graceful stopping point, not a defect. Simply not extracting this file
-                        // this run is enough - the pre-extraction diff never advances its indexed
-                        // date, so it is picked up as new/updated again on the very next run.
-                        if (DateTimeOffset.UtcNow - runAt > _corpusWallClockLimit)
-                        {
-                            _logger.LogWarning(
-                                "'{Blob}' not submitted - corpus wall-clock limit ({Limit}) reached; stopping new submissions this run so the activity completes cleanly. Will be picked up on the next run.",
-                                name, _corpusWallClockLimit);
-                            return;
-                        }
-
                         // One span per document (observability plan 2.4) - the per-file node
                         // under the stage span ExtractActivity starts, so the App Insights
                         // transaction view shows which documents a slow run spent its time on.
-                        // Started after the wall-clock guard on purpose: a file that was never
-                        // submitted is not a unit of work to trace.
                         using var span = Instrumentation.ActivitySource.StartActivity("cu.extract_document");
                         span?.SetTag("cu.blob", name);
 

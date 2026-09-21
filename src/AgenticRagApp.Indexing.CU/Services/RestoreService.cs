@@ -121,6 +121,24 @@ public class RestoreService : IRestoreService
                     FigureCaptions     = s.FigureCaptions,
                     Hyperlinks         = s.Hyperlinks  ?? [],
                     Annotations        = s.Annotations ?? [],
+
+                    // Source-system facts (2026-09-21): restored, never re-read - this side has
+                    // no listing of the source container. Null from a pre-2026-09-21 snapshot.
+                    SourceDocumentId   = s.SourceDocumentId,
+                    SourceVersion      = s.SourceVersion,
+                    SourceRevision     = s.SourceRevision,
+                    SourceStatus       = s.SourceStatus,
+                    SourceActive       = s.SourceActive,
+                    SourceTitle        = s.SourceTitle,
+                    SourceLanguage     = s.SourceLanguage,
+                    QuickCode          = s.QuickCode,
+                    FolderPath         = s.FolderPath,
+                    FolderName         = s.FolderName,
+                    SourceType         = s.SourceType,
+                    SourceDocumentType = s.SourceDocumentType,
+                    Summary            = s.Summary,
+                    CheckDate          = s.CheckDate,
+                    AttentionFlags     = s.AttentionFlags ?? [],
                 },
             });
         }

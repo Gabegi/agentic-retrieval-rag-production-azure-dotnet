@@ -74,7 +74,28 @@ public record SearchUploadChunk(
     [property: JsonPropertyName("annotations")] IReadOnlyList<string> Annotations,
 
     [property: JsonPropertyName("is_overlap")] bool IsOverlap,
-    [property: JsonPropertyName("heading_located")] bool HeadingLocated)
+    [property: JsonPropertyName("heading_located")] bool HeadingLocated,
+
+    // ── Source-system facts (Zenya, 2026-09-21, D204 §9) ────────────────────
+    // Fifteen fields off the blob's zenya_* metadata via DocumentStamp; see ChunkMetadata for
+    // what each is and why it is kept apart from its look-alike. Trailing and defaulted so the
+    // positional `new SearchUploadChunk(...)` in tests keeps compiling. The persons the chunk
+    // carries are deliberately not projected (D204 §3d).
+    [property: JsonPropertyName("source_document_id")]   string? SourceDocumentId   = null,
+    [property: JsonPropertyName("source_version")]       string? SourceVersion      = null,
+    [property: JsonPropertyName("source_revision")]      string? SourceRevision     = null,
+    [property: JsonPropertyName("source_status")]        string? SourceStatus       = null,
+    [property: JsonPropertyName("source_active")]        bool?   SourceActive       = null,
+    [property: JsonPropertyName("source_title")]         string? SourceTitle        = null,
+    [property: JsonPropertyName("source_language")]      string? SourceLanguage     = null,
+    [property: JsonPropertyName("quick_code")]           string? QuickCode          = null,
+    [property: JsonPropertyName("folder_path")]          string? FolderPath         = null,
+    [property: JsonPropertyName("folder_name")]          string? FolderName         = null,
+    [property: JsonPropertyName("source_type")]          string? SourceType         = null,
+    [property: JsonPropertyName("source_document_type")] string? SourceDocumentType = null,
+    [property: JsonPropertyName("summary")]              string? Summary            = null,
+    [property: JsonPropertyName("check_date")]           DateTimeOffset? CheckDate  = null,
+    [property: JsonPropertyName("attention_flags")]      IReadOnlyList<string>? AttentionFlags = null)
 {
     public static SearchUploadChunk From(ChunkObject chunk) => new(
         Id:                 chunk.Metadata.Id,
@@ -116,7 +137,22 @@ public record SearchUploadChunk(
         Hyperlinks:         chunk.Hyperlinks,
         Annotations:        chunk.Annotations,
         IsOverlap:          chunk.IsOverlap,
-        HeadingLocated:     chunk.HeadingLocated);
+        HeadingLocated:     chunk.HeadingLocated,
+        SourceDocumentId:   chunk.Metadata.SourceDocumentId,
+        SourceVersion:      chunk.Metadata.SourceVersion,
+        SourceRevision:     chunk.Metadata.SourceRevision,
+        SourceStatus:       chunk.Metadata.SourceStatus,
+        SourceActive:       chunk.Metadata.SourceActive,
+        SourceTitle:        chunk.Metadata.SourceTitle,
+        SourceLanguage:     chunk.Metadata.SourceLanguage,
+        QuickCode:          chunk.Metadata.QuickCode,
+        FolderPath:         chunk.Metadata.FolderPath,
+        FolderName:         chunk.Metadata.FolderName,
+        SourceType:         chunk.Metadata.SourceType,
+        SourceDocumentType: chunk.Metadata.SourceDocumentType,
+        Summary:            chunk.Metadata.Summary,
+        CheckDate:          chunk.Metadata.CheckDate,
+        AttentionFlags:     chunk.Metadata.AttentionFlags);
 }
 
 // The key plus one field, for patching family_id onto rows whose content did not change.

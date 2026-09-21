@@ -31,10 +31,17 @@ public static class FlagEvaluator
     private const double ValidationErrorCriticalRate = 0.05;
     private const double MissingTitleCriticalRate    = 0.10;
 
-    // Sourced: docs/2608/260825/first-run-findings.md watch item - a run past ~70 min risks
-    // Durable's 60-min activityFunctionTimeout redelivering (and re-billing) the whole
-    // ExtractActivity; 45 min is the wall-clock guard's (50 min) neighborhood, where a healthy
-    // run on this corpus (11m47s-14m30s measured 2026-08-26) should never be.
+    // Sourced: a healthy run on this corpus measured 11m47s-14m30s on 2026-08-26, so 45 min is
+    // several times the observed spread - far enough out that only a genuinely degraded run
+    // reaches it.
+    //
+    // These two were originally pinned to host.json's durableTask.activityFunctionTimeout
+    // (60 min) and the 50-min corpus wall clock: past ~70 min the activity was thought to be
+    // redelivered and every Content Understanding page re-billed. Both were removed on
+    // 2026-09-21 - activityFunctionTimeout is not a Durable option at all (absent from every
+    // Durable package binary; see D206) so it never applied, and the wall clock it justified
+    // went with it. Only the measured spread above still supports the warn threshold; the
+    // 70-min critical is uncalibrated and wants a real slow-run measurement behind it.
     private static readonly TimeSpan ExtractDurationWarn     = TimeSpan.FromMinutes(45);
     private static readonly TimeSpan ExtractDurationCritical = TimeSpan.FromMinutes(70);
 

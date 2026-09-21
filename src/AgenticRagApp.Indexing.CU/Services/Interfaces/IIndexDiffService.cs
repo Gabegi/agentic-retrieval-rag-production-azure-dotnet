@@ -21,9 +21,9 @@ public interface IIndexDiffService
 
 // One run's diff decision.
 //
-// EntriesToProcess carries the full PdfBlobInfo (LastModified/ContentLength), not just
-// the ids, so the orchestrator never lists the container a second time - see
-// ExtractionService's extraction loop.
+// EntriesToProcess carries the full PdfBlobInfo (LastModified/ContentLength, and since
+// 2026-09-21 the decoded zenya_* metadata), not just the ids, so the orchestrator never lists
+// the container a second time - see ExtractionService's extraction loop.
 //
 // SourceCount/IndexedCount are the raw sizes of the two sides, carried purely so
 // ExtractionService can run its high-new-doc-fraction tripwire without re-reading either

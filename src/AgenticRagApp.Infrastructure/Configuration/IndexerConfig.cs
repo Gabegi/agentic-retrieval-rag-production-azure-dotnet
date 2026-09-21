@@ -22,7 +22,24 @@ public class IndexerConfig
     [Required(ErrorMessage = "LANGUAGE_ENDPOINT is required")]            public string LanguageEndpoint { get; init; } = default!;
     // Below all have a fallback applied at construction time (see ServiceCollectionExtensions),
     // so they're never actually null/empty in practice - not [Required].
-    public string StorageContainer             { get; init; } = "protocols";
+    //
+    // The source corpus lives on its own storage account since 2026-09-21 (D206), so it takes two
+    // settings to name: this URL and StorageContainer below. Both are resolved in exactly one place
+    // - the "source-documents" keyed BlobContainerClient in ServiceCollectionExtensions - and no
+    // consumer names either of them again.
+    //
+    // Falls back to StorageAccountUrl when DOCUMENTS_STORAGE_ACCOUNT_URL is unset, so a host that
+    // predates the split (local.settings.json, the eval harness, a single-account environment)
+    // keeps working with one account and the split stays opt-in per environment.
+    public string DocumentsStorageAccountUrl   { get; init; } = default!;
+    // Was "protocols" until 2026-09-21, which was wrong in the only host that relied on the
+    // default: function_app.tf never set STORAGE_CONTAINER, so the deployed Function App handed
+    // RunReportAssembler a container terraform had never created, while the indexer read a
+    // hardcoded "documents" beside it. Terraform now sets this explicitly; the default matches it
+    // so the two can't drift apart again - if you change one, change the other.
+    // "zenya-documents" (not "documents") since the same day: the indexed corpus is what the Zenya
+    // sync mirrors. See function_app.tf for what that switch costs.
+    public string StorageContainer             { get; init; } = "zenya-documents";
     // Optional here, but required by the indexing side - the Content Understanding client is
     // only registered when set, and AgenticRagApp.Indexing.CU's AddIndexing throws without
     // it. Optional at this level because the query-side host does no extraction and should not

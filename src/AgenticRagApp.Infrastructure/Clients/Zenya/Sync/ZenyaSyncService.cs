@@ -98,9 +98,9 @@ public sealed class ZenyaSyncService
 
         var result = c.ToResult(dryRun, stopwatch.Elapsed);
         _logger.LogInformation(
-            "Sync {Mode} done in {Elapsed}: listed {Listed}, new {New}, changed {Changed}, unchanged {Unchanged}, removed {Removed}, authored-skipped {Authored}, not-downloadable {NotDownloadable}, failed {Failed}, bytes {Bytes}.",
+            "Sync {Mode} done in {Elapsed}: listed {Listed}, new {New}, changed {Changed}, unchanged {Unchanged}, removed {Removed}, authored-skipped {Authored}, not-downloadable {NotDownloadable}, failed {Failed}, metadata-dropped {MetadataDropped}, bytes {Bytes}.",
             dryRun ? "dry run" : "run", result.Elapsed, result.Listed, result.New, result.Changed, result.Unchanged,
-            result.Removed, result.AuthoredSkipped, result.NotDownloadable, result.Failed, result.BytesDownloaded);
+            result.Removed, result.AuthoredSkipped, result.NotDownloadable, result.Failed, result.MetadataDropped, result.BytesDownloaded);
         return result;
     }
 
@@ -157,7 +157,16 @@ public sealed class ZenyaSyncService
 
             stage = "upload";
             buffer.Position = 0;
-            var metadata = ZenyaBlobLayout.BuildMetadata(document, contentType, _time.GetUtcNow());
+            // A dropped key is data loss, so it is reported rather than left to be discovered as
+            // an absent field months later (D204: absent must never be indistinguishable from
+            // "never fetched").
+            var metadata = ZenyaBlobLayout.BuildMetadata(document, contentType, _time.GetUtcNow(),
+                key =>
+                {
+                    c.MetadataDropped++;
+                    _logger.LogWarning("{DocumentId} '{Title}': dropped blob metadata {Key} to stay inside the {Budget}-byte limit.",
+                        document.DocumentId, document.Title, key, ZenyaBlobLayout.MetadataByteBudget);
+                });
             await _store.UploadAsync(blobName, buffer, contentType, metadata, ct);
             c.BytesDownloaded += buffer.Length;
             c.CountExtension(Path.GetExtension(blobName).TrimStart('.'));
@@ -189,7 +198,7 @@ public sealed class ZenyaSyncService
 
     private sealed class Counters
     {
-        public int Listed, New, Changed, Unchanged, Removed, AuthoredSkipped, NotDownloadable, Failed, ForeignBlobs, PdfWithoutMagic;
+        public int Listed, New, Changed, Unchanged, Removed, AuthoredSkipped, NotDownloadable, Failed, ForeignBlobs, PdfWithoutMagic, MetadataDropped;
         public long BytesDownloaded;
         public readonly Dictionary<string, int> ByExtension = new(StringComparer.Ordinal);
         public readonly List<ZenyaSyncFailure> Failures = [];
@@ -199,6 +208,6 @@ public sealed class ZenyaSyncService
 
         public ZenyaSyncResult ToResult(bool dryRun, TimeSpan elapsed) => new(
             dryRun, Listed, New, Changed, Unchanged, Removed, AuthoredSkipped, NotDownloadable, Failed,
-            ForeignBlobs, PdfWithoutMagic, BytesDownloaded, ByExtension, Failures, elapsed);
+            ForeignBlobs, PdfWithoutMagic, MetadataDropped, BytesDownloaded, ByExtension, Failures, elapsed);
     }
 }

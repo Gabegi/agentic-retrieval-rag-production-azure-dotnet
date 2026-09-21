@@ -37,9 +37,11 @@ public class SaveRunAnalysisActivityActivationTests
     {
         var services = new ServiceCollection();
 
-        // Mirrors Program.cs: BlobServiceClient registered, no unkeyed BlobContainerClient -
+        // Mirrors Program.cs: BlobServiceClient registered, no UNKEYED BlobContainerClient -
         // if SaveRunAnalysisActivity's constructor ever regresses to asking for one directly,
-        // this call throws exactly the exception seen in production.
+        // this call throws exactly the exception seen in production. The keyed registration
+        // below does not weaken that: GetRequiredService<BlobContainerClient>() still finds
+        // nothing, which is the regression this test exists to catch.
         services.AddSingleton(new Mock<IBlobStore>().Object);
         services.AddSingleton(new BlobServiceClient("UseDevelopmentStorage=true"));
         services.AddSingleton(new Mock<IChatClient>().Object);
@@ -47,13 +49,20 @@ public class SaveRunAnalysisActivityActivationTests
         services.AddSingleton(NullLoggerFactory.Instance);
         services.AddLogging();
 
+        // The source corpus, keyed - since 2026-09-21 (D206) it is a different storage account
+        // from the reports one, so Program.cs resolves it by key instead of naming a container
+        // on the unkeyed client. Built from a second BlobServiceClient the same way Program.cs
+        // does, so this mirrors the real registration rather than approximating it.
+        services.AddKeyedSingleton<BlobContainerClient>("source-documents", (_, _) =>
+            new BlobServiceClient("UseDevelopmentStorage=true").GetBlobContainerClient("documents"));
+
         // Concrete (non-interface) dependencies - Moq can't mock sealed classes, so these are
-        // real instances built the same way, one level down: BlobContainerClient itself is
+        // real instances built the same way, one level down: an unkeyed BlobContainerClient is
         // never registered, only ever built from BlobServiceClient inline.
         services.AddSingleton(sp => new RunReportAssembler(
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("pipeline-reports"),
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
+            sp.GetRequiredKeyedService<BlobContainerClient>("source-documents"),
             sp.GetRequiredService<RunAnalysisOptions>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<RunReportAssembler>()));
         services.AddSingleton(sp => new RunAnalysisAgent(

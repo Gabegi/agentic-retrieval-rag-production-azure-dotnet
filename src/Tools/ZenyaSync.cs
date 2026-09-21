@@ -1,5 +1,6 @@
 #:project ../AgenticRagApp.Infrastructure/AgenticRagApp.Infrastructure.csproj
 #:package Microsoft.Extensions.Hosting
+#:property PublishAot=false
 
 using AgenticRagApp.Infrastructure.Clients.Zenya;
 using AgenticRagApp.Infrastructure.Clients.Zenya.Sync;
@@ -23,6 +24,20 @@ using Microsoft.Extensions.Logging;
 // its version from Directory.Packages.props (central package management rejects a version on
 // the directive). Its restore graph is locked by src/Tools/packages.lock.json, the same
 // guarantee the project had.
+//
+// 2026-09-21: `#:property PublishAot=false` above is load-bearing - do not drop it. A file-based
+// app's implicit project defaults to PublishAot=true, which pulls in Microsoft.DotNet.ILCompiler
+// AND makes the restore graph runtime-specific. Both are fatal to a COMMITTED lock file, because
+// the lock then records the machine that generated it:
+//   - a lock written on Windows carries net10.0/win-x64 and nothing else, so the Linux hosted
+//     agent fails with "project's runtime identifiers: linux-x64, lock file's: win-x64";
+//   - ILCompiler's version tracks the SDK, so a lock pinning 10.0.9 breaks the moment the agent's
+//     floating 10.0.x rolls to 10.0.12 - which is exactly how this surfaced, on the 2026-09-21
+//     run, as NU1004 on both counts at once.
+// Nothing here is ever AOT-published (the pipeline does `dotnet run`), so turning it off costs
+// nothing and makes the lock platform- and SDK-patch-neutral: one net10.0 section, no ILCompiler.
+// If the lock ever needs regenerating: `dotnet restore src/Tools/ZenyaSync.cs --force-evaluate`,
+// then confirm it still has no "/win-x64" (or any other RID) section before committing.
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddZenyaClient(builder.Configuration);
 builder.Services.AddZenyaSync(builder.Configuration);
@@ -61,6 +76,7 @@ Console.WriteLine($"  not-downloadable  {result.NotDownloadable}");
 Console.WriteLine($"  failed            {result.Failed}");
 Console.WriteLine($"  foreign blobs     {result.ForeignBlobs}");
 Console.WriteLine($"  pdf without %PDF  {result.PdfWithoutMagic}");
+Console.WriteLine($"  metadata dropped  {result.MetadataDropped}");
 Console.WriteLine($"  bytes downloaded  {result.BytesDownloaded}");
 foreach (var (ext, count) in result.WrittenByExtension.OrderByDescending(kv => kv.Value))
     Console.WriteLine($"  written .{ext,-6} {count}");

@@ -74,7 +74,7 @@ public static class ServiceCollectionExtensions
         // The pre-extraction diff (container listing + index state + comparison), split out of
         // ExtractionService so the decision logic is testable on its own.
         services.AddSingleton<IIndexDiffService>(sp => new IndexDiffService(
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
+            sp.GetRequiredKeyedService<BlobContainerClient>("source-documents"),
             sp.GetRequiredService<IBlobStore>(),
             sp.GetRequiredService<IIndexDocumentService>(),
             sp.GetRequiredService<ILogger<IndexDiffService>>()));
@@ -84,11 +84,13 @@ public static class ServiceCollectionExtensions
         // writes through IRunReportWriter, which the host owns.
         services.AddSingleton<ExtractionReporter>();
 
-        // The two containers are different and both positional: "documents" is what the per-file
-        // extraction downloads from, "pipeline-temp" is where the run-state baseline lives.
+        // The two containers are different and both positional: "source-documents" is what the
+        // per-file extraction downloads from, "pipeline-temp" is where the run-state baseline
+        // lives. They are on different storage accounts as well as different containers since
+        // 2026-09-21 (D206) - both keys resolve to a whole client, so neither is named here.
         services.AddSingleton<IExtractionService>(sp => new ExtractionService(
             sp.GetRequiredService<IIndexDiffService>(),
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient("documents"),
+            sp.GetRequiredKeyedService<BlobContainerClient>("source-documents"),
             sp.GetRequiredService<IContentAnalysisClient>(),
             sp.GetRequiredKeyedService<BlobContainerClient>("pipeline-temp"),
             sp.GetRequiredService<IBlobStore>(),

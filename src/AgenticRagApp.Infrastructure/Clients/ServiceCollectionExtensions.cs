@@ -66,7 +66,11 @@ public static class ServiceCollectionExtensions
             ContentSafetyEndpoint        = configuration["CONTENT_SAFETY_ENDPOINT"]!,
             LanguageEndpoint             = configuration["LANGUAGE_ENDPOINT"]!,
             StorageAccountUrl            = configuration["STORAGE_ACCOUNT_URL"]!,
-            StorageContainer             = configuration["STORAGE_CONTAINER"] ?? "protocols",
+            // Unset = same account as everything else, which is what every host did before the
+            // 2026-09-21 split (D206) and what a single-account environment still does.
+            DocumentsStorageAccountUrl   = configuration["DOCUMENTS_STORAGE_ACCOUNT_URL"]
+                                           ?? configuration["STORAGE_ACCOUNT_URL"]!,
+            StorageContainer             = configuration["STORAGE_CONTAINER"] ?? "zenya-documents",
             SearchIndexName              = configuration["SEARCH_INDEX_NAME"]!,
             KnowledgeSourceName          = configuration["KNOWLEDGE_SOURCE_NAME"]!,
             KnowledgeBaseName            = configuration["KNOWLEDGE_BASE_NAME"]!,
@@ -97,8 +101,29 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(config);
         services.AddSingleton(credential);
 
+        // The unkeyed client is the DATA account: reports, artifacts, eval history. Every consumer
+        // that calls GetBlobContainerClient on it is naming a container there.
         services.AddSingleton(_ =>
             new BlobServiceClient(new Uri(config.StorageAccountUrl), credential));
+
+        // The source corpus, on its own account since 2026-09-21 (D206) — see infra/storage.tf for
+        // why it is split off (the Zenya sync has to open that account's firewall from an ADO
+        // agent, and storage network rules are account-wide).
+        //
+        // Registered as a keyed CONTAINER client, not a keyed BlobServiceClient, so the container
+        // name is resolved once here instead of at each consumer. Naming it again per call site is
+        // exactly how pipeline-reports and pipeline-artifacts each ended up with a managed
+        // container sitting empty beside an auto-created twin (see IBlobStore) - and before this
+        // registration existed, the indexer's hardcoded "documents" and RunReportAssembler's
+        // config-driven container had already drifted apart in the deployed app.
+        //
+        // Keyed "source-documents" rather than "documents": it names the role, like the
+        // "pipeline-temp" registration below, so pointing STORAGE_CONTAINER at zenya-documents
+        // (the switch ZenyaMetadata describes) stays a config change with no key left lying about
+        // claiming otherwise.
+        services.AddKeyedSingleton<BlobContainerClient>("source-documents", (_, _) =>
+            new BlobServiceClient(new Uri(config.DocumentsStorageAccountUrl), credential)
+                .GetBlobContainerClient(config.StorageContainer));
 
         // Pipeline temp storage — passes large payloads between Durable activities via blob
         // rather than through Durable Table Storage (64KB row-size limit). Functions host only -

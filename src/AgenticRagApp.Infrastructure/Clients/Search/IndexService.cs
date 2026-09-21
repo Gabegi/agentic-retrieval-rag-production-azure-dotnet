@@ -23,10 +23,18 @@ namespace AgenticRagApp.Infrastructure.Clients.Search;
 //                            domain_tag, and it needs a vocabulary nobody has settled yet.
 //   - grain                - stamped, but a constant "child": the parent/document grains it
 //                            distinguishes are not emitted by any route today.
-//   - created_at, mod_date - stamped, but always null: their only producer was the PdfPig
+//   - created_at           - stamped, but always null: its only producer was the PdfPig
 //                            preflight's read of the PDF Info dictionary, removed with Document
 //                            Intelligence; ExtractionOutputBuilder writes null explicitly and
-//                            Content Understanding returns no equivalent.
+//                            Content Understanding returns no equivalent. Zenya's
+//                            published_date_time would fill it but is listing-only and not yet
+//                            stamped (D204 item 3).
+//   - mod_date             - same history, but since 2026-09-21 DocumentStamp fills it from the
+//                            blob's zenya_last_modified when present - so it is null on the
+//                            manual corpus and populated on zenya-documents.
+//   - the source_* block   - fifteen Zenya fields (2026-09-21): null on the manual corpus by
+//                            construction, populated on zenya-documents. Not producer-less -
+//                            producer-not-yet-pointed-at.
 // section_id was on this list and is no longer - ChunkMetadataBuilder produces it.
 // page_extraction_flag left the schema on 2026-09-09: it had been a constant false since the CU
 // switch (CU has no typed picture-only signal), see docs/2609/260909/cu-helpers-review.md. Anything added here should be removed from it the moment that changes,
@@ -274,6 +282,40 @@ public class IndexService : IIndexService
                 // The per-chunk form of the heading-locator's failure counter: the aggregate
                 // says how many failed, this says which chunks to distrust.
                 new SimpleField("heading_located",    SearchFieldDataType.Boolean)        { IsFilterable = true },
+
+                // ── Source system (Zenya, 2026-09-21, D204 §9) ─────────────────────────
+                // What the source system says about the document, stamped from the blob's
+                // zenya_* metadata (ZenyaBlobLayout writes, ZenyaMetadata reads, DocumentStamp
+                // stamps). Null on every row of the manual "protocols" corpus; populated once
+                // the indexer is pointed at zenya-documents (D202 §6). Adding them changes the
+                // definition hash, so the index is recreated once - the recreate the container
+                // switch forces anyway.
+                //
+                // The `source_` prefix keeps each apart from its pipeline-derived look-alike:
+                // source_version (Zenya's integer, as a string so it round-trips through
+                // SearchDocument - D202 §3) vs version (title regex); source_title vs title (CU);
+                // source_language (raw, format unmeasured) vs language (detector's ISO code).
+                new SimpleField("source_document_id",   SearchFieldDataType.String)  { IsFilterable = true },
+                new SimpleField("source_version",       SearchFieldDataType.String)  { IsFilterable = true },
+                new SimpleField("source_revision",      SearchFieldDataType.String)  { IsFilterable = true },
+                new SimpleField("source_status",        SearchFieldDataType.String)  { IsFilterable = true, IsFacetable = true },
+                new SimpleField("source_active",        SearchFieldDataType.Boolean) { IsFilterable = true },
+                new SearchableField("source_title")                                   { IsFilterable = true },
+                new SimpleField("source_language",      SearchFieldDataType.String)  { IsFilterable = true, IsFacetable = true },
+                // Snelcode - the identifier staff type; a pasted code must find the document.
+                new SimpleField("quick_code",           SearchFieldDataType.String)  { IsFilterable = true },
+                // Zenya's folder tree: full breadcrumb (filterable by prefix-ish patterns via
+                // search.ismatch if ever needed - searchable for that) and the leaf (facetable).
+                // A human-curated classification to be MEASURED against domain_tag (D204 §5).
+                new SearchableField("folder_path")                                    { IsFilterable = true },
+                new SimpleField("folder_name",          SearchFieldDataType.String)  { IsFilterable = true, IsFacetable = true },
+                new SimpleField("source_type",          SearchFieldDataType.String)  { IsFilterable = true, IsFacetable = true },
+                new SimpleField("source_document_type", SearchFieldDataType.String)  { IsFilterable = true, IsFacetable = true },
+                // Author-written abstract: document-level triage. Dutch analyzer like content.
+                new SearchableField("summary")                                        { AnalyzerName = "nl.microsoft" },
+                // Next review due. NOT valid_to (overdue-for-review is not no-longer-applies).
+                new SimpleField("check_date",           SearchFieldDataType.DateTimeOffset) { IsFilterable = true, IsSortable = true },
+                new SimpleField("attention_flags",      SearchFieldDataType.Collection(SearchFieldDataType.String)) { IsFilterable = true },
 
                 new VectorSearchField("content_vector", _config.OpenAiEmbeddingDimensions, "vector-profile") { IsHidden = true, IsStored = false }
             }

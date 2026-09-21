@@ -34,13 +34,74 @@ public static class ZenyaBlobLayout
     public const string LastModifiedKey = "zenya_last_modified"; // raw, Zenya's yyyyMMddHHmmss UTC string
     public const string SyncedAtKey     = "zenya_synced_at";     // raw, ISO-8601 UTC of this write
 
+    // Added 2026-09-21 (D204). Everything below already rode the per-document GET the sync makes;
+    // it was simply not modelled. No new request, no new call - see ZenyaDocumentMetadata.
+    // The indexer reads none of these yet: that is the container-switch step (D202 §6), which is
+    // also the one index recreate they should all ride on.
+    public const string FolderPathKey   = "zenya_folder_path";   // encoded, folder_mini.full_path
+    public const string FolderNameKey   = "zenya_folder_name";   // encoded, folder_mini.folder_name (leaf only)
+    public const string FolderIdKey     = "zenya_folder_id";     // raw int
+    public const string SummaryKey      = "zenya_summary";       // encoded - the one unbounded value, see the budget below
+    public const string CheckDateKey    = "zenya_check_date";    // raw; review due date, the candidate for valid_to
+    public const string AttentionKey    = "zenya_attention_flags";        // raw, comma-joined enum names
+    public const string CanCheckKey     = "zenya_can_check_document";     // raw bool
+    public const string CheckDelegateKey= "zenya_check_delegated_to";     // encoded user_name
+    public const string LanguageKey     = "zenya_language";      // raw
+    public const string OriginalTypeKey = "zenya_original_type"; // encoded
+    public const string RevisionKey     = "zenya_revision";      // raw int - RECORDED, never compared (D204 §8)
+    public const string ActiveKey       = "zenya_active";        // raw bool - the authoritative liveness flag
+    public const string DownloadAsPdfKey= "zenya_download_as_pdf";        // raw bool
+    public const string ParsedHeaderKey = "zenya_parsed_header";          // encoded
+    public const string UnparsedHeaderKey = "zenya_unparsed_header";      // encoded
+    public const string PrintHeaderKey  = "zenya_print_header_required";  // raw bool
+    public const string AuthorsKey      = "zenya_authors";                // encoded, "; "-joined user_name
+    public const string AuthorizersKey  = "zenya_authorizers";            // encoded, joined
+    public const string AdministratorsKey = "zenya_document_administrators"; // encoded, joined
+    public const string WritersGroupKey = "zenya_writers_group";          // encoded, joined
+    public const string InvitedWritersKey = "zenya_invited_writers";      // encoded, joined
+    public const string LockedKey       = "zenya_locked";                 // raw bool
+    public const string LockedSinceKey  = "zenya_locked_since";           // raw, ISO-8601 here (not yyyyMMddHHmmss)
+    public const string LockedByKey     = "zenya_locked_by";              // encoded user_name
+    public const string FavoriteKey     = "zenya_marked_as_favorite";     // raw bool
+    public const string PrintableKey    = "zenya_is_printable";           // raw bool
+    public const string EditableFormKey = "zenya_is_editable_form";       // raw bool
+    public const string OfficeViewerKey = "zenya_show_in_office_online_viewer"; // raw bool
+    public const string CoverPageKey    = "zenya_office_print_cover_page_mode"; // encoded
+    public const string CanDeleteKey    = "zenya_has_delete_published_permission"; // raw bool
+    public const string HandInDeadlineKey = "zenya_writer_hand_in_deadline";      // raw
+
     // Fallback for zenya_status when the document DTO carries no `state`: the listing state the
     // sync asks for (Zenya default; which states the corpus needs is an open product question,
     // D175). With `state` present, that documented value is recorded instead.
     public const string PublishedStatus = "published";
 
+    // Azure caps a blob's metadata at 8 KiB total, counting names and values on the wire; an
+    // upload that exceeds it fails with 400 and the sync loses the whole document over a metadata
+    // byte. The budget below is deliberately under 8 KiB because the exact wire cost (the
+    // "x-ms-meta-" prefix per entry, header framing) is not something this method can measure -
+    // SizeOf models it and errs high.
+    public const int MetadataByteBudget = 7_600;
+    private const string WireKeyPrefix = "x-ms-meta-";
+
+    // Dropped in THIS order when the budget is exceeded - declared, not computed, so the same
+    // document always loses the same key. Headers first (the extractor re-derives them from the
+    // page anyway), then the person lists (D204 §3d: not going to the index regardless), and
+    // summary last, because it is the only one of the group with retrieval value.
+    // Everything not listed here is never dropped: identity, version, lifecycle and the fields
+    // the diff will key on have to be present or the blob is not interpretable.
+    private static readonly string[] DroppableInOrder =
+    [
+        UnparsedHeaderKey, ParsedHeaderKey,
+        InvitedWritersKey, WritersGroupKey, AdministratorsKey, AuthorizersKey, AuthorsKey,
+        SummaryKey,
+    ];
+
+    // onDropped is called once per key removed to fit the budget. A drop is silent data loss
+    // otherwise, and "the field was never fetched" must never be indistinguishable from "it did
+    // not fit" - the caller logs it.
     public static IReadOnlyDictionary<string, string> BuildMetadata(
-        ZenyaDocumentMetadata document, string? mimeType, DateTimeOffset syncedAt)
+        ZenyaDocumentMetadata document, string? mimeType, DateTimeOffset syncedAt,
+        Action<string>? onDropped = null)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -55,8 +116,69 @@ public static class ZenyaBlobLayout
         AddEncoded(metadata, DocumentTypeKey, document.DocumentType?.Name);
         AddRaw(metadata, MimeTypeKey,     mimeType);
         AddRaw(metadata, LastModifiedKey, document.LastModifiedDateTime);
+
+        // ── D204 fields, from the same GET ──────────────────────────────────────────────────
+        AddEncoded(metadata, FolderPathKey,   document.Folder?.FullPath);
+        AddEncoded(metadata, FolderNameKey,   document.Folder?.FolderName);
+        AddRaw(metadata, FolderIdKey,         document.Folder?.FolderId?.ToString());
+        AddEncoded(metadata, SummaryKey,      document.Summary);
+        AddRaw(metadata, CheckDateKey,        document.CheckDate);
+        AddRaw(metadata, AttentionKey,        Join(document.AttentionRequiredFlags, ","));
+        AddRaw(metadata, CanCheckKey,         Bool(document.CanCheckDocument));
+        AddEncoded(metadata, CheckDelegateKey, document.CheckTaskDelegatedToUser?.UserName);
+        AddRaw(metadata, LanguageKey,         document.Language);
+        AddEncoded(metadata, OriginalTypeKey, document.OriginalType);
+        AddRaw(metadata, RevisionKey,         document.Revision?.ToString());
+        AddRaw(metadata, ActiveKey,           Bool(document.Active));
+        AddRaw(metadata, DownloadAsPdfKey,    Bool(document.DownloadAsPdf));
+        AddEncoded(metadata, ParsedHeaderKey,   document.ParsedHeader);
+        AddEncoded(metadata, UnparsedHeaderKey, document.UnparsedHeader);
+        AddRaw(metadata, PrintHeaderKey,      Bool(document.PrintHeaderRequired));
+        AddEncoded(metadata, AuthorsKey,        Names(document.Authors));
+        AddEncoded(metadata, AuthorizersKey,    Names(document.Authorizers));
+        AddEncoded(metadata, AdministratorsKey, Names(document.DocumentAdministrators));
+        AddEncoded(metadata, WritersGroupKey,   Names(document.WritersGroup));
+        AddEncoded(metadata, InvitedWritersKey, Names(document.InvitedWriters));
+        AddRaw(metadata, LockedKey,           Bool(document.LockInfo?.Locked));
+        AddRaw(metadata, LockedSinceKey,      document.LockInfo?.LockedSinceDateTime);
+        AddEncoded(metadata, LockedByKey,     document.LockInfo?.LockedByUser?.UserName);
+        AddRaw(metadata, FavoriteKey,         Bool(document.MarkedAsFavorite));
+        AddRaw(metadata, PrintableKey,        Bool(document.IsPrintable));
+        AddRaw(metadata, EditableFormKey,     Bool(document.IsEditableForm));
+        AddRaw(metadata, OfficeViewerKey,     Bool(document.ShowInOfficeOnlineViewer));
+        AddEncoded(metadata, CoverPageKey,    document.OfficePrintCoverPageMode);
+        AddRaw(metadata, CanDeleteKey,        Bool(document.HasDeletePublishedPermission));
+        AddRaw(metadata, HandInDeadlineKey,   document.WriterHandInDeadlineDate);
+
+        FitToBudget(metadata, onDropped);
         return metadata;
     }
+
+    // Removes droppable keys, in the declared order, until the metadata fits. Stops as soon as it
+    // does - the aim is a successful upload carrying as much as will fit, not a minimal one.
+    private static void FitToBudget(Dictionary<string, string> metadata, Action<string>? onDropped)
+    {
+        if (SizeOf(metadata) <= MetadataByteBudget) return;
+        foreach (var key in DroppableInOrder)
+        {
+            if (!metadata.Remove(key)) continue;
+            onDropped?.Invoke(key);
+            if (SizeOf(metadata) <= MetadataByteBudget) return;
+        }
+    }
+
+    // Values are ASCII by construction here (encoded or checked in AddRaw), so one char is one
+    // byte; the prefix is counted per entry because that is what goes on the wire.
+    private static int SizeOf(Dictionary<string, string> metadata) =>
+        metadata.Sum(kv => WireKeyPrefix.Length + kv.Key.Length + kv.Value.Length);
+
+    private static string? Bool(bool? value) => value is null ? null : value.Value ? "true" : "false";
+
+    private static string? Names(IReadOnlyList<ZenyaUserMini>? users) =>
+        Join(users?.Select(u => u.UserName).Where(n => !string.IsNullOrWhiteSpace(n)).ToList(), "; ");
+
+    private static string? Join(IReadOnlyList<string?>? values, string separator) =>
+        values is { Count: > 0 } ? string.Join(separator, values) : null;
 
     // Name from what the download actually was, in this order: the response's Content-Type, the
     // metadata's download_binary_extension, the metadata's mime_type. The response wins because
