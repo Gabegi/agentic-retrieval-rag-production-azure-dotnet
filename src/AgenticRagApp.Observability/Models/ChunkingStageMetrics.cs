@@ -56,7 +56,16 @@ public sealed record ChunkingStageMetrics(
     // ChunkingRunState.Chunked: the two rules answer different questions, and one number cannot
     // distinguish "this document is shedding junk cuts" from "we caught its front matter".
     // Same caller-computed, optional-by-default contract as the field above.
-    int TocChunksDropped = 0)
+    int TocChunksDropped = 0,
+
+    // Fenced diagram blocks the cascade cut as diagrams, how many of them needed more than one
+    // fragment, and how many cut fragments carry no figure caption or description in their
+    // prefix (2026-09-22, D214 §2.8). Caller-computed like the two counts above: the fence a
+    // chunk came from is a fact the chunking pipeline stamps and Compute cannot see. A pipeline
+    // with no diagram concept leaves them at 0 and says nothing false.
+    int DiagramBlocks                  = 0,
+    int DiagramBlocksCut               = 0,
+    int DiagramFragmentsWithoutContext = 0)
 {
     // Documents that sit in a MULTI-MEMBER family but carry no DomainTag - the sector
     // disambiguation the near-duplicate families depend on, missing on exactly the documents that

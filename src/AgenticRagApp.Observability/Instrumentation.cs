@@ -148,6 +148,21 @@ public static class Instrumentation
     public static readonly Counter<long> TocChunksDropped =
         Meter.CreateCounter<long>("indexer.toc_chunks_dropped", description: "Chunks dropped as table-of-contents navigation before embedding");
 
+    // Fenced diagram blocks (2026-09-22, D214 §2.8): how many the cascade cut as diagrams, how
+    // many of those needed more than one fragment, and how many cut fragments carry no figure
+    // caption or description in their prefix because their fence matched no figure. Three
+    // counters rather than one with a tag, for the same reason as the two above: the third is
+    // the one worth alerting on (it says the payload match is drifting), and a filter on it
+    // should not fire because diagrams merely got cut.
+    public static readonly Counter<long> DiagramBlocks =
+        Meter.CreateCounter<long>("indexer.diagram_blocks", description: "Fenced diagram blocks the chunking cascade cut as diagrams, whole or in fragments");
+
+    public static readonly Counter<long> DiagramBlocksCut =
+        Meter.CreateCounter<long>("indexer.diagram_blocks_cut", description: "Fenced diagram blocks that needed more than one fragment");
+
+    public static readonly Counter<long> DiagramFragmentsWithoutContext =
+        Meter.CreateCounter<long>("indexer.diagram_fragments_without_context", description: "Cut diagram fragments whose fence matched no figure, so their prefix carries no caption or description");
+
     // ── Pipeline stages ──────────────────────────────────────────────────────
 
     // Wall-clock per pipeline stage per run (tag: stage = extract|chunk|embed_upload), timed

@@ -152,7 +152,18 @@ public sealed record DocumentOutcome(
     // On the recursive route the title is the ONLY prefix, so an empty title means chunks whose
     // embedded text is bare body with zero identity in the vector. Identity resolution only
     // drops documents with NEITHER title nor headings, so this case survives selection silently.
-    bool     EmptyTitle         = false);
+    bool     EmptyTitle         = false,
+
+    // ── Fenced diagrams (2026-09-22, D214 §2.8) ────────────────────────────
+    // Read off this document's chunks by DiagramCounters, same as the cut shape above. Blocks
+    // the cascade cut as diagrams (whole or in pieces), how many of them needed cutting, and how
+    // many cut fragments carry no figure caption or description because their fence matched no
+    // figure. Zero on a document without diagrams reads correctly; rows written before the
+    // fields existed read back as zero too, which for them means "not measured" - the run date
+    // says which.
+    int      DiagramBlocks                  = 0,
+    int      DiagramBlocksCut               = 0,
+    int      DiagramFragmentsWithoutContext = 0);
 
 // Still without a producer, and deliberately absent rather than added as nullable fields that
 // would read as "measured zero": BoundaryLevel counts, CeilingClampEngaged, RealisedOverlap, the

@@ -92,6 +92,12 @@ public sealed class ChunkMetadataBuilder
         // 2. Scope 1, built ONCE for the whole document.
         var stamp = DocumentStamp.From(doc, route);
 
+        // The document's fenced diagrams, read once per document: 3c resolves a figure context
+        // off them for cut fragments, and 3h stamps which fence each diagram piece came from so
+        // the report can count blocks (D214 §2.8). One line scan of the content, the same cost
+        // BlockParser already paid once.
+        var fences = DiagramMarkup.Fences(doc.Content);
+
         foreach (var chunk in chunks)
         {
             var metadata = chunk.Metadata;
@@ -119,7 +125,16 @@ public sealed class ChunkMetadataBuilder
             //     and so the later move of composition into ChunkIndexer becomes a read of this
             //     field rather than an unpicking of the text. Scope 4's generated context has
             //     the same seam to prepend to.
-            metadata.Prefix = PrefixBuilder.Build(doc.Title, doc.Family?.DomainTag, chunk.HeadingPath);
+            //
+            //     A CUT diagram fragment (BoundaryLevel.DiagramElement) additionally carries
+            //     the figure's caption or capped description (2026-09-22, D214 §2.6), resolved
+            //     by the SAME DiagramContext the cascade priced against the ceiling. Every other
+            //     chunk passes null and gets the string it always got.
+            var figureContext = chunk.BoundaryLevel == BoundaryLevel.DiagramElement
+                ? DiagramContext.ForChunk(doc.Content, fences, chunk.Start, doc.Figures)
+                : null;
+
+            metadata.Prefix = PrefixBuilder.Build(doc.Title, doc.Family?.DomainTag, chunk.HeadingPath, figureContext);
 
             // 3d. The REAL cl100k_base count of the exact text that gets embedded, prefix
             //     included - which is why it runs after 3c. Not ChunkingHelper.EstimateTokens:
@@ -156,6 +171,30 @@ public sealed class ChunkMetadataBuilder
             //     FigureTextCounter for what D183 measured by hand and this now reports per run.
             chunk.FigureTextChars             = FigureTextCounter.AltTextChars(chunk.Content);
             chunk.HeaderFooterFigureTextChars = FigureTextCounter.HeaderFooterDescriptionChars(chunk.Content, structure.Figures);
+
+            // 3h. Stats-only, never persisted (2026-09-22, D214 §2.8): which fenced diagram this
+            //     cut is a piece of. A piece is a cut fragment (DiagramElement) starting inside
+            //     the fence, or a whole diagram - a None-level cut that ends exactly at the
+            //     fence's end. The second test is what keeps a fence the cascade did NOT cut as a
+            //     diagram (one straddling a section window, cut as prose) from being counted as
+            //     one: a prose cut never ends at the closer. DiagramContextMissing names the cut
+            //     fragments 3c found no figure for.
+            chunk.DiagramFence = FenceOf(fences, chunk);
+            chunk.DiagramContextMissing = chunk.BoundaryLevel == BoundaryLevel.DiagramElement && figureContext is null;
         }
+    }
+
+    private static int? FenceOf(IReadOnlyList<(int Start, int End)> fences, ChunkObject chunk)
+    {
+        for (var i = 0; i < fences.Count; i++)
+        {
+            var (start, end) = fences[i];
+            if (start > chunk.Start || chunk.Start >= end) continue;
+
+            if (chunk.BoundaryLevel == BoundaryLevel.DiagramElement) return i;
+            if (chunk.BoundaryLevel == BoundaryLevel.None && chunk.Start + chunk.Length == end) return i;
+        }
+
+        return null;
     }
 }

@@ -4,8 +4,8 @@ namespace AgenticRagApp.Indexing.CU.Services;
 
 // Route 1: the document declared its units - honour them.
 //
-// Reached when the gate said yes (>= 2 headings at >= 0.1 per 1,000 chars, or a document under
-// 4,000 tokens with >= 1). A declared boundary means something; a computed one is a hypothesis,
+// Reached when the gate said yes (>= 2 headings at >= 0.1 per 1,000 chars, or a document that
+// fits in one chunk with >= 1). A declared boundary means something; a computed one is a hypothesis,
 // which is route 2's business.
 //
 // An ORCHESTRATOR: every step is one call into StrategyHelpers. This class owns the ORDER of
@@ -57,8 +57,8 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
             //     would change every vector and force a full re-embed.
             var prefix = PrefixBuilder.Build(doc.Title, doc.Family?.DomainTag, section.HeadingPath);
 
-            // 2b. Price it.
-            var prefixTokens = TokenEstimator.Estimate(prefix);
+            // 2b. Price it - as embedded, joiner included (PrefixBuilder.Cost).
+            var prefixTokens = PrefixBuilder.Cost(prefix);
 
             // 2c. What is left of the budget for the body.
             var bodyCeiling = Math.Max(ChunkingBudget.TokenCeiling - prefixTokens, ChunkingBudget.MinBodyTokenBudget);
@@ -104,7 +104,7 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
             //    prefix stays paid for on every piece the cut produces.
             chunks.AddRange(SectionChunkBuilder.Build(
                 section,
-                BlockCascade.Cut(doc.Content, section.Start, section.End, bodyCeiling, doc.Tables)));
+                BlockCascade.Cut(doc.Content, section.Start, section.End, bodyCeiling, doc.Tables, doc.Figures)));
         }
 
         return ValueTask.FromResult<IReadOnlyList<ChunkObject>>(chunks);

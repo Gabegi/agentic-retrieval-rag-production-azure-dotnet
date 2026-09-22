@@ -28,10 +28,18 @@ public sealed record ContentBlock(string Text, int Start, BlockKind Kind)
 // meaning; a value split from its label is unretrievable; half a list item reads as a whole
 // one. Only prose degrades gracefully, which is why it is the only kind the length ladder
 // (line -> sentence -> word -> hard) is allowed to touch, and the only kind BlockPacker merges.
+//
+// Diagram (2026-09-22, D214): a fenced block - the machine-readable payload Content
+// Understanding writes for a chart or a mermaid figure. Neither typed as a span like a table
+// nor detected like a list: DELIMITED, by the fence CU itself writes into the content. Cut
+// between whole elements (JSON containers, or lines), never inside one - half a node label
+// reads as a whole one, and a flowchart's edges array offers the prose ladder no separator at
+// all, which is how one such block reached HardCutter and failed run 260921/1 (D209).
 public enum BlockKind
 {
     Prose,
     Table,
     KeyValue,
     ListRun,
+    Diagram,
 }

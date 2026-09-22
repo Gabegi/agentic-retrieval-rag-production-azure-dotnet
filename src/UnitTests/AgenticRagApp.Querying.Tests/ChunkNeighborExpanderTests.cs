@@ -114,10 +114,10 @@ public class ChunkNeighborExpanderTests
     }
 
     [TestMethod]
-    public async Task ExpandAsync_TotalContextExceedsCap_StopsAddingFurtherChunks()
+    public async Task ExpandAsync_AChunkThatDoesNotFit_IsSkipped()
     {
         // MaxContextChars is 16_000 - three hits of 7500 chars each: the first two fit
-        // (15,000 total) but adding the third would push the running total to 22,500.
+        // (15,000 total), the third would push the running total to 22,500 and is skipped.
         var searchClient = MockSearchClient();
         var expander = new ChunkNeighborExpander(searchClient.Object);
         var big = new string('x', 7_500);
@@ -131,5 +131,28 @@ public class ChunkNeighborExpanderTests
         var result = await expander.ExpandAsync(hits);
 
         Assert.AreEqual(2, result.Count);
+    }
+
+    [TestMethod]
+    public async Task ExpandAsync_AChunkBehindAMisfit_StillArrivesWhenItFits()
+    {
+        // 7,500 + 7,500 = 15,000. The third 7,500 does not fit; the 500-char chunk behind it
+        // does and must still arrive, in order. Before 2026-09-22 the loop stopped at the first
+        // misfit and lost it (D211 §3.3 item 7).
+        var expander = new ChunkNeighborExpander(MockSearchClient().Object);
+        var big   = new string('x', 7_500);
+        var small = new string('y', 500);
+        var hits = new[]
+        {
+            Hit("d1_p0", "d1", page: 0, content: big),
+            Hit("d2_p0", "d2", page: 0, content: big),
+            Hit("d3_p0", "d3", page: 0, content: big),
+            Hit("d4_p0", "d4", page: 0, content: small),
+        };
+
+        var result = await expander.ExpandAsync(hits);
+
+        Assert.AreEqual(3, result.Count);
+        Assert.AreEqual(small, result[2]);
     }
 }

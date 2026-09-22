@@ -133,6 +133,12 @@ internal static class ChunkingTestFixtures
         }
     }
 
+    // A verbatim fixture lifted from a real run's extraction artifact (CorpusData\, copied to the
+    // output directory by the test project). Used where a synthetic shape would prove less than
+    // the real one - the diagram block that failed run 260921/1 is the first.
+    public static string CorpusText(string file) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "CorpusData", file));
+
     // Pieces come back in document order and never cover the same character twice. Composed
     // fragments are included: their coordinates are the rows they carry, so they order too.
     public static void AssertAscendingAndDisjoint(IReadOnlyList<ContentPiece> pieces)

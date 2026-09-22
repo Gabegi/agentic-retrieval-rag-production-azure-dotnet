@@ -1,3 +1,4 @@
+using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Indexing.CU.Services;
 
 using static RagApp.UnitTests.Indexing.ChunkingTestFixtures;
@@ -14,6 +15,21 @@ namespace RagApp.UnitTests.Indexing;
 [TestClass]
 public class PrefixBuilderTests
 {
+    [TestMethod]
+    public void Cost_PricesThePrefixAsEmbedded_JoinerIncluded()
+    {
+        // The budget has to govern the string that is actually embedded. 74 of the 75 chunks at
+        // exactly 513 tokens on run 260921/1 were the unpriced "\n\n" (D211 §3.3 item 2).
+        var prefix = PrefixBuilder.Build("CAO GGZ 2024", "ggz", "Hoofdstuk 3 > Artikel 3:5");
+        var body   = "De werknemer heeft recht op een vergoeding.";
+
+        var chunk = new ChunkObject { Content = body, Metadata = new ChunkMetadata { Prefix = prefix } };
+
+        Assert.AreEqual(Tokens(chunk.EmbeddingText), PrefixBuilder.Cost(prefix) + Tokens(body));
+        Assert.IsTrue(PrefixBuilder.Cost(prefix) > Tokens(prefix), "the joiner is charged");
+        Assert.AreEqual(0, PrefixBuilder.Cost(""));
+    }
+
     [TestMethod]
     public void TitleAndTagBecomeTheTitleLine()
     {
@@ -123,5 +139,31 @@ public class PrefixBuilderTests
         var once = PrefixBuilder.Build(title, "ggz", path);
 
         Assert.AreEqual(once, PrefixBuilder.Build(once.Split("\n\n")[0].Replace(" [ggz]", ""), "ggz", path));
+    }
+
+    // ── figure context on cut diagram fragments (D214 §2.6) ──────────────────
+
+    [TestMethod]
+    public void ANullFigureContext_ReproducesTheStringEveryStoredVectorWasComputedAgainst()
+    {
+        Assert.AreEqual(
+            PrefixBuilder.Build("CAO GGZ", "ggz", "Hoofdstuk 3 > 3.2 Dosering"),
+            PrefixBuilder.Build("CAO GGZ", "ggz", "Hoofdstuk 3 > 3.2 Dosering", figureContext: null));
+        Assert.AreEqual(
+            PrefixBuilder.Build("CAO GGZ", "ggz", "Hoofdstuk 3 > 3.2 Dosering"),
+            PrefixBuilder.Build("CAO GGZ", "ggz", "Hoofdstuk 3 > 3.2 Dosering", figureContext: "  "));
+    }
+
+    [TestMethod]
+    public void AFigureContext_FollowsTheCappedPath_WithTheSameJoiner()
+    {
+        Assert.AreEqual(
+            "Stepped Care [vgz]\n\nTriage > Spoed\n\nStepped Care Triageproces VGZ",
+            PrefixBuilder.Build("Stepped Care", "vgz", "Triage > Spoed", "Stepped Care Triageproces VGZ"));
+
+        // Route 2 has no heading path; the context still lands after the title line.
+        Assert.AreEqual(
+            "Stepped Care\n\nStepped Care Triageproces VGZ",
+            PrefixBuilder.Build("Stepped Care", null, null, "Stepped Care Triageproces VGZ"));
     }
 }

@@ -85,6 +85,17 @@ public static class ChunkMetricsEmitter
         if (stats.TocChunksDropped > 0)
             Instrumentation.TocChunksDropped.Add(stats.TocChunksDropped, strategyTag);
 
+        // The three diagram counts (D214 §2.8), same "only when non-zero" rule as the two above:
+        // a run without diagrams emits nothing rather than a zero series.
+        if (stats.DiagramBlocks > 0)
+            Instrumentation.DiagramBlocks.Add(stats.DiagramBlocks, strategyTag);
+
+        if (stats.DiagramBlocksCut > 0)
+            Instrumentation.DiagramBlocksCut.Add(stats.DiagramBlocksCut, strategyTag);
+
+        if (stats.DiagramFragmentsWithoutContext > 0)
+            Instrumentation.DiagramFragmentsWithoutContext.Add(stats.DiagramFragmentsWithoutContext, strategyTag);
+
         if (stats.DocsWithZeroChunks > 0)
             Instrumentation.DocsWithZeroChunks.Add(stats.DocsWithZeroChunks, strategyTag);
     }

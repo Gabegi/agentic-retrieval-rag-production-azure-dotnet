@@ -1,3 +1,4 @@
+using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Indexing.CU.Utils;
 
 namespace AgenticRagApp.Indexing.CU.Services;
@@ -22,13 +23,17 @@ public static class PrefixBuilder
 
     private const string PathSeparator = " > ";
 
-    public static string Build(string? title, string? domainTag, string? headingPath)
+    // figureContext (2026-09-22, D214 §2.6): the caption or capped description of the diagram a
+    // CUT fragment came from, after the heading path. Null - every chunk that is not a diagram
+    // fragment - reproduces the pre-2026-09-22 string byte for byte, so no existing vector
+    // moves. Resolved by DiagramContext for both callers of this method.
+    public static string Build(string? title, string? domainTag, string? headingPath, string? figureContext = null)
     {
         // "Title [tag]" - shared with whatever writes the real embedded text, which is the
         // whole point of TitleLine living in ChunkingHelper rather than here.
         var titleLine = ChunkingHelper.TitleLine(title, domainTag);
 
-        var parts = new[] { titleLine, CapPath(headingPath) }
+        var parts = new[] { titleLine, CapPath(headingPath), figureContext }
             .Where(part => !string.IsNullOrWhiteSpace(part));
 
         // This was the last funnel before the prefix becomes embedded text, and so the place the
@@ -41,6 +46,15 @@ public static class PrefixBuilder
         // spelling of "cliënt" no NFC query will ever match.
         return string.Join("\n\n", parts);
     }
+
+    // What the prefix costs against the ceiling: the prefix AS EMBEDDED, joiner included
+    // (2026-09-22, D211 §3.3 item 2). ChunkObject.EmbeddingText is prefix + "\n\n" + body, and
+    // the strategies budgeted Estimate(prefix) alone, so the one-token joiner rode free: on run
+    // 260921/1 the sum of the two estimates equalled the stamped token_count on 15.2% of chunks
+    // and under-priced 84.8%; with the joiner it equals it on 31,135 of 31,135. An empty prefix
+    // has no joiner and costs nothing.
+    public static int Cost(string prefix) =>
+        prefix.Length > 0 ? TokenEstimator.Estimate(prefix + ChunkObject.PrefixJoiner) : 0;
 
     // Keeps the LAST levels, not the first: the leaf and its immediate parents are what
     // disambiguate a chunk, while the root is usually the document title again.

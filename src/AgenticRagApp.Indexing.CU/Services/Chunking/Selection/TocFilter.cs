@@ -42,6 +42,19 @@ public static partial class TocFilter
     [GeneratedRegex(@"^\s*\d{1,4}\s*$")]
     private static partial Regex PageNumberLine();
 
+    // A TOC entry as Content Understanding renders it (2026-09-22): a table row whose last
+    // cell is a bare page number. CU emits a table of contents as an HTML table, one cell per
+    // line, so the two line shapes above never see "1.2 Begrippen ..... 4" - they see
+    // <td>1.2 Begrippen</td> and <td>4</td> on separate lines and match neither. Run 260921/1
+    // measured the result: TocChunksDropped 0 on 1,101 documents, 384 navigation chunks in the
+    // index with both signals agreeing. Attributes are allowed on the cell because CU emits
+    // colspan on 25 of those chunks.
+    [GeneratedRegex(@"<tr\b[^>]*>(.*?)</tr>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex TableRow();
+
+    [GeneratedRegex(@"<t[dh]\b[^>]*>\s*\d{1,4}\s*</t[dh]>\s*$", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex PageNumberRow();
+
     // How much of the body has to look like navigation. Set high because the cost of a false
     // positive is unrecoverable (see the class note) and because a real TOC is essentially
     // 100% entry lines - the margin is for a stray title or a page header caught in the cut,
@@ -67,8 +80,22 @@ public static partial class TocFilter
         return !string.IsNullOrWhiteSpace(leaf) && TocTitle().IsMatch(leaf);
     }
 
+    // The unit is the row when the body is a table and the line otherwise - never both in one
+    // denominator. Measured on 260921/1: rows alone drop 384; rows and outside lines together
+    // drop 379, and the 5 they miss are real TOCs where the heading line and <br>-joined
+    // double entries dilute the share. Nothing went the other way.
     private static bool LooksLikeEntries(string content)
     {
+        var rows = TableRow().Matches(content);
+        if (rows.Count > 0)
+        {
+            if (rows.Count < MinLines) return false;
+
+            var navRows = rows.Count(row => PageNumberRow().IsMatch(row.Groups[1].Value));
+
+            return navRows >= rows.Count * MinEntryShare;
+        }
+
         var lines = content
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Where(line => !string.IsNullOrWhiteSpace(line))

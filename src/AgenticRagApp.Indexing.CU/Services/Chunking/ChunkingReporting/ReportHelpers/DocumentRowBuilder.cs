@@ -27,8 +27,9 @@ public static class DocumentRowBuilder
         bool                  isInMultiMemberFamily,
         string?               notReachedReason)
     {
-        var chunks = facts?.Chunks ?? [];
-        var tokens = chunks.Select(c => c.Metadata.TokenCount).OrderBy(t => t).ToList();
+        var chunks   = facts?.Chunks ?? [];
+        var tokens   = chunks.Select(c => c.Metadata.TokenCount).OrderBy(t => t).ToList();
+        var diagrams = DiagramCounters.Of(chunks);
 
         return new DocumentOutcome(
             SourceId: doc.SourceId,
@@ -84,7 +85,12 @@ public static class DocumentRowBuilder
             // emits chunks whose embedded text is bare body with zero identity in the vector.
             // DocumentIdentityResolver only drops documents with NEITHER title nor headings, so
             // this case survives selection silently without this flag.
-            EmptyTitle:            string.IsNullOrWhiteSpace(doc.Title));
+            EmptyTitle:            string.IsNullOrWhiteSpace(doc.Title),
+
+            // Off the chunks, through the same helper the run totals use (D214 §2.8).
+            DiagramBlocks:                  diagrams.Blocks,
+            DiagramBlocksCut:               diagrams.Cut,
+            DiagramFragmentsWithoutContext: diagrams.FragmentsWithoutContext);
     }
 
     // Characters per extracted page - DISTINCT page numbers, the same denominator every other

@@ -47,10 +47,26 @@ public class StructureFilterTests
         Assert.AreEqual(1, StructureFilter.Build(doc, 1, 12).Tables.Count);
     }
 
+    [TestMethod]
+    public void AnAttachedTable_CarriesItsShapeButNotItsCells()
+    {
+        // The page-range test attaches one table to every chunk on every page it touches, and
+        // the cells were 43.5% of the 282 MB chunking artifact on 260921/1. Nothing on the chunk
+        // side reads them; the extraction artifact keeps them in full.
+        var doc      = DocumentWith(TableWithRegions(anchorPage: 12, pages: [12, 13]));
+        var attached = StructureFilter.Build(doc, 12, 12).Tables.Single();
+
+        Assert.AreEqual(0, attached.Cells.Count);
+        Assert.AreEqual(2, attached.RowCount);
+        Assert.AreEqual(2, attached.ColumnCount);
+        Assert.AreEqual("Tabel 5", attached.Caption);
+        Assert.AreEqual(2, attached.Regions.Count);
+    }
+
     private static TableInfo TableWithRegions(int anchorPage, int[] pages) =>
         new(RowCount:    2,
             ColumnCount: 2,
-            Cells:       [],
+            Cells:       [new TableCellInfo(0, 0, "columnHeader", "Naam", null, null)],
             Offset:      0,
             PageNumber:  anchorPage,
             Caption:     "Tabel 5",

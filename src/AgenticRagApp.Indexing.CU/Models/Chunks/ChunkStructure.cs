@@ -10,6 +10,7 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // chunk, not with the document. Measured per document on the 260812 corpus run: Headings
 // 4.3 KB, Boilerplate 2.2 KB, Figures 1.2 KB. Tables is heavier
 // (36.3 KB) but two indexed fields are derived from it.
+// Since 2026-09-22 Tables travel without their Cells - see StructureFilter for the measurement.
 //
 // Lines are absent here AND on the document since 2026-09-09 (PdfDocumentStructure carries a
 // LineCount). The list was 57% of the entire extraction payload by itself - 178 KB per

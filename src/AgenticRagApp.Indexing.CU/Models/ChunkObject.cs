@@ -221,8 +221,15 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     //
     // The composition itself is not a free choice: this exact joiner is what the old ToChunk
     // path produced, and changing it changes every vector and forces a full re-embed.
+    //
+    // The joiner is named so the strategies can price exactly what is embedded
+    // (PrefixBuilder.Cost): it is one cl100k token, and until 2026-09-22 it was never charged,
+    // so 74 of the 75 chunks that landed at exactly 513 tokens on run 260921/1 had been budgeted
+    // as fitting.
+    public const string PrefixJoiner = "\n\n";
+
     [JsonIgnore] public string EmbeddingText =>
-        Metadata.Prefix.Length > 0 ? $"{Metadata.Prefix}\n\n{Content}" : Content;
+        Metadata.Prefix.Length > 0 ? $"{Metadata.Prefix}{PrefixJoiner}{Content}" : Content;
 
     // Hash of the exact text sent to the embedding API - a match means the embedding would come
     // back byte-identical, so EmbeddingService can skip the call and reuse the cached vector.
@@ -270,6 +277,16 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     // the page-scoped structure, which the stats pass does not see. Null = not stamped.
     [JsonIgnore] public int? FigureTextChars             { get; set; }
     [JsonIgnore] public int? HeaderFooterFigureTextChars { get; set; }
+
+    // Which fenced diagram of the document this cut came out of (the index into
+    // DiagramMarkup.Fences(doc.Content)), or null for every chunk that is not a diagram piece.
+    // Stamped by ChunkMetadataBuilder 3c, never serialized - it exists so the run report can
+    // count diagram blocks and cut blocks off the chunks (DiagramCounters, D214 §2.8) without a
+    // second parse. DiagramContextMissing is true on a CUT fragment whose fence matched no
+    // figure, so it carries no caption or description in its prefix - the 17-of-74 gap D214
+    // measured, reported per document rather than inferred.
+    [JsonIgnore] public int? DiagramFence          { get; set; }
+    [JsonIgnore] public bool DiagramContextMissing { get; set; }
 }
 
 // Everything step 4 stamps onto a cut: what the DOCUMENT is (extracted once, copied onto every

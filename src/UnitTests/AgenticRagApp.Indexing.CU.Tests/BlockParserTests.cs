@@ -276,4 +276,62 @@ public class BlockParserTests
         Assert.AreEqual(1, blocks.Count);
         AssertTilesExactly(content, blocks);
     }
+
+    // ── fenced diagrams (D214) ───────────────────────────────────────────────
+
+    private const string Fence = "```mermaid\n{\"type\":\"flowchart\",\"nodes\":[{\"id\":\"A\",\"label\":\"Signaal\"}]}\n```";
+
+    [TestMethod]
+    public void AFencedBlock_IsOneDiagramBlock_AndTheDocumentStillTiles()
+    {
+        var content = "Alinea ervoor.\n\n" + Fence + "\n\nAlinea erna.\n";
+
+        var blocks = Parse(content);
+
+        var diagram = blocks.Single(b => b.Kind == BlockKind.Diagram);
+        StringAssert.StartsWith(diagram.Text, "```mermaid\n");
+        StringAssert.Contains(diagram.Text, "\n```");
+        Assert.AreEqual(3, blocks.Count, "prose, diagram, prose");
+        AssertTilesExactly(content, blocks);
+    }
+
+    [TestMethod]
+    public void TwoFencesBackToBack_AreTwoDiagramBlocks()
+    {
+        // DiagramCutter reads one opener and one closer, so two fences are two blocks - the
+        // same rule that keeps two adjacent typed tables apart.
+        var content = Fence + "\n" + Fence + "\n";
+
+        var blocks = Parse(content);
+
+        Assert.AreEqual(2, blocks.Count(b => b.Kind == BlockKind.Diagram));
+        AssertTilesExactly(content, blocks);
+    }
+
+    [TestMethod]
+    public void AnUnclosedFence_IsProse()
+    {
+        // No closer, no fence: the lines fall to the line classifier as they did before the
+        // rung existed. This is also what a fence straddling a section window looks like.
+        const string content = "```mermaid\nflowchart TD\nA --> B\n";
+
+        var blocks = Parse(content);
+
+        Assert.AreEqual(0, blocks.Count(b => b.Kind == BlockKind.Diagram));
+        AssertTilesExactly(content, blocks);
+    }
+
+    [TestMethod]
+    public void ATypedTableSpan_WinsOverAFenceOnTheSameLines()
+    {
+        // Strongest evidence first: the service typed the range, so a fence inside it is the
+        // table's text, not a diagram.
+        var content = "<table><tr><td>\n" + Fence + "\n</td></tr></table>\n";
+
+        var blocks = Parse(content);
+
+        Assert.AreEqual(0, blocks.Count(b => b.Kind == BlockKind.Diagram));
+        Assert.AreEqual(1, blocks.Count(b => b.Kind == BlockKind.Table));
+        AssertTilesExactly(content, blocks);
+    }
 }

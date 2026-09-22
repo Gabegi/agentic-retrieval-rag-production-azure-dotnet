@@ -55,4 +55,10 @@ public enum BoundaryLevel
     // Atomic-kind boundaries: cut between whole rows, or between whole list items.
     TableRow,
     ListItem,
+
+    // Between whole elements of a fenced diagram payload: after a JSON container's comma
+    // (`},` / `],`) or at a line start (D214 §2.5). APPENDED, not slotted in: the values above
+    // are what every artifact written before 2026-09-22 carries, and a chunk cut on a diagram
+    // element never took the ladder - so this level never says anything about separators.
+    DiagramElement,
 }

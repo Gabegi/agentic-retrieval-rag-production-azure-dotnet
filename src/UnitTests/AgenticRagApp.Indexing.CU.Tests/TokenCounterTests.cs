@@ -65,4 +65,42 @@ public class TokenCounterTests
 
         Parallel.For(0, 50, _ => Assert.AreEqual(expected, TokenCounter.Count(text)));
     }
+
+    // ── Truncate (D214 §2.6) ─────────────────────────────────────────────────
+
+    [TestMethod]
+    public void Truncate_LeavesTextUnderTheCapAlone_AndHandlesNothing()
+    {
+        Assert.AreEqual("hello world", TokenCounter.Truncate("hello world", 2));
+        Assert.AreEqual("hello world", TokenCounter.Truncate("hello world", 40));
+        Assert.IsNull(TokenCounter.Truncate(null, 40));
+        Assert.AreEqual("", TokenCounter.Truncate("", 40));
+        Assert.AreEqual("", TokenCounter.Truncate("hello world", 0));
+    }
+
+    [TestMethod]
+    public void Truncate_NeverExceedsTheCap_AndEndsOnAWholeWord()
+    {
+        var text = string.Join(" ", Enumerable.Range(0, 200).Select(i => "beschrijving" + i));
+
+        var cut = TokenCounter.Truncate(text, 40)!;
+
+        Assert.IsTrue(TokenCounter.Count(cut) <= 40, "got " + TokenCounter.Count(cut));
+        Assert.IsTrue(cut.Length > 0 && cut.Length < text.Length);
+        StringAssert.StartsWith(text, cut);
+        Assert.IsFalse(char.IsWhiteSpace(cut[^1]), "no trailing whitespace");
+        Assert.IsTrue(char.IsWhiteSpace(text[cut.Length]), "the cut falls on a word boundary, not inside a word");
+    }
+
+    [TestMethod]
+    public void Truncate_TextWithoutWhitespace_KeepsTheTokenBoundary()
+    {
+        // Nothing to back up to, so the token boundary itself is the cut - still under the cap.
+        var text = new string('x', 600);
+
+        var cut = TokenCounter.Truncate(text, 10)!;
+
+        Assert.IsTrue(cut.Length > 0 && cut.Length < text.Length);
+        Assert.IsTrue(TokenCounter.Count(cut) <= 10);
+    }
 }

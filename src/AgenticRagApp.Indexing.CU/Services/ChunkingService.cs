@@ -111,7 +111,7 @@ public class ChunkingService : IChunkingService
                 try
                 {
                     // 2. Read the declared structure and gate on it. The formula is not repeated
-                    //    here on purpose - DocContainsHeadingOrLessThan4kTokens below IS the
+                    //    here on purpose - DocContainsHeadingOrFitsOneChunk below IS the
                     //    routing decision, and this is its only caller.
                     //
                     //    The branch picks a STRATEGY rather than calling one, so step 3 and step
@@ -120,7 +120,7 @@ public class ChunkingService : IChunkingService
                     //    the class that actually cut it.
                     IDocumentChunkingStrategy strategy;
 
-                    if (DocContainsHeadingOrLessThan4kTokens(doc))
+                    if (DocContainsHeadingOrFitsOneChunk(doc))
                     {
                         // 2b. Anchor the declared headings, and count how many could be placed.
                         //
@@ -278,6 +278,11 @@ public class ChunkingService : IChunkingService
                                         ChunkingBudget.TokenCeiling, ChunkingBudget.MinBodyTokenBudget)
                                     with { ResidueChunksDropped = state.ResidueDropped,
                                            TocChunksDropped     = state.TocDropped,
+                                           // Same caller-stamped contract (D214 §2.8): summed
+                                           // per document on the state as the rows are built.
+                                           DiagramBlocks                  = state.DiagramBlocks,
+                                           DiagramBlocksCut               = state.DiagramBlocksCut,
+                                           DiagramFragmentsWithoutContext = state.DiagramFragmentsWithoutContext,
                                            UntaggedFamilyMemberIds = untaggedFamilyMembers,
                                            IdentityTokens = identityTokens };
 
@@ -314,15 +319,15 @@ public class ChunkingService : IChunkingService
     // Step 2, the gate: is the document's declared boundary worth honouring?
     //
     //   at least 2 headings AND at least 0.1 headings per 1,000 chars
-    //   OR: under 4,000 estimated tokens and at least 1 heading
+    //   OR: fits in ONE CHUNK (< ChunkingBudget.TokenCeiling) and has at least 1 heading
     //
     // True -> DeclaredBoundaryStrategy. False -> RecursiveStrategy.
     //
     // Not "does the document have headings": one heading in 30k chars is a label, not a
     // structure, and 2 headings on a 400-page document pass a count check while structuring
     // nothing. Density is measured per 1,000 CHARS, not per page - page count is this corpus's
-    // weakest size signal. The second clause is the N=1 admission: the document fits one
-    // retrieval unit, so its single heading genuinely describes the whole thing.
+    // weakest size signal. The second clause is the N=1 admission: a document that fits in a
+    // single chunk has nothing to divide, so its one heading describes the whole of it.
     //
     // The token count is read off the profile directly rather than through a size class: the
     // class was a four-way vocabulary of which this gate only ever used one value, and the raw
@@ -330,7 +335,7 @@ public class ChunkingService : IChunkingService
     //
     // Runs once per document. Strategies never re-check it, and being over the token ceiling
     // never changes a route - it only triggers a cut inside one.
-    private static bool DocContainsHeadingOrLessThan4kTokens(PdfExtractionDocument doc)
+    private static bool DocContainsHeadingOrFitsOneChunk(PdfExtractionDocument doc)
     {
         int headingCount = doc.Headings.Count;
 
@@ -344,11 +349,11 @@ public class ChunkingService : IChunkingService
         // The token count is the real cl100k count, not the chars/token ratio estimate the
         // deleted record carried - the same counter the strategies budget with, so the gate and
         // the cut can never disagree about how big a document is.
-        double density = HeadingsPerThousandChars(doc);
-        bool   isSmall = TokenEstimator.Estimate(doc.Content) < SmallDocumentTokenCeiling;
+        double density      = HeadingsPerThousandChars(doc);
+        bool   fitsOneChunk = TokenEstimator.Estimate(doc.Content) < SmallDocumentTokenCeiling;
 
         return (headingCount >= MinHeadings && density >= MinHeadingsPerThousandChars)
-            || (isSmall && headingCount >= MinHeadingsWhenSmall);
+            || (fitsOneChunk && headingCount >= MinHeadingsWhenSmall);
     }
 
     // Headings per 1,000 characters - the over-firing tripwire measured on the corpus (D060:
@@ -366,16 +371,23 @@ public class ChunkingService : IChunkingService
     private const double MinHeadingsPerThousandChars = 0.1;
     private const int    MinHeadingsWhenSmall        = 1;
 
-    // The "can the whole document BE the retrieval unit" line, and the only size threshold this
-    // gate needs.
+    // The "does the whole document fit in ONE CHUNK" line, and the only size threshold this
+    // gate needs. Not a number of its own: the chunker's own ceiling, so the gate cannot
+    // disagree with the cut about what "fits" means.
     //
-    // REASONED, NEVER MEASURED (chunking-signals-map.md), and it is now the only such number
-    // left in this gate - it was DocumentSizeClassifier.MediumTokenThreshold, the boundary
-    // below which a document was classified Small, and that classifier is gone. It survives
-    // because it guards a clause that only ADMITS documents (a small document's single heading
-    // genuinely describes the whole thing), so being wrong costs a route, not data. It is the
-    // first thing to re-argue when Phase D measures a return bound.
-    private const int    SmallDocumentTokenCeiling   = 4_000;
+    // Was 4,000 tokens until 2026-09-22 - DocumentSizeClassifier.MediumTokenThreshold, the
+    // boundary below which a document was classified Small, carried over after that classifier
+    // was deleted and labelled REASONED, NEVER MEASURED (chunking-signals-map.md, D071).
+    // MEASURED on run 260921/1 (D215) and the premise did not survive: of the 91 documents the
+    // 4,000 version admitted on its own, the mean was 5.7 chunks and only 4 were a single
+    // chunk - corpus-wide just 7 documents in 1,101 produce one chunk and the largest is 470
+    // tokens. Both routes were then replayed over those 91 documents: above 512 tokens the
+    // route the clause bought differed from RecursiveStrategy by noise (503 vs 454 chunks, 17
+    // of 80 byte-identical, 3 over-ceiling chunks and 0 HardCut on each), while below 512 it
+    // earns its keep - Recursive splits a 254-token document into 3.
+    //
+    // Being wrong here still costs a route and not data, because the clause only ADMITS.
+    private const int    SmallDocumentTokenCeiling   = ChunkingBudget.TokenCeiling;
 
     // The floor for the minimum-content rule. Set from the corpus's known residue chunks
     // ("£ £" scores 0, a bare "#" scores 0, a checkbox row "1 2 3" scores 3) while the

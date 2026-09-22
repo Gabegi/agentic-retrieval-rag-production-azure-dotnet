@@ -32,7 +32,7 @@ public sealed class RecursiveStrategy : IDocumentChunkingStrategy
         //     on this route carries - there is no heading path to add - which is why an empty
         //     or oversized title is worth reporting rather than absorbing.
         var prefix       = PrefixBuilder.Build(doc.Title, doc.Family?.DomainTag, headingPath: null);
-        var prefixTokens = TokenEstimator.Estimate(prefix);
+        var prefixTokens = PrefixBuilder.Cost(prefix);   // as embedded, joiner included
 
         // 1c. A prefix that costs more than the body's own floor is not context any more, it is
         //     the chunk. Bail rather than emit chunks that are mostly title.
@@ -50,7 +50,7 @@ public sealed class RecursiveStrategy : IDocumentChunkingStrategy
         //      the line -> sentence -> word -> hard ladder) lives in BlockCascade, shared with
         //      route 1's oversized sections. It moved there unchanged: same order, same
         //      ceiling, same pieces.
-        var pieces = BlockCascade.Cut(doc.Content, 0, doc.Content.Length, bodyCeiling, doc.Tables);
+        var pieces = BlockCascade.Cut(doc.Content, 0, doc.Content.Length, bodyCeiling, doc.Tables, doc.Figures);
 
         // 8. One ChunkObject per piece: SectionIndex 0, running ChildIndex, heading fields null,
         //    HeadingSource "none", HeadingLocated FALSE. True with source "none" is a

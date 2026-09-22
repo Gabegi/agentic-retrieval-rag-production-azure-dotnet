@@ -12,6 +12,13 @@ namespace RagApp.UnitTests.Indexing;
 // The shape Content Understanding actually emits - all 288 tables in the corpus - is HTML on one
 // line. The GFM pipe path this file used to test alongside it went 2026-09-09: CU never emits
 // GFM (tableFormat is fixed at html), and the regex detection it belonged to is gone.
+//
+// FIXTURE CEILINGS (2026-09-22). The cutter stops repeating the header when the head leaves the
+// rows less than ChunkingBudget.MinBodyTokenBudget (128, an absolute number). A test that asserts
+// the header IS repeated therefore needs a ceiling above head + 128 - about 160 for this file's
+// 30-token head - so those tests run at 180. Real body ceilings on run 260921/1 were 409-504,
+// never near the floor; the small ceilings here are scaled-down fixtures, not a claim about
+// production.
 [TestClass]
 public class TableCuttingTests
 {
@@ -103,7 +110,7 @@ public class TableCuttingTests
         // the retrieved chunk - "1.847" is not an answer to anything.
         var text = HtmlTable(30);
 
-        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 120);
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 180);
 
         Assert.IsTrue(pieces.Count > 1, "a 30-row table over the ceiling must be cut");
         foreach (var piece in pieces)
@@ -145,7 +152,7 @@ public class TableCuttingTests
         // What keeps page attribution landing on the right pages for a table spanning a page
         // break: the fragment's Start is where its DATA is, not where the header it borrowed sits.
         var text   = HtmlTable(30);
-        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 120);
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 180);
 
         AssertSliceInvariant(text, pieces);
 
@@ -178,7 +185,7 @@ public class TableCuttingTests
                 $"<tr><td rowspan=\"2\">Regel {i}</td><td>{2000 + i},00</td></tr>")) +
             "</table>";
 
-        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 100);
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 180);
 
         Assert.IsTrue(pieces.Count > 1);
         Assert.AreEqual(20, pieces.Sum(p => CountOf(p.Text, "rowspan=")));
@@ -235,6 +242,107 @@ public class TableCuttingTests
 
         Assert.AreEqual(1, pieces.Count);
         Assert.IsTrue(pieces[0].Degraded);
+    }
+
+    // ── pricing what is emitted (2026-09-22, D211 §3.3 items 1 and 3) ────────
+
+    private static void AssertCeilingOrDegraded(IReadOnlyList<ContentPiece> pieces, int ceiling)
+    {
+        foreach (var piece in pieces)
+            Assert.IsTrue(TokenEstimator.Estimate(piece.Text) <= ceiling || piece.Degraded,
+                $"{TokenEstimator.Estimate(piece.Text)} tokens against {ceiling}, not degraded: {piece.Text}");
+    }
+
+    [TestMethod]
+    public void TextBetweenRows_IsPricedAndSurvivesExactlyOnce()
+    {
+        // The cutter used to charge each row and emit the slice, so a remark between two rows
+        // rode free inside a fragment and vanished between two fragments. 2,463 of 2,955
+        // fragments on run 260921/1 carried unpriced inter-row text; 1,561 chars were lost.
+        var text = "<table>" + HtmlHeader +
+            string.Concat(Enumerable.Range(0, 30).Select(i =>
+                $"<tr><td>Verpleegkundige niveau {i}</td><td>FWG {35 + i}</td><td>{2000 + i},00</td></tr>" +
+                (i % 3 == 0 ? $" Toelichting bij regel {i}: indexatie per 1 juli, zie bijlage 2." : ""))) +
+            "</table>";
+
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 120);
+
+        AssertCeilingOrDegraded(pieces, 120);
+        Assert.IsFalse(pieces.Any(p => p.Degraded), "no single row is over the ceiling here");
+        for (var i = 0; i < 30; i += 3)
+            Assert.AreEqual(1, pieces.Count(p => p.Text.Contains($"Toelichting bij regel {i}:", StringComparison.Ordinal)),
+                $"remark {i} must land in exactly one fragment");
+    }
+
+    [TestMethod]
+    public void FragmentsTileTheBlock_FromTheHeaderEndToTheLastRow()
+    {
+        var text   = HtmlTable(30);
+        var rows   = TableMarkup.Rows(text);
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 180);
+
+        var tiled = string.Concat(pieces.Select(p => text.Substring(p.Start, p.Length)));
+
+        Assert.AreEqual(text[TableMarkup.HeaderEnd(text, rows)..rows[^1].End], tiled);
+    }
+
+    [TestMethod]
+    public void ATailThatDoesNotFitTheLastFragment_BecomesItsOwnPieceWithTheHeader()
+    {
+        // 84 tables on run 260921/1 carried text after </table>; appended unpriced, the worst
+        // fragment reached 720 tokens. A footnote too long for the last fragment now gets its
+        // own piece, head repeated so it keeps its table.
+        var tail = " Bron: CAO GGZ bijlage 2. " +
+            string.Concat(Enumerable.Repeat("Toelichting op de salaristabel en de toepassing per functiegroep. ", 12));
+        var text = HtmlTable(30) + tail;
+
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 180);
+
+        AssertCeilingOrDegraded(pieces, 180);
+        var carrying = pieces.Where(p => p.Text.Contains("Bron: CAO GGZ", StringComparison.Ordinal)).ToList();
+        Assert.AreEqual(1, carrying.Count);
+        StringAssert.StartsWith(carrying[0].Text, "<table>");
+        StringAssert.Contains(carrying[0].Text, HtmlHeader);
+        Assert.AreEqual(tail, text.Substring(carrying[0].Start, carrying[0].Length),
+            "the tail piece addresses the tail's own characters");
+    }
+
+    [TestMethod]
+    public void AHeadThatLeavesTheRowsNoBudget_IsNotRepeated()
+    {
+        // A merged title band plus a long header row, 169 tokens against a 200 ceiling. Repeated,
+        // it made every one of 20 short rows its own degraded fragment (D211 finding 7: one table,
+        // 14 fragments). Not repeated, the rows pack and the header appears once.
+        var head = "<table><caption>Bijlage 3 Functiegroepen en salarisschalen per 1 juli 2025</caption>" +
+            "<tr><th colspan=\"4\">Overzicht van de functiegroepen met bijbehorende salarisschalen, periodieken en toelichting op de inschaling van medewerkers in de zorg en ondersteuning</th></tr>" +
+            "<tr><th>Functiegroep en omschrijving van de werkzaamheden</th><th>Salarisschaal volgens de CAO</th><th>Aantal periodieken en doorgroeimogelijkheden</th><th>Toelichting op de inschaling en overgangsregeling</th></tr>";
+        var text = head + string.Concat(Enumerable.Range(0, 20).Select(i =>
+            $"<tr><td>Groep {i}</td><td>FWG {35 + i}</td><td>{8 + i}</td><td>zie art. {i}</td></tr>")) + "</table>";
+
+        var pieces = TableCutter.Cut(Block(text, BlockKind.Table), 200);
+
+        AssertCeilingOrDegraded(pieces, 200);
+        Assert.IsFalse(pieces.Any(p => p.Degraded), "short rows must not be degraded by a heavy head");
+        Assert.IsTrue(pieces.Count > 1 && pieces.Count < 20, $"rows should pack, got {pieces.Count} pieces");
+        Assert.AreEqual(1, pieces.Count(p => p.Text.Contains("Functiegroep en omschrijving", StringComparison.Ordinal)),
+            "the header appears once, as the first rows");
+        Assert.IsTrue(pieces.All(p => p.Text.StartsWith("<table><caption>", StringComparison.Ordinal)),
+            "the opening markup and caption are still repeated");
+        Assert.AreEqual(20, pieces.Sum(p => RowsOf(p.Text).Count(r => !r.Contains("<th", StringComparison.Ordinal))));
+    }
+
+    [TestMethod]
+    public void EveryFragment_HonoursTheCeilingOrIsDegraded()
+    {
+        // The invariant, on every shape this file already cuts.
+        foreach (var (text, ceiling) in new[]
+        {
+            (HtmlTable(30), 120),
+            (HtmlTable(30, caption: false, header: false), 120),
+            (HtmlTable(30) + " Bron: CAO GGZ bijlage 2.", 120),
+            ("<table>" + HtmlHeader + $"<tr><td>{Prose(400)}</td></tr><tr><td>kort</td></tr></table>", 60),
+        })
+            AssertCeilingOrDegraded(TableCutter.Cut(Block(text, BlockKind.Table), ceiling), ceiling);
     }
 
     private static int CountOf(string text, string needle)

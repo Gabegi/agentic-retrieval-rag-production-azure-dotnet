@@ -23,7 +23,17 @@ public static class StructureFilter
             // page 14 reported table_count 0 while carrying half the table's rows. The range
             // comes from the parsed regions; without geometry TableInfo falls back to the
             // anchor, which is exactly the old behaviour.
-            Tables:         Overlapping(doc.Tables,     t => t.OverlapsPages(pageStart, pageEnd)),
+            //
+            // Attached WITHOUT its cells (2026-09-22): the range test puts one table on every
+            // chunk of every page it touches, so 3,619 tables became 21,921 entries on run
+            // 260921/1 and their Cells arrays were 122.7 MB of the 282 MB chunking artifact
+            // (43.5%). Nothing on the chunk side reads a cell - table_count is the entry count,
+            // has_table reads doc.Tables, the merged-cell report reads the extraction document -
+            // and the cells stay in full on the extraction artifact. Same rule that took Lines
+            // and Sections out of this record: a per-document payload multiplied by chunk count.
+            Tables:         Overlapping(doc.Tables,     t => t.OverlapsPages(pageStart, pageEnd))
+                                .Select(t => t with { Cells = [] })
+                                .ToList(),
             // The page the cut STARTS on. A cut spanning two differently-sized pages has no
             // single geometry, and the first page is the one a highlight would open on.
             Dimensions:     doc.PageSpans.FirstOrDefault(s => s.PageNumber == pageStart)?.Dimensions,

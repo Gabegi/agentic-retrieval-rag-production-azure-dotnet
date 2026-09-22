@@ -73,6 +73,12 @@ public sealed class ChunkingRunState
     public int ResidueDropped        { get; private set; }
     public int TocDropped            { get; private set; }
 
+    // Fenced diagrams (2026-09-22, D214 §2.8), summed from the same DiagramCounters read that
+    // fills the per-document row, so the total is the sum of the rows by construction.
+    public int DiagramBlocks                  { get; private set; }
+    public int DiagramBlocksCut               { get; private set; }
+    public int DiagramFragmentsWithoutContext { get; private set; }
+
     public IReadOnlyCollection<DocumentRunFacts> DocumentFacts => _facts.Values;
 
     public IReadOnlyList<string> FailedSourceIds =>
@@ -125,6 +131,11 @@ public sealed class ChunkingRunState
         var dropped = cutCount - kept.Count - tocDropped;
         ResidueDropped += dropped;
         TocDropped     += tocDropped;
+
+        var diagrams = DiagramCounters.Of(kept);
+        DiagramBlocks                  += diagrams.Blocks;
+        DiagramBlocksCut               += diagrams.Cut;
+        DiagramFragmentsWithoutContext += diagrams.FragmentsWithoutContext;
 
         var facts = FactsFor(doc);
         facts.Route          = route;

@@ -32,4 +32,29 @@ public static class TokenCounter
     // Exact token count of the text as the embedding model will see it.
     public static int Count(string? text) =>
         string.IsNullOrEmpty(text) ? 0 : Cl100k.Value.CountTokens(text);
+
+    // The longest prefix of the text that costs at most maxTokens, cut back to a word boundary.
+    //
+    // By TOKEN, not by characters or lines (D214 §2.6): the cap exists to bound what a piece of
+    // generated text costs against the embedding ceiling, and only the tokenizer knows that.
+    // GetIndexByTokenCount gives the character index at which the token budget is spent; the
+    // cut then backs up to the last whitespace before it so no fragment of a word is embedded.
+    // No ellipsis - a token spent on nothing. Text already under the cap comes back unchanged.
+    public static string? Truncate(string? text, int maxTokens)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        if (maxTokens <= 0) return "";
+        if (Cl100k.Value.CountTokens(text) <= maxTokens) return text;
+
+        var index = Cl100k.Value.GetIndexByTokenCount(text, maxTokens, out _, out _);
+        if (index <= 0) return "";
+
+        // Back to the last whitespace strictly before the token boundary. A text with no
+        // whitespace at all (a bare identifier, a URL) keeps the token boundary itself.
+        var cut = index;
+        while (cut > 0 && !char.IsWhiteSpace(text[cut - 1])) cut--;
+        if (cut == 0) cut = index;
+
+        return text[..cut].TrimEnd();
+    }
 }

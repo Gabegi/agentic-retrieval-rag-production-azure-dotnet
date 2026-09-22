@@ -630,4 +630,127 @@ public class ChunkingServiceTests
 
         Assert.AreEqual(1, chunks.Count);
     }
+
+    // ── the diagram that failed run 260921/1 (D209, D214) ────────────────────
+
+    [TestMethod]
+    public async Task TheDocumentThatFailedRun260921_ChunksEndToEnd_WithoutTrippingTheHardCutGate()
+    {
+        // pdf/5d10e5bd…, "Stepped Care model": a two-page document whose second page is one
+        // fenced flowchart JSON of 4,592 characters on one line. Before the diagram rung its
+        // edges array (1,487 characters, no whitespace) fell through every ladder rung to
+        // HardCutter, 4 of 10 chunks came back HardCut, and the 10% tripwire failed the
+        // document, the stage and a 44-minute extraction. The fence is verbatim from the run's
+        // artifact; the prose around it is a stand-in for page 1.
+        var diagram = ChunkingTestFixtures.CorpusText("diagram-stepped-care-55555555.md");
+        var content =
+            "# Stepped Care model\n\n" +
+            "Alle bij de cliënt betrokken begeleiders en behandelaren kunnen het triageproces starten.\n\n" +
+            "![Stepped Care Triageproces VGZ](figures/2.1 \"Flowchart with process boxes and decision diamonds.\")\n\n" +
+            diagram + "\n";
+
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync(
+            [Doc("pdf/55555555-5555-5555-5555-555555555555.pdf", content, title: "Stepped Care model-Werkwijze medische dienst VGZ/ GGZ")]);
+
+        Assert.IsTrue(docs.Count > 1, "the diagram alone is several chunks");
+        Assert.AreEqual(0, docs.Count(c => c.BoundaryLevel == BoundaryLevel.HardCut), "no chunk fell through to HardCutter");
+        Assert.IsTrue(docs.Any(c => c.BoundaryLevel == BoundaryLevel.DiagramElement), "the diagram was cut on its own elements");
+
+        foreach (var chunk in docs)
+            Assert.IsTrue(chunk.Metadata.TokenCount <= ChunkingBudget.TokenCeiling || chunk.Degraded,
+                $"chunk {chunk.ChildIndex} is {chunk.Metadata.TokenCount} tokens and not flagged");
+
+        Assert.AreEqual(0, stats.DocsWithZeroChunks);
+    }
+
+    [TestMethod]
+    public async Task CutDiagramFragments_CarryTheFigureCaptionInTheirPrefix_AndStillFitTheCeiling()
+    {
+        // D214 §2.6 end to end: the same document, now with the figure CU reported for it -
+        // Payload equal to the fence body, Caption "Stepped Care Triageproces VGZ". Every
+        // DiagramElement chunk's prefix ends with the caption, no other chunk's does, and the
+        // REAL token count of prefix + body stays under the ceiling unless the chunk is flagged
+        // - which is the invariant the cascade-side pricing exists to hold.
+        const string caption = "Stepped Care Triageproces VGZ";
+        var diagram = ChunkingTestFixtures.CorpusText("diagram-stepped-care-55555555.md");
+        var (bodyStart, bodyEnd) = DiagramMarkup.Body(diagram, DiagramMarkup.Fences(diagram)[0]);
+        var payload = diagram[bodyStart..bodyEnd].Trim();
+
+        var content =
+            "# Stepped Care model\n\n" +
+            "Alle bij de cliënt betrokken begeleiders en behandelaren kunnen het triageproces starten.\n\n" +
+            diagram + "\n";
+
+        var doc = Doc(
+            "pdf/55555555-5555-5555-5555-555555555555.pdf", content,
+            title:   "Stepped Care model-Werkwijze medische dienst VGZ/ GGZ",
+            figures: [new FigureInfo(caption, content.IndexOf("```", StringComparison.Ordinal), 1, "2.1", [],
+                                     Description: caption + "\n- Flowchart with multiple colored process boxes.", Kind: "mermaid", Payload: payload)]);
+
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
+
+        var fragments = docs.Where(c => c.BoundaryLevel == BoundaryLevel.DiagramElement).ToList();
+        Assert.IsTrue(fragments.Count > 1);
+
+        foreach (var chunk in fragments)
+        {
+            StringAssert.EndsWith(chunk.Metadata.Prefix, "\n\n" + caption, "fragment " + chunk.ChildIndex);
+            Assert.IsTrue(chunk.Metadata.TokenCount <= ChunkingBudget.TokenCeiling || chunk.Degraded,
+                $"fragment {chunk.ChildIndex}: {chunk.Metadata.TokenCount} tokens with the caption in the prefix, not flagged");
+        }
+
+        foreach (var chunk in docs.Where(c => c.BoundaryLevel != BoundaryLevel.DiagramElement))
+            Assert.IsFalse(chunk.Metadata.Prefix.Contains(caption, StringComparison.Ordinal), "a non-fragment carries no figure context");
+    }
+
+    [TestMethod]
+    public async Task TheReportCountsDiagramBlocks_CutBlocks_AndFragmentsWithoutContext()
+    {
+        // D214 §2.8, on the document row and on the stage totals: the failing document without
+        // its figure (every fragment lacks context), the same document with it (none does), and
+        // a small diagram that fits whole (a block, not a cut block). The totals are the sum of
+        // the rows by construction - both come off DiagramCounters.
+        const string caption = "Stepped Care Triageproces VGZ";
+        var diagram = ChunkingTestFixtures.CorpusText("diagram-stepped-care-55555555.md");
+        var (bodyStart, bodyEnd) = DiagramMarkup.Body(diagram, DiagramMarkup.Fences(diagram)[0]);
+        var payload = diagram[bodyStart..bodyEnd].Trim();
+
+        var big   = "# Stepped Care model\n\nInleiding.\n\n" + diagram + "\n";
+        var small = "# Klein\n\nInleiding.\n\n```mermaid\nflowchart TD\nA[\"Start\"] --> B[\"Einde\"]\n```\n";
+
+        var withoutFigure = Doc("pdf/zonder-figuur.pdf", big,   title: "Zonder figuur");
+        var withFigure    = Doc("pdf/met-figuur.pdf",    big,   title: "Met figuur",
+                                figures: [new FigureInfo(caption, big.IndexOf("```", StringComparison.Ordinal), 1, "2.1", [], Kind: "mermaid", Payload: payload)]);
+        var whole         = Doc("pdf/heel.pdf",          small, title: "Heel");
+
+        var (service, reports) = BuildWithReports();
+        var (docs, stats, _)   = await service.ChunkDocumentsAsync([withoutFigure, withFigure, whole]);
+
+        var rows = reports.Single().Documents.ToDictionary(r => r.SourceId, StringComparer.Ordinal);
+
+        var fragments = docs.Count(c => c.DocumentId == "pdf/zonder-figuur.pdf" && c.BoundaryLevel == BoundaryLevel.DiagramElement);
+        Assert.IsTrue(fragments > 1);
+
+        Assert.AreEqual((1, 1, fragments), (rows["pdf/zonder-figuur.pdf"].DiagramBlocks, rows["pdf/zonder-figuur.pdf"].DiagramBlocksCut, rows["pdf/zonder-figuur.pdf"].DiagramFragmentsWithoutContext),
+            "no figure: every fragment is without context");
+        Assert.AreEqual((1, 1, 0), (rows["pdf/met-figuur.pdf"].DiagramBlocks, rows["pdf/met-figuur.pdf"].DiagramBlocksCut, rows["pdf/met-figuur.pdf"].DiagramFragmentsWithoutContext),
+            "with the figure: every fragment has its caption");
+        Assert.AreEqual((1, 0, 0), (rows["pdf/heel.pdf"].DiagramBlocks, rows["pdf/heel.pdf"].DiagramBlocksCut, rows["pdf/heel.pdf"].DiagramFragmentsWithoutContext),
+            "fits whole: a block, not a cut block, and no fragments");
+
+        Assert.AreEqual(3,         stats.DiagramBlocks);
+        Assert.AreEqual(2,         stats.DiagramBlocksCut);
+        Assert.AreEqual(fragments, stats.DiagramFragmentsWithoutContext);
+    }
+
+    [TestMethod]
+    public async Task ADocumentWithoutDiagrams_ReportsZeroes()
+    {
+        var (service, reports) = BuildWithReports();
+        var (_, stats, _)      = await service.ChunkDocumentsAsync([Doc("doc1", "Gewone tekst zonder diagram.", title: "Proza")]);
+
+        var row = reports.Single().Documents.Single();
+        Assert.AreEqual((0, 0, 0), (row.DiagramBlocks, row.DiagramBlocksCut, row.DiagramFragmentsWithoutContext));
+        Assert.AreEqual((0, 0, 0), (stats.DiagramBlocks, stats.DiagramBlocksCut, stats.DiagramFragmentsWithoutContext));
+    }
 }

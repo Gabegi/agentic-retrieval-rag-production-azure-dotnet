@@ -39,6 +39,14 @@ public sealed class ChunkNeighborExpander
 
         // Documents in relevance order, chunks within a document in reading order,
         // total context capped so neighbor expansion can't blow up the prompt.
+        //
+        // A chunk that does not fit is SKIPPED, not the point where the loop stops (2026-09-22,
+        // D211 §3.3 item 7). This used to `break`, so one chunk too large for the remaining
+        // budget discarded every chunk behind it - the ones that would have fit and every
+        // lower-ranked document with them. Silent and ordering-dependent: a table cut into five
+        // 2,500-char fragments is 78% of the budget on its own. Skipping keeps the cap where it
+        // was and lets the rest of the ordered list fill what is left. Including the HEAD of an
+        // oversized chunk instead of skipping it is a per-chunk cap - item 8, landed separately.
         var ordered = expanded
             .GroupBy(c => c.DocumentId)
             .OrderBy(g => docRank.TryGetValue(g.Key, out var r) ? r : int.MaxValue)
@@ -50,7 +58,7 @@ public sealed class ChunkNeighborExpander
         {
             var text = chunk.ToContextText();
             if (total + text.Length > MaxContextChars)
-                break;
+                continue;
             chunks.Add(text);
             total += text.Length;
         }

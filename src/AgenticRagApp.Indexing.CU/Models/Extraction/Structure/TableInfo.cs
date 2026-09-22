@@ -6,10 +6,14 @@ namespace AgenticRagApp.Indexing.CU.Models;
 // page - anchor-only would silently discard every page after the first, and
 // re-acquiring that geometry later means a paid re-analysis, not a re-read of stored
 // data. So Regions follows SectionInfo's "every region" convention instead.
-// Caption/Footnotes are free fields off the same DocumentTable GetTables already reads.
-// A table chunk without its caption loses most of what makes the table findable by
-// search - whoever builds the chunk-metadata step must carry Caption through into
-// whatever text represents this table, not just the cell content.
+// Caption/Footnotes are free fields off the same DocumentTable CuTableHelper.Build already
+// reads. Caption is carried for the record and NOT projected onto the chunk or the index
+// (decided 2026-09-22, docs/2609/260922/table-chunking-review.md §4): on run 260921/1, 163 of
+// 3,619 tables had one and 153 of those were already inside the table's own markdown as
+// <caption>, so the chunk text carries them without any help; of the 10 that were not, 8 were
+// the placeholder "Salarisschaal functiegroep :formula:" and 2 were real. A table_captions
+// index field would buy those 2 and duplicate the 153. figure_captions is not a precedent:
+// figure captions are often absent from the markdown, table captions almost never are.
 public sealed record TableInfo(
     int RowCount,
     int ColumnCount,
@@ -21,10 +25,15 @@ public sealed record TableInfo(
     IReadOnlyList<DocumentRegion> Regions,
     // The service's own DocumentTable.Role as a string, mapped 2026-09-08 (A6). It is what
     // could distinguish a LAYOUT table from a DATA table, which is directly relevant to the
-    // HTML-table routing work - but NOTHING ROUTES ON IT YET, deliberately: map it, report the
-    // distribution, then decide, the same sequence FiguresByKind followed. Trailing default so
-    // extraction blobs written before the field existed still deserialize; null = the service
-    // reported no role, or the document predates the mapping.
+    // HTML-table routing work - but NOTHING ROUTES ON IT, deliberately: map it, report the
+    // distribution, then decide, the same sequence FiguresByKind followed. Decided 2026-09-22
+    // (docs/2609/260922/table-chunking-review.md §4): route on nothing. Run 260921/1 reported
+    // null on 3,619 of 3,619 tables, so there is nothing to route on; the same mapping pays off
+    // on figures (FigureInfo.Role set on 3,606 of 9,116, routed by FigureTextCounter), so the
+    // mapping stays and TablesByRole in the extraction report is where a populated Role would
+    // first show up. Trailing default so extraction blobs written before the field existed
+    // still deserialize; null = the service reported no role, or the document predates the
+    // mapping.
     string? Role = null,
     // The span length in the markdown (DocumentTable.Span.Length), mapped 2026-09-09 so the
     // chunker can take table blocks off the typed span instead of regex-detecting <table> runs

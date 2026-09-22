@@ -19,18 +19,29 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // markup (and, before 2026-09-08, for GFM pipe rows that CU never emits) - the same range was
 // being found by the service and then found again here. Lists and key-value runs are still
 // detected: CU types neither.
+//
+// DIAGRAMS ARE DELIMITED, NOT DETECTED (2026-09-22, D214). The third case: CU types no span for
+// a diagram, but it writes the payload inside a fence (` ```mermaid ` / ` ```chart `), and the
+// fence is markup the writer put there. Every line inside a complete fence is that diagram's
+// (DiagramMarkup.Fences), whatever it looks like - and that ordering matters: a flowchart's JSON
+// line `{"type":"flowchart",…` satisfies KeyValueDetector.IsPair, so before this a three-line
+// JSON payload was a key-value CANDIDATE and, when every line passed, went to a cutter that
+// refuses to cut. A typed table span still wins over a fence on the same line.
 public static class BlockParser
 {
     // Start and End are absolute; End excludes the line's own newline. Table is the index of the
-    // typed table this line belongs to, or -1.
-    private readonly record struct Line(int Start, int End, BlockKind Kind, bool IsBlank, int Table);
+    // typed table this line belongs to, or -1; Fence likewise for the complete fence it lies in.
+    private readonly record struct Line(int Start, int End, BlockKind Kind, bool IsBlank, int Table, int Fence);
 
     public static IReadOnlyList<ContentBlock> Parse(
         string content, IReadOnlyList<(int Start, int End)> tables)
     {
         if (string.IsNullOrEmpty(content)) return [];
 
-        var lines  = ReadLines(content, tables);
+        // Fences are read off the text handed in - the window, on route 1 - so a fence that
+        // straddles a section edge has no closer inside the window, is not reported, and its
+        // lines fall to prose. Same rule as a table straddling the window (BlockCascade).
+        var lines  = ReadLines(content, tables, DiagramMarkup.Fences(content));
         var runs   = GroupIntoRuns(content, lines);
         var blocks = Slice(content, lines, runs);
 
@@ -38,13 +49,16 @@ public static class BlockParser
         // block tests are the authority, so a candidate that does not survive its own detector
         // becomes prose. Running the same detectors the strategy will run means the parser and
         // the strategy can never disagree about what a block is. Tables need no confirmation:
-        // the service said so.
+        // the service said so. Nor do diagrams: the fence said so.
         blocks = Confirm(blocks);
 
         return MergeProse(content, blocks);
     }
 
-    private static List<Line> ReadLines(string content, IReadOnlyList<(int Start, int End)> tables)
+    private static List<Line> ReadLines(
+        string content,
+        IReadOnlyList<(int Start, int End)> tables,
+        IReadOnlyList<(int Start, int End)> fences)
     {
         var lines = new List<Line>();
         var start = 0;
@@ -55,10 +69,15 @@ public static class BlockParser
             var end     = newline < 0 ? content.Length : newline;
             var text    = content[start..end];
 
-            var table = TableAt(tables, start, end);
-            var kind  = table >= 0 ? BlockKind.Table : ClassifyLine(text);
+            // Typed span first, delimited fence second, detected shape last - the same
+            // "strongest evidence wins" order the cascade cuts in.
+            var table = RangeAt(tables, start, end);
+            var fence = table >= 0 ? -1 : RangeAt(fences, start, end);
+            var kind  = table >= 0 ? BlockKind.Table
+                      : fence >= 0 ? BlockKind.Diagram
+                      : ClassifyLine(text);
 
-            lines.Add(new Line(start, end, kind, string.IsNullOrWhiteSpace(text), table));
+            lines.Add(new Line(start, end, kind, string.IsNullOrWhiteSpace(text), table, fence));
 
             if (newline < 0) break;
             start = newline + 1;
@@ -67,15 +86,16 @@ public static class BlockParser
         return lines;
     }
 
-    // The typed table whose span overlaps this line, or -1. A blank line INSIDE a span is still
-    // the table's (CU writes multi-line tables), which is why an empty line is tested as a
-    // one-character range rather than as nothing.
-    private static int TableAt(IReadOnlyList<(int Start, int End)> tables, int start, int end)
+    // The range (a typed table span, or a complete fence) that overlaps this line, or -1. A
+    // blank line INSIDE a range is still the range's (CU writes multi-line tables; a diagram
+    // body may hold blank lines), which is why an empty line is tested as a one-character
+    // range rather than as nothing.
+    private static int RangeAt(IReadOnlyList<(int Start, int End)> ranges, int start, int end)
     {
         var probeEnd = Math.Max(end, start + 1);
 
-        for (var i = 0; i < tables.Count; i++)
-            if (tables[i].Start < probeEnd && tables[i].End > start)
+        for (var i = 0; i < ranges.Count; i++)
+            if (ranges[i].Start < probeEnd && ranges[i].End > start)
                 return i;
 
         return -1;
@@ -110,11 +130,14 @@ public static class BlockParser
         return runs;
     }
 
-    // Same kind continues a run, with two exceptions.
+    // Same kind continues a run, with three exceptions.
     //
     // A table run is ONE typed table: two tables back to back are two blocks (TableCutter closes
     // and repeats the markup of one table, not two), so a table line joins the run only when it
     // belongs to the same typed span as the line before it.
+    //
+    // A diagram run is ONE fence, for the same reason: DiagramCutter reads one opener and one
+    // closer, and two fences back to back are two diagrams.
     //
     // The adjacent-line key-value form: after a bare "Label:", the next line IS the value, and
     // it looks like prose because a value is prose. Closing the run there would put the label
@@ -126,6 +149,11 @@ public static class BlockParser
             return runKind == BlockKind.Table
                 && lines[index].Kind == BlockKind.Table
                 && lines[index].Table == lines[index - 1].Table;
+
+        if (runKind == BlockKind.Diagram || lines[index].Kind == BlockKind.Diagram)
+            return runKind == BlockKind.Diagram
+                && lines[index].Kind == BlockKind.Diagram
+                && lines[index].Fence == lines[index - 1].Fence;
 
         if (lines[index].Kind == runKind) return true;
 

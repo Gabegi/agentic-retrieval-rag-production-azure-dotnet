@@ -12,15 +12,22 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //
 // The order is a cascade of DECREASING STRUCTURE. A block is classified once, by the strongest
 // structure it shows, and the classification decides how it may be cut: a table on rows, a
-// key-value run on pairs, a list on items, and only prose falls through to the length ladder.
-// Prose is the LAST answer, not the first, because a mid-row or mid-pair cut destroys
-// information that a mid-paragraph cut merely interrupts.
+// diagram on elements, a key-value run on pairs, a list on items, and only prose falls through
+// to the length ladder. Prose is the LAST answer, not the first, because a mid-row or mid-pair
+// cut destroys information that a mid-paragraph cut merely interrupts.
 //
 // TABLES COME FROM THE SERVICE (2026-09-09): the ranges Content Understanding typed as tables
 // (TableInfo.Offset/Length) are handed to BlockParser as the table blocks; nothing here
 // detects table markup. A document extracted before Length was mapped has no usable spans and
 // therefore no table blocks - its tables are cut as prose, which is the honest consequence of
 // absent data, not a fallback to detection.
+//
+// DIAGRAMS COME FROM THE FENCE (2026-09-22, D214): BlockParser reads the complete fenced blocks
+// off the window itself (DiagramMarkup) and every line inside one is a Diagram block. The rung
+// sits before the key-value test because a flowchart's JSON lines pass KeyValueDetector.IsPair,
+// and it exists because a one-line flowchart payload offers the prose ladder nothing - its
+// edges array ran 1,487 characters without whitespace in the document that failed run 260921/1
+// (D209) - so the ladder terminated in HardCutter and the tripwire failed the stage.
 //
 // COORDINATES. The window is sliced out to be parsed, but every block is shifted straight back
 // into the source's coordinates before anything is cut, so the pieces that come out address
@@ -30,9 +37,13 @@ namespace AgenticRagApp.Indexing.CU.Services;
 public static class BlockCascade
 {
     // start/end are a half-open range into content, in doc.Content coordinates (the verbatim CU
-    // markdown); tables are the document's typed tables in the same coordinates.
+    // markdown); tables are the document's typed tables in the same coordinates. figures
+    // (2026-09-22, D214 §2.6) are the document's figures, read only to price the caption or
+    // description a CUT diagram fragment will carry in its prefix; null means none can be
+    // resolved, which is what the existing tests and a document without figures say honestly.
     public static IReadOnlyList<ContentPiece> Cut(
-        string content, int start, int end, int ceiling, IReadOnlyList<TableInfo> tables)
+        string content, int start, int end, int ceiling, IReadOnlyList<TableInfo> tables,
+        IReadOnlyList<FigureInfo>? figures = null)
     {
         var pieces   = new List<ContentPiece>();
         var proseRun = new List<ContentBlock>();
@@ -54,6 +65,25 @@ public static class BlockCascade
             {
                 FlushProse(content, proseRun, pieces, ceiling);
                 pieces.AddRange(TableCutter.Cut(block, ceiling));
+                continue;
+            }
+
+            // 2b. Diagram? The fence said so. Cut between whole elements - after a JSON
+            //     container's comma, or at a line start - never inside one, and never down the
+            //     prose ladder: HardCutter is unreachable from here (DiagramCutter).
+            if (block.Kind == BlockKind.Diagram)
+            {
+                FlushProse(content, proseRun, pieces, ceiling);
+
+                // The figure context a cut fragment will carry (DiagramContext), PRICED here
+                // with the same joiner EmbeddingText uses, so the ceiling holds on the string
+                // that is actually embedded. ChunkMetadataBuilder resolves it again through the
+                // same method for the same chunks - one rule, two callers. The cutter charges
+                // it only if the block does not fit whole.
+                var context       = DiagramContext.Resolve(block.Text, figures);
+                var contextTokens = context is null ? 0 : TokenEstimator.Estimate("\n\n" + context);
+
+                pieces.AddRange(DiagramCutter.Cut(block, ceiling, contextTokens));
                 continue;
             }
 

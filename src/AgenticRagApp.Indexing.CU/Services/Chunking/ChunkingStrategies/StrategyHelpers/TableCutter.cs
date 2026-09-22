@@ -42,6 +42,23 @@ public static class TableCutter
         var headerEnd = TableMarkup.HeaderEnd(text, rows);
         var tableEnd  = TableMarkup.TableEnd(text);
 
+        // The closing markup, verbatim: `</tbody></table>` and whatever else sits between the
+        // last row and the end of the table. Off the last row of the table, so it is the same
+        // whichever rows end up repeated.
+        var suffix = text[Math.Min(rows[^1].End, tableEnd)..tableEnd];
+
+        // Repeating the header stops paying for itself when it leaves the rows less than
+        // MinBodyTokenBudget (2026-09-22, D211 §3.3 item 6). Without this a head close to the
+        // ceiling made EVERY row its own degraded fragment, each carrying the full head - one
+        // table on run 260921/1 with a 2,116-char head produced 14 degraded fragments that way.
+        // The head then shrinks to the opening markup (`<table>`, caption), exactly what a table
+        // with no header rows gets, and the header rows appear once as the first data rows.
+        // Nothing is lost; the continuation fragments are knowingly headerless, which item 5
+        // will flag.
+        if (headerEnd > rows[0].Start &&
+            TokenEstimator.Estimate(text[..headerEnd].TrimStart() + suffix) > ceiling - ChunkingBudget.MinBodyTokenBudget)
+            headerEnd = rows[0].Start;
+
         // Repeated on every fragment: the opening tag, the caption (a table chunk without its
         // caption loses most of what makes it findable - see TableInfo), any `<thead>`/`<tbody>`
         // openings, and the header rows themselves. Leading whitespace is dropped because this
@@ -51,59 +68,94 @@ public static class TableCutter
         var dataRows = rows.Where(r => r.Start >= headerEnd).ToList();
         if (dataRows.Count == 0) return [PieceFactory.Whole(block, BoundaryLevel.None, degraded: true)];
 
-        // The closing markup, verbatim: `</tbody></table>` and whatever else sits between the
-        // last row and the end of the table.
-        var suffix = text[Math.Min(dataRows[^1].End, tableEnd)..tableEnd];
-
         // Anything after `</table>` on the same line - CU writes table footnotes as text after
         // the table, and a single-line table puts them inside this block. Carried on the LAST
-        // fragment only, so it is neither dropped nor duplicated.
+        // fragment when it fits there, else as a piece of its own (below) - never dropped, never
+        // duplicated, and since 2026-09-22 never unpriced.
         var tail = text[tableEnd..];
 
-        var prefixTokens = TokenEstimator.Estimate(prefix + suffix);
+        // THE STRING A FRAGMENT IS EMITTED AS IS THE STRING IT IS PRICED AS (2026-09-22, D211
+        // §3.3 item 1). Until then the loop charged Estimate(row) per row and emitted the
+        // contiguous slice, so text between rows rode free: 2,463 of 2,955 TableRow chunks on
+        // run 260921/1 carried unpriced inter-row text and 75 crossed the ceiling with
+        // degraded=false. One function composes, the same function is priced, and the invariant
+        // Estimate(piece.Text) <= ceiling || piece.Degraded holds by construction - no seam
+        // metric needed. This is also the seam the representation work replaces: a pipe
+        // rendering changes Compose, not the packing below it.
+        string Compose(int start, int end, bool withTail) =>
+            prefix + text[start..end] + suffix + (withTail ? tail : "");
 
-        var fragments = new List<(int Start, int End, bool Degraded)>();
-        int? start  = null;
-        var  end    = 0;
-        var  tokens = prefixTokens;
+        bool Fits(int start, int end, bool withTail = false) =>
+            TokenEstimator.Estimate(Compose(start, end, withTail)) <= ceiling;
+
+        // Fragments TILE [headerEnd, lastRow.End): the first begins where the repeated head
+        // ends and each next one begins where the previous ended (item 3). Before this the
+        // fragment ran first-row-start to last-row-end, and whatever sat between one fragment's
+        // last `</tr>` and the next's `<tr` landed nowhere - 1,561 non-whitespace chars across
+        // 35 tables on 260921/1.
+        var fragments = new List<Fragment>();
+        var  start    = headerEnd;
+        int? accepted = null;   // End of the last row packed into the open fragment
 
         foreach (var row in dataRows)
         {
-            var rowTokens = TokenEstimator.Estimate(text[row.Start..row.End]);
+            var fits = Fits(start, row.End);
 
-            if (start.HasValue && tokens + rowTokens > ceiling)
+            if (!fits && accepted is int end)
             {
-                fragments.Add((start.Value, end, false));
-                start  = null;
-                tokens = prefixTokens;
+                fragments.Add(new Fragment(start, end, Degraded: false));
+                start    = end;
+                accepted = null;
+                fits     = Fits(start, row.End);
             }
 
-            start ??= row.Start;
-            end     = row.End;
-            tokens += rowTokens;
+            accepted = row.End;
 
             // One row over the ceiling on its own: emitted whole and flagged. Cutting inside it
             // would corrupt the column alignment, and a corrupt row is worse than an oversized
             // chunk - the reader cannot tell which column a value belongs to.
-            if (start == row.Start && prefixTokens + rowTokens > ceiling)
+            if (!fits)
             {
-                fragments.Add((start.Value, end, true));
-                start  = null;
-                tokens = prefixTokens;
+                fragments.Add(new Fragment(start, row.End, Degraded: true));
+                start    = row.End;
+                accepted = null;
             }
         }
 
-        if (start.HasValue) fragments.Add((start.Value, end, false));
+        if (accepted is int last) fragments.Add(new Fragment(start, last, Degraded: false));
 
         if (fragments.Count == 0)
             return [PieceFactory.Whole(block, BoundaryLevel.None, degraded: true)];
 
-        return [.. fragments.Select((f, i) => PieceFactory.Composed(
+        // The tail rides the last fragment when it fits there (or when that fragment is already
+        // degraded - it is over regardless). Otherwise it is a piece of its own, head and closing
+        // markup repeated around it so the footnote keeps its table, degraded only when it does
+        // not fit even alone. Run 260921/1: 84 tables carried a real tail, max 916 chars; the
+        // worst fragment it was appended to reached 720 tokens.
+        if (tail.Length > 0)
+        {
+            var lastFragment = fragments[^1];
+            if (lastFragment.Degraded || string.IsNullOrWhiteSpace(tail) ||
+                Fits(lastFragment.Start, lastFragment.End, withTail: true))
+                fragments[^1] = lastFragment with { CarriesTail = true };
+            else
+                fragments.Add(new Fragment(
+                    tableEnd, text.Length,
+                    Degraded: TokenEstimator.Estimate(prefix + suffix + tail) > ceiling,
+                    TailOnly: true));
+        }
+
+        return [.. fragments.Select(f => PieceFactory.Composed(
             block,
-            prefix + text[f.Start..f.End] + suffix + (i == fragments.Count - 1 ? tail : ""),
+            f.TailOnly ? prefix + suffix + tail : Compose(f.Start, f.End, f.CarriesTail),
             f.Start,
             f.End,
             BoundaryLevel.TableRow,
             f.Degraded))];
     }
+
+    // Start/End are local to the block's text and address the rows (or the tail) this fragment
+    // carries - never the repeated head, see PieceFactory.Composed.
+    private readonly record struct Fragment(
+        int Start, int End, bool Degraded, bool CarriesTail = false, bool TailOnly = false);
 }
