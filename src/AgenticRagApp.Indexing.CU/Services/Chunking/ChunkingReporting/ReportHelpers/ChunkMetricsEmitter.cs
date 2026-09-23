@@ -52,7 +52,7 @@ public static class ChunkMetricsEmitter
             var routeTag = new KeyValuePair<string, object?>("route", group.Key);
 
             int band0 = 0, band1 = 0, band2 = 0, band3 = 0;
-            int coherent = 0, headings = 0;
+            int headings = 0;
 
             foreach (var chunk in group)
             {
@@ -64,7 +64,6 @@ public static class ChunkMetricsEmitter
                 else if (len < 1500) band2++;
                 else                 band3++;
 
-                if (chunk.IsCoherent)          coherent++;
                 if (chunk.HeadingText != null) headings++;
             }
 
@@ -73,8 +72,12 @@ public static class ChunkMetricsEmitter
             Instrumentation.ChunkSizeBand.Add(band2, strategyTag, routeTag, new("band", "500_to_1500"));
             Instrumentation.ChunkSizeBand.Add(band3, strategyTag, routeTag, new("band", "1500_plus"));
 
-            Instrumentation.CoherentChunks.Add(coherent,   strategyTag, routeTag);
             Instrumentation.HeadingsDetected.Add(headings, strategyTag, routeTag);
+
+            // Cut level per chunk, every level including zeros (D224 A6) - the same counts the
+            // report carries in CutBoundaries, per route here so the two routes can be compared.
+            foreach (var (level, count) in CutBoundaryCounters.Of(group.ToList()).Buckets)
+                Instrumentation.ChunkCutBoundaries.Add(count, strategyTag, routeTag, new("level", level));
         }
 
         Instrumentation.DuplicateChunks.Add(stats.DuplicateChunks, strategyTag);

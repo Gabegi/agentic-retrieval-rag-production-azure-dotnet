@@ -25,7 +25,8 @@ public record EvalRow(
 
     // Golden truth (what we expected)
     string          ExpectedAnswer,     // Antwoord
-    string          ExpectedSources,    // Bronnen
+    string          ExpectedSources,    // Bronnen — all-of
+    string          EquivalentSources,  // any-of family counted as one expected document (TestQuery.EquivalentSources); blank = none
 
     // Actual output
     string          Response,
@@ -95,6 +96,7 @@ public record EvalRow(
         DistinctDocumentsCited: 0,
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
+        EquivalentSources: q.EquivalentSources,
         Response: "",
         RetrievedContext: "",
         Succeeded: false,
@@ -141,6 +143,7 @@ public record EvalRow(
         DistinctDocumentsCited: 0,
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
+        EquivalentSources: q.EquivalentSources,
         Response: "",
         RetrievedContext: "",
         Succeeded: true,

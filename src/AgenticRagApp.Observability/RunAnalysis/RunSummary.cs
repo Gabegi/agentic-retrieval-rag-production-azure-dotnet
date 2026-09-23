@@ -103,7 +103,8 @@ public sealed record PreviousRunPointer(
     int?           DocsToProcess,
     int?           ChunksProduced,
     int?           DocsUploaded,
-    double?        CoherentChunkRatio,
+    // CoherentChunkRatio sat here until 2026-09-23 (D224 A6). Pointers written before that date
+    // still carry the property; System.Text.Json skips it on read.
     long?          IndexDocumentCount);
 
 // The most recent answer-quality eval, if one exists. Explicitly a PRE-RUN baseline: an eval

@@ -15,7 +15,6 @@ public sealed record ChunkingStageMetrics(
     int    Band100To500,
     int    Band500To1500,
     int    Band1500Plus,
-    int    CoherentChunks,
     int    HeadingsDetected,
     string Strategy,
 
@@ -96,6 +95,30 @@ public sealed record ChunkingStageMetrics(
     // stamped counts. See FigureTextMetrics.
     public FigureTextMetrics? FigureText { get; init; }
 
+    // Where the cutter cut, per chunk: one bucket per BoundaryLevel the pipeline knows, IN ENUM
+    // ORDER and WITH ITS ZEROS (2026-09-23, D224 A6). Replaces CoherentChunks, a first/last-
+    // character proxy that on Content Understanding markdown measured markdown syntax (85% of
+    // bodies open with a heading line or an HTML comment) and read 4% whatever the cutter did.
+    //
+    // Caller-stamped like the diagram counts: the level is a fact the cutter records on the piece,
+    // and Compute cannot see it through IChunkStatsSource. Unit is CHUNKS, the same list Compute
+    // measured, so the buckets sum to ChunksProduced. A zero bucket is evidence ("HardCut 0" is the
+    // tripwire's baseline), which is why absent levels are written as 0 rather than omitted.
+    //
+    // READ "Paragraph 0" WITH CARE: a split at a blank line is made by the packer, which does not
+    // stamp a level, so paragraph-boundary splits are counted under None together with the pieces
+    // that fitted whole. Paragraph is written as 0 because nothing stamps it, not because it never
+    // happens.
+    // Null = not measured: a pipeline with no cut-level concept, or a report from before this date.
+    public IReadOnlyDictionary<string, int>? CutBoundaries { get; init; }
+
+    // Of the chunks cut at a line break, how many end without sentence punctuation (. ! ?) - the
+    // seam is inside a sentence, because in CU markdown a single newline inside a paragraph is the
+    // PDF's visual wrap, not a clause (D223 F4). AN UPPER BOUND, and reported as a count on purpose:
+    // a list line or a label line also ends without punctuation, so no ratio is derived from it
+    // and nothing flags on it. Null = not measured.
+    public int? LineCutsEndingMidSentence { get; init; }
+
     // Token pressure on the identity embeddings - the one place the model's per-input limit is
     // live. Caller-stamped from step 1's diagnostics, like UntaggedFamilyMemberIds: Compute sees
     // chunks, and this is a fact about the documents. Null = no identity concept, or a report
@@ -112,7 +135,7 @@ public sealed record ChunkingStageMetrics(
         ChunksProduced:     0, DocsWithZeroChunks: 0, DuplicateChunks: 0,
         MinChunkSizeChars:  0, MaxChunkSizeChars:  0, AvgChunkSizeChars: 0, P95ChunkSizeChars: 0,
         BandUnder100:       0, Band100To500: 0, Band500To1500: 0, Band1500Plus: 0,
-        CoherentChunks:     0, HeadingsDetected: 0, Strategy: strategy,
+        HeadingsDetected:   0, Strategy: strategy,
         ZeroChunkDocumentIds: [], SampleChunks: [], SmallestChunk: null, LargestChunk: null,
         DuplicateSamples: []);
 
@@ -162,7 +185,7 @@ public sealed record ChunkingStageMetrics(
         // which two sections with identical bodies under different headings count as duplicates
         // of each other. See IChunkStatsSource.StatsText.
         var byContent    = new Dictionary<string, (int Count, T First)>(StringComparer.Ordinal);
-        int duplicates = 0, coherent = 0, headings = 0;
+        int duplicates = 0, headings = 0;
         int band0 = 0, band1 = 0, band2 = 0, band3 = 0;
 
         T? smallest = default, largest = default;
@@ -202,7 +225,6 @@ public sealed record ChunkingStageMetrics(
                 byContent[statsText] = (1, chunk);
             }
 
-            if (chunk.IsCoherent)      coherent++;
             if (chunk.HeadingText != null) headings++;
 
             if (len < smallestLen) { smallestLen = len; smallest = chunk; }
@@ -233,7 +255,6 @@ public sealed record ChunkingStageMetrics(
             Band100To500:       band1,
             Band500To1500:      band2,
             Band1500Plus:       band3,
-            CoherentChunks:     coherent,
             HeadingsDetected:   headings,
             Strategy:           strategy,
 

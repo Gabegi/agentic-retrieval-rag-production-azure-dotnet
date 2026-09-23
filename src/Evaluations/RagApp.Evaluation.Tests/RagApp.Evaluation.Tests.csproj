@@ -24,5 +24,10 @@
     <None Update="testdata\golden-questions.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- The ids ExpectedSources is linted against (GoldenQuestionsDatasetTests). Without this
+         the lint finds no manifest next to the assembly and reports itself inconclusive. -->
+    <None Update="testdata\corpus-manifest.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 </Project>

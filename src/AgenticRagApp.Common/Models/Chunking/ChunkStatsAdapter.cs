@@ -63,8 +63,13 @@ public class ChunkStatsAdapter : IChunkStatsSource
     [JsonIgnore] public bool IsUndersized  => TokenEstimate < 20;
 
     // Sentence boundary proxies — a coherent chunk starts and ends at natural boundaries.
-    // '|' counts as a clean end (a complete table row is a natural boundary) — kept in step
-    // with ChunkObject.EndsClean, which documents the measurement behind it.
+    // '|' counts as a clean end (a complete table row is a natural boundary).
+    //
+    // LEGACY (2026-09-23, D224 A6). These no longer mirror ChunkObject: the PDF pipeline dropped
+    // its StartsClean / EndsClean / IsCoherent and IChunkStatsSource no longer asks for IsCoherent,
+    // because on Content Understanding markdown the first-character test measured markdown syntax
+    // (heading lines, HTML comments) rather than cut quality. Kept only because this archived CSV
+    // adapter and its tests still read them; nothing in the run report does.
     [JsonIgnore] public bool StartsClean => Content.Length > 0 && (char.IsUpper(Content[0]) || char.IsDigit(Content[0]));
     [JsonIgnore] public bool EndsClean   => Content.Length > 0 && ".!?:)\"'|".Contains(Content[^1]);
     [JsonIgnore] public bool IsCoherent  => StartsClean && EndsClean;

@@ -429,6 +429,87 @@ public class ChunkingServiceTests
         Assert.AreEqual(0, docs.Count);
     }
 
+    // ── residue: page furniture (2026-09-23, D224 A1) ────────────────────────
+    //
+    // The residue rule counts alphanumerics with CU's PageHeader / PageNumber / PageBreak
+    // comments removed. Before, the comment labels alone cleared the floor and 2,015 chunks of
+    // pure page markup were indexed on run 260922/2.
+
+    [TestMethod]
+    [DataRow("<!-- PageNumber: 2026 -->")]
+    [DataRow("<!-- PageHeader: ![contoso](figures/1.1 \"The logo of contoso.\") -->")]
+    [DataRow("<!-- PageBreak -->\n<!-- PageNumber: Pagina 8 van 27 -->")]
+    public async Task PageFurnitureOnly_ProducesNoChunks(string content)
+    {
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", content)]);
+
+        Assert.AreEqual(0, docs.Count);
+    }
+
+    [TestMethod]
+    public async Task AScrapBesideAPageBreak_IsResidue_AsTheScrapAloneAlreadyWas()
+    {
+        // The bug as measured: "Ja" alone is residue (2 alphanumerics), but "Ja" next to a page
+        // turn was indexed, because "PageBreak" added 9 more.
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", "Ja\n\n<!-- PageBreak -->")]);
+
+        Assert.AreEqual(0, docs.Count);
+    }
+
+    [TestMethod]
+    public async Task AMarkupOnlyPreamble_IsDropped_AndTheSectionsAfterItKeepTheirIndex()
+    {
+        // The shape all three documents of run 260922/3 opened with. The preamble section still
+        // exists (HeadingLocator is unchanged); only its chunk goes. SectionIndex 1 stays 1, so no
+        // chunk id in the document moves.
+        var content = "<!-- PageHeader: ![contoso](figures/1.1 \"The logo of contoso.\") -->\n\n\n" +
+                      "# Werkinstructie\n\nDe paramedicus controleert de verwijzing voor de behandeling.";
+        var doc = Doc("doc1", content, title: "Werkinstructie",
+            headings: [H("Werkinstructie", content.IndexOf("# Werkinstructie", StringComparison.Ordinal))]);
+
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([doc]);
+
+        Assert.AreEqual(1, docs.Count);
+        Assert.AreEqual(1, docs[0].SectionIndex);
+        StringAssert.StartsWith(docs[0].Content, "# Werkinstructie");
+    }
+
+    [TestMethod]
+    public async Task AFootnoteInAPageFooterComment_Survives()
+    {
+        // CU wraps real footnotes in PageFooter (D223 F7, 713 chunks on 260922/2). PageFooter is
+        // deliberately not furniture.
+        var content = "<!-- PageFooter: 1 In het veldbrede advies wordt geadviseerd geen onderscheid meer te maken. -->";
+
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", content)]);
+
+        Assert.AreEqual(1, docs.Count);
+    }
+
+    [TestMethod]
+    public async Task AStandaloneFigureDescription_Survives()
+    {
+        // Regression guard: the alt text is CU's figure description, real content. Stripping
+        // figure markdown in the residue rule would drop 354 such chunks on 260922/2.
+        var content = "![MENTOR PIONIER MANAGER ONDERNEMER](figures/1.3 \"- Circular diagram with a teal outer ring\")";
+
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", content)]);
+
+        Assert.AreEqual(1, docs.Count);
+    }
+
+    [TestMethod]
+    public async Task ASurvivingChunk_KeepsItsPageMarkupInContent()
+    {
+        // The strip is for JUDGING only. Content stays the verbatim slice of the document.
+        var content = "De afspraken worden vastgelegd in de registratie.\n\n<!-- PageBreak -->";
+
+        var (docs, _, _) = await BuildService().ChunkDocumentsAsync([Doc("doc1", content)]);
+
+        Assert.AreEqual(1, docs.Count);
+        StringAssert.Contains(docs[0].Content, "<!-- PageBreak -->");
+    }
+
     // ── carried fields ───────────────────────────────────────────────────────
 
     [TestMethod]

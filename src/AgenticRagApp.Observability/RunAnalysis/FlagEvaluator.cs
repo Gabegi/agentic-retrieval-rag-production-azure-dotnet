@@ -50,8 +50,9 @@ public static class FlagEvaluator
     private const long CuPagesSpikeWarn = 2000;
 
     // Awaiting calibration - no defensible source. See RunAnalysisOptions.CalibrationMode.
-    private const double CoherenceWarnRatio      = 0.70;
-    private const double CoherenceCriticalRatio  = 0.50;
+    // The coherence pair (0.70 / 0.50) went with CoherentChunks on 2026-09-23 (D224 A6) and was
+    // not replaced: HardCut already has a tripwire in ChunkingService, and Word cuts are readable
+    // in Chunking.CutBoundaries.
     private const double UndersizedWarnRate      = 0.10;
     private const double UndersizedCriticalRate  = 0.20;
     private const double OversizedWarnRate       = 0.05;
@@ -206,16 +207,6 @@ public static class FlagEvaluator
         }
 
         if (c.ChunksProduced == 0) return; // nothing to compute ratios against
-
-        var coherence = c.CoherentChunks / (double)c.ChunksProduced;
-        if (coherence < CoherenceWarnRatio)
-            flags.Add(new ReportFlag(
-                coherence < CoherenceCriticalRatio ? FlagSeverity.Critical : FlagSeverity.Warning,
-                "Chunking.CoherentChunks",
-                $"{coherence:P0}", $"≥ {CoherenceWarnRatio:P0}",
-                "Chunks are starting or ending mid-sentence — the chunker is cutting at bad boundaries.",
-                "Compare the smallest/largest chunk samples; consider the split threshold or strategy.")
-            { AwaitingCalibration = true });
 
         var undersized = c.BandUnder100 / (double)c.ChunksProduced;
         if (undersized > UndersizedWarnRate)

@@ -85,43 +85,77 @@ public class GoldenQuestionsDatasetTests
             "Equivalence is scored against ExpectedAnswer: " + string.Join(", ", missing));
     }
 
-    // The corpus this dataset is written against. Kept as a path rather than a hardcoded list
-    // so adding a document to data/ is enough; if the directory is not present (the pipeline
-    // agent has the repo, so it is, but a packaged run may not) the check reports itself as
-    // skipped rather than passing silently.
+    // The corpus this dataset is written against, as the ids the index actually reports:
+    // testdata/corpus-manifest.txt, one blob name per line, '#' lines are provenance comments.
+    //
+    // Until 2026-09-23 this read a listing of data/chatbot-51pdf-documenten, which worked while a
+    // document id was a human-readable PDF filename. Under Zenya an id is 'pdf/<guid>.pdf', so a
+    // directory of named PDFs can no longer stand in for the corpus - and because that directory
+    // is still on disk, the old check would not have reported itself inconclusive, it would have
+    // failed every row. A manifest also carries the run it was generated from, which a directory
+    // listing never did.
+    //
+    // Regenerate from a run's extraction artifact when the corpus changes; if the file is absent
+    // (the pipeline agent has the repo, so it is there, but a packaged run may not) the check
+    // reports itself skipped rather than passing silently.
     [TestMethod]
     public void ExpectedSources_NameDocumentsThatExistInTheCorpus()
     {
-        var corpusDir = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "data", "chatbot-51pdf-documenten"));
+        var manifestPath = Path.Combine(AppContext.BaseDirectory, "testdata", "corpus-manifest.txt");
 
-        if (!Directory.Exists(corpusDir))
+        if (!File.Exists(manifestPath))
         {
-            Assert.Inconclusive($"Corpus directory not found at {corpusDir} - cannot verify ExpectedSources.");
+            Assert.Inconclusive($"Corpus manifest not found at {manifestPath} - cannot verify ExpectedSources.");
             return;
         }
 
-        // Filenames on disk can carry a decomposed diaeresis while the dataset is typed with
-        // the precomposed form, exactly as RagEvaluator.ComputeCitationMatch normalizes both
-        // sides before comparing. Same normalization here, or this check would fail on every
-        // 'cliënten' document while the real scoring passes.
-        var onDisk = Directory.GetFiles(corpusDir, "*.pdf")
-            .Select(f => Path.GetFileName(f).Normalize(System.Text.NormalizationForm.FormC))
+        // Ids can carry a decomposed diaeresis while the dataset is typed with the precomposed
+        // form, exactly as RagEvaluator.ComputeCitationMatch normalizes both sides before
+        // comparing. Same normalization here, or this check would fail on every 'cliënten'
+        // document while the real scoring passes.
+        var inCorpus = File.ReadLines(manifestPath)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .Select(line => line.Normalize(System.Text.NormalizationForm.FormC))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        Assert.IsTrue(inCorpus.Count > 0, $"{manifestPath} lists no document ids.");
+
+        // EquivalentSources (2026-09-23) is scored by the same comparison, so a typo there is the
+        // same silent miss and gets the same lint.
         var unknown = Load()
-            .SelectMany(r => r.ExpectedSources
-                .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => (r.Name, Source: s.Normalize(System.Text.NormalizationForm.FormC))))
-            .Where(x => !onDisk.Contains(x.Source))
+            .SelectMany(r => SplitIds(r.ExpectedSources).Concat(SplitIds(r.EquivalentSources))
+                .Select(s => (r.Name, Source: s)))
+            .Where(x => !inCorpus.Contains(x.Source))
             .Select(x => $"{x.Name} -> {x.Source}")
             .ToList();
 
         Assert.IsTrue(unknown.Count == 0,
-            "ExpectedSources must match a corpus filename exactly (CitationMatch compares " +
-            "document IDs, and a document ID is the blob name). These do not: " +
+            "ExpectedSources / EquivalentSources must match an indexed document id exactly (CitationMatch " +
+            "compares document IDs, and a document ID is the blob name). These do not: " +
             Environment.NewLine + string.Join(Environment.NewLine, unknown));
     }
+
+    // An id in both sets would be counted twice on a hit (once as an expected document, once as
+    // the equivalent family) and the row could score above 1. Either it is required (expected)
+    // or one acceptable alternative among several (equivalent); it cannot be both.
+    [TestMethod]
+    public void EquivalentSources_DoNotRepeatExpectedSources()
+    {
+        var overlapping = Load()
+            .Select(r => (r.Name, Both: SplitIds(r.ExpectedSources).Intersect(SplitIds(r.EquivalentSources), StringComparer.OrdinalIgnoreCase).ToList()))
+            .Where(x => x.Both.Count > 0)
+            .Select(x => $"{x.Name} -> {string.Join("; ", x.Both)}")
+            .ToList();
+
+        Assert.IsTrue(overlapping.Count == 0,
+            "A document id may be in ExpectedSources (required) or EquivalentSources (any-of), not both: " +
+            Environment.NewLine + string.Join(Environment.NewLine, overlapping));
+    }
+
+    private static IEnumerable<string> SplitIds(string sources) =>
+        sources.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+               .Select(s => s.Normalize(System.Text.NormalizationForm.FormC));
 
     [TestMethod]
     public void MultiSourceRows_ClaimMoreThanOneSubQuery()

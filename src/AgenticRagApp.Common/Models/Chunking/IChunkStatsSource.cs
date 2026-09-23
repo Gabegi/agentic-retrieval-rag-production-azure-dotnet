@@ -5,7 +5,11 @@ namespace AgenticRagApp.Common.Models;
 // references those types directly.
 public interface IChunkStatsSource : IChunk
 {
-    bool IsCoherent { get; }
+    // IsCoherent left this interface on 2026-09-23 (D224 A6). It was a first/last-character proxy
+    // for "cut at a sentence boundary", and on Content Understanding markdown 85% of bodies open
+    // with a "## heading" line or an HTML comment, so it read 4% and measured markdown syntax.
+    // Cut quality is now reported from the cutter's own record of WHERE it cut - the pipeline's
+    // BoundaryLevel per chunk, stamped onto ChunkingStageMetrics.CutBoundaries by the caller.
 
     // The string the size bands, the size extremes and duplicate detection are measured on.
     //
@@ -20,9 +24,6 @@ public interface IChunkStatsSource : IChunk
     // split needs no override, and gets the only sensible answer. If you add a type WITH a split,
     // override it: an inherited default here is silent, and the number it produces is wrong in a
     // way nothing reports.
-    //
-    // NOT the same decision as IsCoherent, which stays on the bare body deliberately - see
-    // ChunkObject.
     string StatsText => Content;
 
     // The stored tokenizer count of StatsText - the text that gets embedded - or null when the

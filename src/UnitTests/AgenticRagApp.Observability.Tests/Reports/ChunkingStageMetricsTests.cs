@@ -10,12 +10,7 @@ public class ChunkingStageMetricsTests
     // chunk type (see IChunkStatsSource), so the tests don't either.
     private sealed record TestChunk(
         string Id, string DocumentId, string Content, string? HeadingText = null,
-        int PageStart = 1, int ChildIndex = 0) : IChunkStatsSource
-    {
-        public bool IsCoherent => Content.Length > 0
-            && (char.IsUpper(Content[0]) || char.IsDigit(Content[0]))
-            && ".!?:)\"'".Contains(Content[^1]);
-    }
+        int PageStart = 1, int ChildIndex = 0) : IChunkStatsSource;
 
     private static TestChunk Chunk(string docId, string content, int index = 0) =>
         new($"{docId}::{index}", docId, content);
@@ -172,10 +167,10 @@ public class ChunkingStageMetricsTests
     // ── Existing aggregates still behave ─────────────────────────────────────
 
     [TestMethod]
-    public void Compute_PreservesBandsAndCoherenceCounts()
+    public void Compute_PreservesBandCounts()
     {
-        // One chunk per band. The 100-500 one is the only coherent chunk: starts with a
-        // capital, ends with a full stop.
+        // One chunk per band. (Until 2026-09-23 this also asserted CoherentChunks == 1; that
+        // metric left the record with D224 A6 and cut quality is CutBoundaries, caller-stamped.)
         var chunks = new[]
         {
             Chunk("a.pdf", new string('a', 50)),
@@ -191,7 +186,8 @@ public class ChunkingStageMetricsTests
         Assert.AreEqual(1, stats.Band100To500);
         Assert.AreEqual(1, stats.Band500To1500);
         Assert.AreEqual(1, stats.Band1500Plus);
-        Assert.AreEqual(1, stats.CoherentChunks);
+        Assert.IsNull(stats.CutBoundaries, "caller-stamped; Compute must leave it 'not measured'");
+        Assert.IsNull(stats.LineCutsEndingMidSentence);
         Assert.AreEqual(50,   stats.MinChunkSizeChars);
         Assert.AreEqual(2000, stats.MaxChunkSizeChars);
     }
@@ -222,7 +218,6 @@ public class ChunkingStageMetricsTests
         public string? HeadingText => null;
         public int     PageStart   => 1;
         public int     ChildIndex  => 0;
-        public bool    IsCoherent  => false;
 
         public string StatsText => $"{Prefix}\n\n{Content}";
     }
@@ -305,7 +300,6 @@ public class ChunkingStageMetricsTests
         public string? HeadingText                 => null;
         public int     PageStart                   => 1;
         public int     ChildIndex                  => 0;
-        public bool    IsCoherent                  => false;
         public int?    EmbeddedTokenCount          => Tokens;
         public bool    IsTableShaped               => Table;
         public int?    PrefixTokenCount            => Prefix;

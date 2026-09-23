@@ -182,13 +182,15 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     [JsonIgnore] public bool IsOversized   => TokenEstimate > 1024;
     [JsonIgnore] public bool IsUndersized  => TokenEstimate < 20;
 
-    // Sentence-boundary proxies - a coherent chunk starts and ends at natural boundaries.
-    // '|' counts as a clean end: a chunk closing on a complete table row ended at exactly the
-    // boundary TableCutter cut on, and without it every table chunk read as incoherent - 505
-    // of the 260818 run's 2,997 chunks, a fifth of the CoherentChunks shortfall.
-    [JsonIgnore] public bool StartsClean => Content.Length > 0 && (char.IsUpper(Content[0]) || char.IsDigit(Content[0]));
-    [JsonIgnore] public bool EndsClean   => Content.Length > 0 && ".!?:)\"'|".Contains(Content[^1]);
-    [JsonIgnore] public bool IsCoherent  => StartsClean && EndsClean;
+    // StartsClean / EndsClean / IsCoherent lived here until 2026-09-23 (D224 A6): "first character
+    // is a capital or digit, last character is sentence punctuation" as a proxy for a cut at a
+    // sentence boundary. On Content Understanding markdown the body of a whole-section chunk
+    // opens with its own "## heading" line and a page-turn chunk opens with "<!--", so the proxy
+    // was false by construction on 85% of chunks (21,618 + 8,906 of 35,804 on run 260922/2) and
+    // CoherentChunks read 4.0% whatever the cutter did. Repairing it would have meant a whitelist
+    // of acceptable openers (tables, bullets, figure markdown, fences) - an invented rule. Cut
+    // quality is reported from BoundaryLevel instead, which is the cutter's own record of where
+    // it cut (CutBoundaryCounters).
 
     // ── The structural index fields ─────────────────────────────────────────
     // Simple scalars/collections Search can store, standing in for the richer objects it can't.
@@ -244,14 +246,6 @@ public sealed class ChunkObject : ISnapshotSource, IChunkStatsSource
     // on. EmbeddingText, not Content, and the reason is on the interface: Content stopped being
     // prefix + body, so leaving the stats on it would shift every band down by the prefix length
     // and collapse two sections with identical bodies under different headings into a duplicate.
-    //
-    // IsCoherent above deliberately does NOT follow it. StartsClean/EndsClean ask whether the
-    // chunk begins and ends at sentence boundaries, and the prefix is a title line that always
-    // starts with a capital - measured on EmbeddingText, StartsClean would be true by
-    // construction, which is what it silently was before the split. On the bare body it asks the
-    // question it was written to ask. Expect CoherentChunks to drop against pre-refactor runs for
-    // that reason, and read the drop as the measurement being repaired rather than the chunker
-    // regressing.
     [JsonIgnore] public string StatsText => EmbeddingText;
 
     // IChunkStatsSource.EmbeddedTokenCount - the cl100k count of EmbeddingText that step 4 stamps

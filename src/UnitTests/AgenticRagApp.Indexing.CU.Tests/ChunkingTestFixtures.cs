@@ -33,9 +33,11 @@ internal static class ChunkingTestFixtures
     public static string Prose(int words, string word = "woord") =>
         string.Join(" ", Enumerable.Repeat(word, words)) + ".";
 
-    // Sentences, for the rung above word gaps.
+    // Sentences, for the rung above word gaps. Each opens with a capital, as prose does: since
+    // 2026-09-23 (D224 A4) a sentence end needs the next token to open a sentence, so a filler of
+    // all-lowercase sentences would offer the sentence rung no boundary at all.
     public static string Sentences(int count, int wordsEach = 6) =>
-        string.Join(" ", Enumerable.Range(0, count).Select(i => Prose(wordsEach, "woord" + i)));
+        string.Join(" ", Enumerable.Range(0, count).Select(i => Prose(wordsEach, "Woord" + i)));
 
     // A document for the two route tests. Only Content, Title, Family and LocatedSections
     // matter to a strategy - it decides WHERE to cut and knows nothing about ids, Zenya

@@ -154,13 +154,20 @@ public static class BlockCascade
         if (TokenEstimator.Estimate(unit.Text) <= ceiling)
             return [PieceFactory.Whole(unit, BoundaryLevel.None)];
 
-        // Line breaks: the strongest boundary still inside a paragraph.
-        var atLines = LineBreakCutter.Cut(unit, ceiling);
-        if (CeilingCheck.AllFit(atLines, ceiling)) return atLines;
-
-        // Sentence ends.
+        // Sentence ends FIRST (2026-09-23, D224 A4). Until then the line rung came first, on the
+        // premise that a line break inside a paragraph is a wrapped clause. In Content
+        // Understanding's markdown a single newline inside a paragraph is the PDF's visual wrap,
+        // so a line cut landed mid-sentence: replayed over run 260922/2's 615 over-ceiling prose
+        // units, 220 changed rung under the swap, and on those their seams without sentence
+        // punctuation went 215 -> 0 and their sub-floor pieces 211 -> 143, with no extra
+        // fragmentation (441 -> 443 pieces). The other 395 units cut identically either way.
         var atSentences = SentenceCutter.Cut(unit, ceiling);
         if (CeilingCheck.AllFit(atSentences, ceiling)) return atSentences;
+
+        // Line breaks: for prose that offers no sentence end that fits - address lists, label
+        // runs, a single sentence longer than the ceiling.
+        var atLines = LineBreakCutter.Cut(unit, ceiling);
+        if (CeilingCheck.AllFit(atLines, ceiling)) return atLines;
 
         // Word gaps - the last boundary the text itself offers.
         var atWords = WordGapCutter.Cut(unit, ceiling);

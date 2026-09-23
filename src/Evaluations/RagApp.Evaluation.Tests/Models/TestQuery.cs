@@ -89,4 +89,13 @@ public record TestQuery(
 
     // Why this row is in the set at all — which specific failure it is built to provoke.
     // Not scored; it is what makes a regression readable six months from now.
-    string Trap = "");
+    string Trap = "",
+
+    // Any-of companion to ExpectedSources (2026-09-23, D225 §2 / D228 step 1). ExpectedSources
+    // is all-of: every id named must be retrieved for full credit, which is right for a two-
+    // document MultiHop row and wrong for a fact that exists verbatim in many documents ("Wat is
+    // WARR?" - 81 documents contain the term, D227 §4). Ids listed here count as ONE expected
+    // document that is satisfied by retrieving any of them. Same shape as ExpectedSources
+    // (semicolon-separated document ids). Blank on every row that has no such family, and then
+    // every metric reads exactly as before - see RetrievalRankMetrics.
+    string EquivalentSources = "");

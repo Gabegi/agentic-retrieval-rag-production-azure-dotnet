@@ -122,9 +122,14 @@ public static class Instrumentation
     public static readonly Histogram<long> ChunksExtracted =
         Meter.CreateHistogram<long>("indexer.chunks_extracted", unit: "chunks", description: "Total chunks produced per indexing run");
 
-    // Chunks that start with uppercase/digit AND end with punctuation — proxy for clean sentence boundaries.
-    public static readonly Counter<long> CoherentChunks =
-        Meter.CreateCounter<long>("indexer.chunks_coherent", description: "Chunks with clean sentence start and end boundaries");
+    // indexer.chunks_coherent was retired 2026-09-23 (D224 A6): a first/last-character proxy that
+    // on CU markdown measured heading lines and HTML comments, not cut quality. Nothing in the
+    // repo, the infra folder or the reports script referenced the series by name. Its successor:
+    // chunk count per cut level, tagged "level" with the pipeline's BoundaryLevel name (None,
+    // Paragraph, Line, Sentence, Word, HardCut, TableRow, ListItem, DiagramElement), every level
+    // emitted each run including zeros so a flat line is a measured zero and not a missing series.
+    public static readonly Counter<long> ChunkCutBoundaries =
+        Meter.CreateCounter<long>("indexer.chunk_cut_boundaries", description: "Chunk count per cut boundary level (tag: level)");
 
     // Chunks with a heading field set — benefit from structural context in retrieval.
     public static readonly Counter<long> HeadingsDetected =

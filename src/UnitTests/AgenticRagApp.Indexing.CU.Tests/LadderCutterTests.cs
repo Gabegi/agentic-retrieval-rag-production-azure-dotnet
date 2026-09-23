@@ -6,7 +6,8 @@ using static RagApp.UnitTests.Indexing.ChunkingTestFixtures;
 
 namespace RagApp.UnitTests.Indexing;
 
-// The length ladder, weakest structure last: line -> sentence -> word -> hard. Only prose ever
+// The length ladder, weakest structure last: sentence -> line -> word -> hard (sentence before
+// line since 2026-09-23, D224 A4 - see LadderOrderTests). Only prose ever
 // reaches it, because a mid-paragraph cut merely interrupts information where a mid-row or
 // mid-pair cut destroys it.
 //
@@ -22,8 +23,8 @@ public class LadderCutterTests
     [TestMethod]
     public void LineBreakCutter_CutsOnNewlines_AndPacksToTheCeiling()
     {
-        // A line break inside a paragraph is usually a wrapped clause, a sub-item, or a line of
-        // a stripped table - a stronger signal than a full stop, so it is tried first.
+        // The rung below sentence ends since D224 A4 - in CU markdown a line break inside a
+        // paragraph is a PDF wrap, not a clause. What this test pins is the cutter itself.
         var lines = Enumerable.Range(0, 12).Select(i => Prose(6, "regel" + i)).ToList();
         var text  = string.Join("\n", lines);
 
@@ -64,8 +65,10 @@ public class LadderCutterTests
     [TestMethod]
     public void SentenceCutter_DoesNotBreakInsideAnArticleNumberOrAnAbbreviation()
     {
-        // Same rule as ChunkingHelper.SplitSentences, deliberately: an ender only counts when
-        // whitespace or end-of-text follows it, so "4.2.1" and "art. 7" survive.
+        // Rule 1, shared with ChunkingHelper.SplitSentences: an ender only counts when whitespace
+        // or end-of-text follows it, so "4.2.1" survives. "art. 7" is a boundary under the digit
+        // opener (LadderOrderTests pins that as a known limitation) but packs into one piece here
+        // because everything fits under 4096.
         const string text = "Zie artikel 4.2.1 en art. 7 van deze regeling voor de volledige toelichting.";
 
         var pieces = SentenceCutter.Cut(Block(text), 4096);
@@ -183,7 +186,8 @@ public class LadderCutterTests
     {
         // The chain is written as a fall-through because each level is cheap to try and the
         // last always succeeds. This is that contract stated as a test: line-breakable text
-        // never reaches the word rung.
+        // never reaches the word rung (the line rung is the second since D224 A4, still above
+        // words).
         var lines = Enumerable.Range(0, 12).Select(i => Prose(6, "regel" + i)).ToList();
         var text  = string.Join("\n", lines);
         var block = Block(text);

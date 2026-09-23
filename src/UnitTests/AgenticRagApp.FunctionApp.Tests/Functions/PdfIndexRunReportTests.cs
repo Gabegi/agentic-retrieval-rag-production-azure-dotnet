@@ -47,7 +47,6 @@ public class PdfIndexRunReportTests
         Band100To500:       2,
         Band500To1500:      15,
         Band1500Plus:       2,
-        CoherentChunks:     18,
         HeadingsDetected:   19,
         Strategy:           "SentenceAwareSlidingWindow",
         ZeroChunkDocumentIds: ["doc-with-no-chunks.pdf"],

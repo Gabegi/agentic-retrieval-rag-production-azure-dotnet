@@ -273,10 +273,17 @@ public class ChunkingService : IChunkingService
             //
             // The budget goes in so the report's token counts name the ceiling they were measured
             // against (ChunkTokenMetrics) - Observability cannot see ChunkingBudget itself.
+            // Where the cuts landed (D224 A6): counted over the same allChunks Compute measures, so
+            // the buckets sum to ChunksProduced. Caller-stamped because BoundaryLevel is this
+            // pipeline's type and Observability cannot see it.
+            var cuts              = CutBoundaryCounters.Of(allChunks);
+
             var stats             = ChunkingStageMetrics.Compute(
                                         allChunks, Name, sourceDocumentIds,
                                         ChunkingBudget.TokenCeiling, ChunkingBudget.MinBodyTokenBudget)
                                     with { ResidueChunksDropped = state.ResidueDropped,
+                                           CutBoundaries             = cuts.Buckets,
+                                           LineCutsEndingMidSentence = cuts.LineCutsEndingMidSentence,
                                            TocChunksDropped     = state.TocDropped,
                                            // Same caller-stamped contract (D214 §2.8): summed
                                            // per document on the state as the rows are built.
@@ -399,8 +406,13 @@ public class ChunkingService : IChunkingService
     // what it dropped is reporting.
     private const int MinChunkAlphanumericChars = 4;
 
+    // Counted with CU's page furniture removed (2026-09-23, D224 A1). The comment labels alone
+    // cleared the floor - "<!-- PageNumber: 2026 -->" is 14 alphanumerics - so 2,015 chunks on
+    // run 260922/2 that were nothing but page markup were indexed. The floor is not moved; the
+    // rule now judges the same string it was calibrated on. What counts as furniture, and why
+    // PageFooter and figure descriptions are not, is PageMarkup's to say.
     private static bool IsResidue(string content) =>
-        content.Count(char.IsLetterOrDigit) < MinChunkAlphanumericChars;
+        PageMarkup.StripFurniture(content).Count(char.IsLetterOrDigit) < MinChunkAlphanumericChars;
 
     // ── The heading-only rule (step 9) ──────────────────────────────────────
     //

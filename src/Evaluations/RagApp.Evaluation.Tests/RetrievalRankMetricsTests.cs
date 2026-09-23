@@ -154,4 +154,86 @@ public class RetrievalRankMetricsTests
         Assert.AreEqual(1.0,  RetrievalRankMetrics.CitationMatch("a.pdf; b.pdf", ranking));
         Assert.AreEqual(0.25, RetrievalRankMetrics.ReciprocalRank(RetrievalRankMetrics.FirstRelevantRank("a.pdf; b.pdf", ranking)));
     }
+
+    // ---- EquivalentSources: the any-of family (2026-09-23, D228 step 1) -------------------
+
+    [TestMethod]
+    public void EquivalentSources_AnyMemberRetrieved_CountsAsTheOneExpectedDocument()
+    {
+        // "Wat is WARR?": 81 documents state the answer. Retrieving one of them is a full hit.
+        var ranking = new[] { "other.pdf", "plan-b.pdf", "plan-c.pdf" };
+
+        Assert.AreEqual(1.0, RetrievalRankMetrics.CitationMatch("", "plan-a.pdf; plan-b.pdf; plan-c.pdf", ranking));
+        Assert.AreEqual(2,   RetrievalRankMetrics.FirstRelevantRank("", "plan-a.pdf; plan-b.pdf; plan-c.pdf", ranking));
+        Assert.AreEqual(1.0, RetrievalRankMetrics.RecallAt("", "plan-a.pdf; plan-b.pdf; plan-c.pdf", ranking, 5));
+        Assert.AreEqual(0.0, RetrievalRankMetrics.RecallAt("", "plan-a.pdf; plan-b.pdf; plan-c.pdf", ranking, 1));
+    }
+
+    [TestMethod]
+    public void EquivalentSources_TwoMembersRetrieved_StillCountOnce()
+    {
+        // Any-of, not all-of and not a bonus: the family is one document however many came back.
+        Assert.AreEqual(1.0, RetrievalRankMetrics.CitationMatch("", "a.pdf; b.pdf", ["a.pdf", "b.pdf"]));
+        Assert.AreEqual(1.0, RetrievalRankMetrics.RecallAt("", "a.pdf; b.pdf", ["a.pdf", "b.pdf"], 5));
+    }
+
+    [TestMethod]
+    public void EquivalentSources_BesideExpected_IsOneMoreExpectedDocument()
+    {
+        // gq-vocab-003 in D228's recommended form: the policy in ExpectedSources, the 80 plans as
+        // equivalents. A plan-only retrieval is half right; the policy alone is half right too.
+        Assert.AreEqual(0.5, RetrievalRankMetrics.CitationMatch("policy.pdf", "plan-a.pdf; plan-b.pdf", ["plan-b.pdf"]));
+        Assert.AreEqual(0.5, RetrievalRankMetrics.CitationMatch("policy.pdf", "plan-a.pdf; plan-b.pdf", ["policy.pdf"]));
+        Assert.AreEqual(1.0, RetrievalRankMetrics.CitationMatch("policy.pdf", "plan-a.pdf; plan-b.pdf", ["policy.pdf", "plan-a.pdf"]));
+        Assert.AreEqual(0.0, RetrievalRankMetrics.CitationMatch("policy.pdf", "plan-a.pdf; plan-b.pdf", ["other.pdf"]));
+
+        // Rank is the first document from EITHER set.
+        Assert.AreEqual(1, RetrievalRankMetrics.FirstRelevantRank("policy.pdf", "plan-a.pdf", ["plan-a.pdf", "policy.pdf"]));
+        Assert.AreEqual(2, RetrievalRankMetrics.FirstRelevantRank("policy.pdf", "plan-a.pdf", ["other.pdf", "policy.pdf", "plan-a.pdf"]));
+
+        // Recall@k uses the same denominator as CitationMatch.
+        Assert.AreEqual(0.5, RetrievalRankMetrics.RecallAt("policy.pdf", "plan-a.pdf", ["plan-a.pdf", "other.pdf", "policy.pdf"], 2));
+        Assert.AreEqual(1.0, RetrievalRankMetrics.RecallAt("policy.pdf", "plan-a.pdf", ["plan-a.pdf", "other.pdf", "policy.pdf"], 3));
+    }
+
+    [TestMethod]
+    public void EquivalentSources_BlankLeavesEveryMetricUnchanged()
+    {
+        // Every golden row today has the field blank, so the three-argument overloads must equal
+        // the two-argument ones on every input - this is the "zero rows move" guarantee.
+        string[] ranking = ["b.pdf", "a.pdf", "c.pdf"];
+        foreach (var equivalent in new[] { "", "  ", ";", " ; " })
+        {
+            Assert.AreEqual(RetrievalRankMetrics.CitationMatch("a.pdf; c.pdf", ranking),
+                            RetrievalRankMetrics.CitationMatch("a.pdf; c.pdf", equivalent, ranking));
+            Assert.AreEqual(RetrievalRankMetrics.FirstRelevantRank("a.pdf; c.pdf", ranking),
+                            RetrievalRankMetrics.FirstRelevantRank("a.pdf; c.pdf", equivalent, ranking));
+            Assert.AreEqual(RetrievalRankMetrics.RecallAt("a.pdf; c.pdf", ranking, 2),
+                            RetrievalRankMetrics.RecallAt("a.pdf; c.pdf", equivalent, ranking, 2));
+            Assert.AreEqual(-1.0, RetrievalRankMetrics.CitationMatch("", equivalent, ranking));
+            Assert.AreEqual(-1,   RetrievalRankMetrics.FirstRelevantRank("", equivalent, ranking));
+            Assert.AreEqual(-1.0, RetrievalRankMetrics.RecallAt("", equivalent, ranking, 5));
+        }
+    }
+
+    [TestMethod]
+    public void EquivalentSources_NotScorableRules_MatchExpectedSources()
+    {
+        // Only-equivalent rows are scorable; a null ranking is not, whichever set is filled.
+        Assert.AreEqual(0.0, RetrievalRankMetrics.CitationMatch("", "a.pdf", ["b.pdf"]));
+        Assert.AreEqual(0,   RetrievalRankMetrics.FirstRelevantRank("", "a.pdf", ["b.pdf"]));
+        Assert.AreEqual(-1,  RetrievalRankMetrics.FirstRelevantRank("", "a.pdf", null));
+        Assert.AreEqual(-1.0, RetrievalRankMetrics.RecallAt("", "a.pdf", null, 5));
+    }
+
+    [TestMethod]
+    public void EquivalentSources_NormalizesToNfc_LikeExpectedSources()
+    {
+        var decomposed  = "clie\u0308nten.pdf";
+        var precomposed = "cli\u00ebnten.pdf";
+
+        Assert.AreEqual(1.0, RetrievalRankMetrics.CitationMatch("", precomposed, [decomposed]));
+        Assert.AreEqual(1,   RetrievalRankMetrics.FirstRelevantRank("", precomposed, [decomposed]));
+        Assert.AreEqual(1.0, RetrievalRankMetrics.RecallAt("", precomposed, [decomposed], 1));
+    }
 }

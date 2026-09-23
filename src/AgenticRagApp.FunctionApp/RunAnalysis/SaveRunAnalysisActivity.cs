@@ -153,7 +153,6 @@ public class SaveRunAnalysisActivity
                 DocsToProcess:  summary.IndexReport?.Extraction?.DocsToProcess,
                 ChunksProduced: c?.ChunksProduced,
                 DocsUploaded:   summary.IndexReport?.Embedding?.DocsUploaded,
-                CoherentChunkRatio: c is { ChunksProduced: > 0 } ? c.CoherentChunks / (double)c.ChunksProduced : null,
                 IndexDocumentCount: summary.IndexReport?.Embedding?.IndexDocumentCountSnapshot);
 
             await _blobStore.UploadJsonAsync(_reports, LastRunPointerPath, pointer, ct: ct);

@@ -148,7 +148,7 @@ public sealed class RagEvaluator
         var equivalenceResult  = await equivalenceTask;
         var retrievalResult    = await retrievalTask;
 
-        var firstRelevantRank = RetrievalRankMetrics.FirstRelevantRank(testQuery.ExpectedSources, result.RetrievedDocumentRanking);
+        var firstRelevantRank = RetrievalRankMetrics.FirstRelevantRank(testQuery.ExpectedSources, testQuery.EquivalentSources, result.RetrievedDocumentRanking);
 
         // F1 (token overlap) is only meaningful when the corpus can produce the reference
         // answer. Known-gap scenarios get -1 so dashboards can exclude them from trends.
@@ -174,6 +174,7 @@ public sealed class RagEvaluator
             DistinctDocumentsCited: CountDistinctDocuments(result.Citations),
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
+            EquivalentSources: testQuery.EquivalentSources,
             Response:        result.Answer,
             RetrievedContext: result.RetrievedContext,
             Succeeded:       true,
@@ -191,7 +192,7 @@ public sealed class RagEvaluator
             Equivalence:  equivalenceResult.Get<NumericMetric>(EquivalenceEvaluator.EquivalenceMetricName)?.Value ?? 0,
             Retrieval: retrievalResult.Get<NumericMetric>(RetrievalEvaluator.RetrievalMetricName)?.Value ?? 0,
             F1:        f1,
-            CitationMatch: ComputeCitationMatch(testQuery.ExpectedSources, result.Citations),
+            CitationMatch: ComputeCitationMatch(testQuery.ExpectedSources, testQuery.EquivalentSources, result.Citations),
             // Rank metrics over the service's own ordering of the retrieved references - see
             // RetrievalRankMetrics. k is the pre-expansion reference count, not ChunksRetrieved.
             ReferencesRetrieved: result.ReferencesRetrieved,
@@ -200,8 +201,8 @@ public sealed class RagEvaluator
             // Both cutoffs over the same ranking: @5 is what synthesis realistically reads, @50
             // is whether retrieval reached the document at all. Equal means the gap is not where
             // the loss is - see RetrievalRankMetrics.RecallAt.
-            RecallAt5:  RetrievalRankMetrics.RecallAt(testQuery.ExpectedSources, result.RetrievedDocumentRanking, 5),
-            RecallAt50: RetrievalRankMetrics.RecallAt(testQuery.ExpectedSources, result.RetrievedDocumentRanking, 50),
+            RecallAt5:  RetrievalRankMetrics.RecallAt(testQuery.ExpectedSources, testQuery.EquivalentSources, result.RetrievedDocumentRanking, 5),
+            RecallAt50: RetrievalRankMetrics.RecallAt(testQuery.ExpectedSources, testQuery.EquivalentSources, result.RetrievedDocumentRanking, 50),
             // Deterministic, not a judge: a figure in the answer that appears nowhere in the
             // retrieved context is model memory wearing this context's citations. The 260818
             // run's "8,33% vakantietoeslag" rows scored Equivalence 5 while carrying exactly
@@ -246,6 +247,7 @@ public sealed class RagEvaluator
             DistinctDocumentsCited: CountDistinctDocuments(result.Citations),
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
+            EquivalentSources: testQuery.EquivalentSources,
             Response:        result.Answer,
             RetrievedContext: result.RetrievedContext,
             Succeeded:       true,
@@ -289,8 +291,10 @@ public sealed class RagEvaluator
     //
     // The arithmetic lives in RetrievalRankMetrics (2026-09-15) alongside the rank metrics, so
     // all three are tested against the same normalization and the same sentinel rules.
-    private static double ComputeCitationMatch(string expectedSources, IReadOnlyList<AgenticRagApp.Querying.Models.Citation> citations) =>
-        RetrievalRankMetrics.CitationMatch(expectedSources, citations.Select(c => c.DocumentId));
+    // EquivalentSources (2026-09-23) is the any-of family that counts as one more expected
+    // document - see RetrievalRankMetrics for the arithmetic.
+    private static double ComputeCitationMatch(string expectedSources, string equivalentSources, IReadOnlyList<AgenticRagApp.Querying.Models.Citation> citations) =>
+        RetrievalRankMetrics.CitationMatch(expectedSources, equivalentSources, citations.Select(c => c.DocumentId));
 
     private static string Normalize(string value) => value.Normalize(NormalizationForm.FormC);
 
