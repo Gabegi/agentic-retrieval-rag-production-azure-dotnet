@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using AgenticRagApp.Infrastructure.Clients.Zenya.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AgenticRagApp.Infrastructure.Clients.Zenya.Sync;
 
@@ -24,19 +27,24 @@ public sealed class ZenyaSyncService
     private readonly ZenyaSyncOptions _options;
     private readonly ILogger<ZenyaSyncService> _logger;
     private readonly TimeProvider _time;
+    private readonly ZenyaHarvester _harvester;
 
     public ZenyaSyncService(
         IZenyaClient zenya,
         IZenyaDocumentStore store,
         ZenyaSyncOptions options,
         ILogger<ZenyaSyncService> logger,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        ZenyaHarvester? harvester = null)
     {
         _zenya = zenya;
         _store = store;
         _options = options;
         _logger = logger;
         _time = time ?? TimeProvider.System;
+        // Optional only so the existing construction sites (tests) keep compiling; the harvest
+        // itself is not optional - a null here still harvests, through the same client.
+        _harvester = harvester ?? new ZenyaHarvester(zenya, NullLogger<ZenyaHarvester>.Instance, _time);
     }
 
     public async Task<ZenyaSyncResult> RunAsync(CancellationToken ct = default)
@@ -64,7 +72,9 @@ public sealed class ZenyaSyncService
             stored.Count, stored.Values.Sum(l => l.Count), c.ForeignBlobs, dryRun);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var item in _zenya.ListDocumentsAsync(states: null, ct))
+        // With every include_* block on: the typed item drives the flow below exactly as before,
+        // the raw row rides into the sidecar (D243 Part 1).
+        await foreach (var (item, listingRow) in _zenya.ListDocumentsWithBlocksAsync(states: null, ct))
         {
             c.Listed++;
             if (!seen.Add(item.DocumentId))
@@ -74,13 +84,18 @@ public sealed class ZenyaSyncService
             }
 
             var blobs = stored.GetValueOrDefault(item.DocumentId) ?? [];
-            if (blobs.Any(b => b.Version == item.Version))
+            // "Unchanged" is decided on the BINARY's version. A sidecar carries the same version
+            // metadata, but a document whose sidecar exists and whose binary does not is a
+            // half-written document, not an unchanged one.
+            if (blobs.Any(b => !ZenyaBlobLayout.IsSidecar(b.Name) && b.Version == item.Version))
             {
                 c.Unchanged++;
+                if (_options.Reharvest && !dryRun)
+                    await ReharvestAsync(item, listingRow, c, ct);
                 continue;
             }
 
-            await SyncDocumentAsync(item, blobs, dryRun, c, ct);
+            await SyncDocumentAsync(item, blobs, listingRow, dryRun, c, ct);
         }
 
         // Removal pass. Counted per document; a document may own more than one blob.
@@ -96,21 +111,95 @@ public sealed class ZenyaSyncService
             }
         }
 
+        // Tenant-level facts, once per run, after the walk so the folder ids are the ones seen on
+        // the documents harvested this run (D243 Part 2, _tenant/). Only when something was
+        // harvested: a run where nothing changed must stay at one listing call and write nothing,
+        // and the previous run's tenant file still stands. Never on a dry run.
+        if (!dryRun && c.Harvested > 0)
+        {
+            try
+            {
+                var tenant = await _harvester.HarvestTenantAsync(c.FolderIds, ct);
+                await UploadJsonAsync(ZenyaBlobLayout.TenantBlobNameFor(_time.GetUtcNow()), tenant, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                c.HarvestFailed++;
+                _logger.LogError(ex, "Tenant harvest failed; per-document sidecars are unaffected.");
+            }
+        }
+
         var result = c.ToResult(dryRun, stopwatch.Elapsed);
         _logger.LogInformation(
-            "Sync {Mode} done in {Elapsed}: listed {Listed}, new {New}, changed {Changed}, unchanged {Unchanged}, removed {Removed}, authored-skipped {Authored}, not-downloadable {NotDownloadable}, failed {Failed}, metadata-dropped {MetadataDropped}, bytes {Bytes}.",
+            "Sync {Mode} done in {Elapsed}: listed {Listed}, new {New}, changed {Changed}, unchanged {Unchanged}, removed {Removed}, authored-skipped {Authored}, not-downloadable {NotDownloadable}, failed {Failed}, metadata-dropped {MetadataDropped}, harvested {Harvested}, harvest-failed {HarvestFailed}, bytes {Bytes}.",
             dryRun ? "dry run" : "run", result.Elapsed, result.Listed, result.New, result.Changed, result.Unchanged,
-            result.Removed, result.AuthoredSkipped, result.NotDownloadable, result.Failed, result.MetadataDropped, result.BytesDownloaded);
+            result.Removed, result.AuthoredSkipped, result.NotDownloadable, result.Failed, result.MetadataDropped,
+            result.Harvested, result.HarvestFailed, result.BytesDownloaded);
         return result;
     }
 
-    private async Task SyncDocumentAsync(ZenyaDocumentListItem item, List<StoredZenyaBlob> blobs, bool dryRun, Counters c, CancellationToken ct)
+    // Everything Zenya says about the document, into meta/{id}.json (D243 Part 2). A failure
+    // here is counted and logged but never fails the document: the binary still syncs, and the
+    // sidecar is retried on the next run that touches the document (or on --reharvest).
+    private async Task HarvestAsync(ZenyaDocumentMetadata document, JsonElement? listingRow, Counters c, CancellationToken ct)
     {
-        var isNew = blobs.Count == 0;
+        try
+        {
+            var harvest = await _harvester.HarvestDocumentAsync(
+                document.DocumentId, document.Version, hasBinary: document.CanDownloadBinary == true, listingRow, ct);
+            await UploadJsonAsync(ZenyaBlobLayout.MetaBlobNameFor(document.DocumentId), harvest, ct);
+            c.Harvested++;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            c.HarvestFailed++;
+            _logger.LogWarning(ex, "Harvest of {DocumentId} '{Title}' failed; the document itself continues.", document.DocumentId, document.Title);
+        }
+    }
+
+    // An unchanged document under --reharvest: one metadata call for the routing flag, then the
+    // sidecar. No download - the binary is already current.
+    private async Task ReharvestAsync(ZenyaDocumentListItem item, JsonElement? listingRow, Counters c, CancellationToken ct)
+    {
+        try
+        {
+            var document = await _zenya.GetDocumentAsync(item.DocumentId, ct);
+            if (document.Folder?.FolderId is { } folderId) c.FolderIds.Add(folderId);
+            await HarvestAsync(document, listingRow, c, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            c.HarvestFailed++;
+            _logger.LogWarning(ex, "Reharvest of {DocumentId} '{Title}' failed at metadata.", item.DocumentId, item.Title);
+        }
+    }
+
+    // Sidecars carry zenya_document_id + zenya_version so the container listing recognises them
+    // as managed (not foreign) and the removal pass deletes them with their document. They are
+    // never counted as the binary: see IsSidecar at every place the sync reasons about blobs.
+    private Task UploadJsonAsync(string blobName, ZenyaHarvest harvest, CancellationToken ct)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [ZenyaBlobLayout.DocumentIdKey] = harvest.DocumentId,
+        };
+        if (harvest.Version is { } v) metadata[ZenyaBlobLayout.VersionKey] = v.ToString();
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(harvest.ToJson()));
+        return _store.UploadAsync(blobName, stream, "application/json", metadata, ct);
+    }
+
+    private async Task SyncDocumentAsync(ZenyaDocumentListItem item, List<StoredZenyaBlob> blobs, JsonElement? listingRow, bool dryRun, Counters c, CancellationToken ct)
+    {
+        var isNew = !blobs.Any(b => !ZenyaBlobLayout.IsSidecar(b.Name));
         var stage = "metadata";
         try
         {
             var document = await _zenya.GetDocumentAsync(item.DocumentId, ct);
+            if (document.Folder?.FolderId is { } folderId) c.FolderIds.Add(folderId);
+
+            // Before the routing decision, so the authored-only documents - the ones with no
+            // binary and therefore nothing else in the container - get a sidecar too.
+            if (!dryRun) await HarvestAsync(document, listingRow, c, ct);
 
             if (document.CanDownloadBinary != true)
             {
@@ -173,7 +262,7 @@ public sealed class ZenyaSyncService
 
             // A type change leaves the previous blob under another name; it must not survive as
             // a second SourceId for the same document.
-            foreach (var stale in blobs.Where(b => !string.Equals(b.Name, blobName, StringComparison.Ordinal)))
+            foreach (var stale in blobs.Where(b => !ZenyaBlobLayout.IsSidecar(b.Name) && !string.Equals(b.Name, blobName, StringComparison.Ordinal)))
             {
                 _logger.LogInformation("Removing {Blob}: superseded by {NewBlob}.", stale.Name, blobName);
                 await _store.DeleteAsync(stale.Name, ct);
@@ -198,16 +287,17 @@ public sealed class ZenyaSyncService
 
     private sealed class Counters
     {
-        public int Listed, New, Changed, Unchanged, Removed, AuthoredSkipped, NotDownloadable, Failed, ForeignBlobs, PdfWithoutMagic, MetadataDropped;
+        public int Listed, New, Changed, Unchanged, Removed, AuthoredSkipped, NotDownloadable, Failed, ForeignBlobs, PdfWithoutMagic, MetadataDropped, Harvested, HarvestFailed;
         public long BytesDownloaded;
         public readonly Dictionary<string, int> ByExtension = new(StringComparer.Ordinal);
         public readonly List<ZenyaSyncFailure> Failures = [];
+        public readonly HashSet<int> FolderIds = [];
 
         public void Count(bool isNew) { if (isNew) New++; else Changed++; }
         public void CountExtension(string ext) => ByExtension[ext] = ByExtension.GetValueOrDefault(ext) + 1;
 
         public ZenyaSyncResult ToResult(bool dryRun, TimeSpan elapsed) => new(
             dryRun, Listed, New, Changed, Unchanged, Removed, AuthoredSkipped, NotDownloadable, Failed,
-            ForeignBlobs, PdfWithoutMagic, MetadataDropped, BytesDownloaded, ByExtension, Failures, elapsed);
+            ForeignBlobs, PdfWithoutMagic, MetadataDropped, Harvested, HarvestFailed, BytesDownloaded, ByExtension, Failures, elapsed);
     }
 }

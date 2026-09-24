@@ -474,6 +474,85 @@ public class ChunkingServiceTests
         StringAssert.StartsWith(docs[0].Content, "# Werkinstructie");
     }
 
+    // ── the heading-only rule, live (2026-09-23, D224 A5) ───────────────────
+
+    [TestMethod]
+    public async Task AStrandedHeadingInFrontOfAnOversizeParagraph_IsDropped_AndItsSiblingKeepsItsId()
+    {
+        // The 712 case on run 260922/2: the cascade makes the heading line its own piece when the
+        // paragraph after it cannot pack beside it. The rule runs after numbering, so the
+        // survivors keep ChildIndex 1.. - no chunk id moves (the reason A2 was rejected).
+        var body    = string.Join(" ", Enumerable.Repeat("woord", 700));
+        // "Kopstuk", not "Kop": a three-letter heading is residue (under 4 alphanumerics) and
+        // would be taken by the residue rule first - see the precedence test below.
+        var content = "# Kopstuk\n\n" + body + "\n\n# Twee\n\nEen korte afsluitende zin.";
+        var doc = Doc("doc1", content, title: "T", headings:
+            [H("Kopstuk", 0), H("Twee", content.IndexOf("# Twee", StringComparison.Ordinal))]);
+
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync([doc]);
+
+        Assert.IsFalse(docs.Any(c => c.Content.Trim() == "# Kopstuk"), "the stranded heading is gone");
+        var section0 = docs.Where(c => c.SectionIndex == 0).ToList();
+        Assert.IsTrue(section0.Count > 0);
+        Assert.AreEqual(1, section0.Min(c => c.ChildIndex), "the first survivor keeps its ordinal");
+        Assert.AreEqual(1, stats.HeadingOnlyChunksDropped);
+        Assert.AreEqual(0, stats.ResidueChunksDropped);
+    }
+
+    [TestMethod]
+    public async Task AWholeSectionThatIsOnlyItsHeading_IsKept()
+    {
+        // The 122 case: nothing else in the section carries this heading, so dropping it would
+        // make "Artikel 21 vervallen" unfindable. Kept, counted under neither rule.
+        const string content = "# Artikel 21 vervallen\n\n# Artikel 22\n\nDe werknemer heeft recht op verlof.";
+        var doc = Doc("doc1", content, title: "CAO", headings:
+            [H("Artikel 21 vervallen", 0), H("Artikel 22", content.IndexOf("# Artikel 22", StringComparison.Ordinal))]);
+
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync([doc]);
+
+        Assert.IsTrue(docs.Any(c => c.Content.Trim() == "# Artikel 21 vervallen"));
+        Assert.AreEqual(0, stats.HeadingOnlyChunksDropped);
+        Assert.AreEqual(0, stats.ResidueChunksDropped);
+    }
+
+    [TestMethod]
+    public async Task AHeadingStrandedAboveATableOfContents_IsKept_WhenTheTocRuleTakesItsSiblings()
+    {
+        // Ordering: residue -> TOC -> heading-only. The heading's only siblings are the TOC
+        // table's fragments; judged before the TOC rule it would have siblings and be dropped,
+        // and then lose them - gone after all. Judged after, it is the section's sole survivor.
+        var rows    = string.Join("\n", Enumerable.Range(1, 160).Select(i => $"<tr><td>Hoofdstuk {i} Onderwerp {i}</td><td>{i}</td></tr>"));
+        var table   = "<table>\n<tr><th>Onderdeel</th><th>Pagina</th></tr>\n" + rows + "\n</table>";
+        var content = "## Inhoudsopgave\n\n" + table + "\n\n# Twee\n\nEen korte afsluitende zin.";
+        var tables  = new List<TableInfo> { new(0, 0, [], content.IndexOf("<table", StringComparison.Ordinal), 1, null, [], [], Length: table.Length) };
+        var doc = Doc("doc1", content, title: "T", tables: tables, headings:
+            [H("Inhoudsopgave", 0), H("Twee", content.IndexOf("# Twee", StringComparison.Ordinal))]);
+
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync([doc]);
+
+        Assert.IsTrue(stats.TocChunksDropped > 0, "the TOC fragments are dropped by the TOC rule");
+        Assert.IsTrue(docs.Any(c => c.Content.Trim() == "## Inhoudsopgave"), "the heading stub survives as the section's only chunk");
+        Assert.AreEqual(0, stats.HeadingOnlyChunksDropped);
+    }
+
+    [TestMethod]
+    public async Task ACutThatIsBothResidueAndHeadingOnly_IsCountedAsResidueOnly()
+    {
+        // Precedence: residue first. "## A" has one alphanumeric (residue) and is its own heading
+        // (heading-only); it is dropped once and counted once.
+        var body    = string.Join(" ", Enumerable.Repeat("woord", 700));
+        const string a = "## A";
+        var content = a + "\n\n" + body + "\n\n# Twee\n\nEen korte afsluitende zin.";
+        var doc = Doc("doc1", content, title: "T", headings:
+            [H("A", 0), H("Twee", content.IndexOf("# Twee", StringComparison.Ordinal))]);
+
+        var (docs, stats, _) = await BuildService().ChunkDocumentsAsync([doc]);
+
+        Assert.IsFalse(docs.Any(c => c.Content.Trim() == a));
+        Assert.AreEqual(1, stats.ResidueChunksDropped);
+        Assert.AreEqual(0, stats.HeadingOnlyChunksDropped);
+    }
+
     [TestMethod]
     public async Task AFootnoteInAPageFooterComment_Survives()
     {

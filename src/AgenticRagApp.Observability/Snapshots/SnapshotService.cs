@@ -80,11 +80,46 @@ public class SnapshotService : ISnapshotService
             .Concat(newChunks.Select(SnapshotChunk.From))
             .ToList();
 
+        // ── The scheme guard (2026-09-24, D234 Step 8) ──────────────────────────────────────
+        //
+        // The drop set above is built from THIS run's ids, so a row written under a previous id
+        // scheme can never appear in it and therefore never leaves. Measured on the 2026-09-24
+        // snapshot: 3,723 rows under 51 bare-filename ids from the pre-Zenya corpus
+        // ("Aanbrengbonus (Versie 5).pdf"), still riding along beside 33,223 rows under
+        // 1,265 "pdf/<guid>.pdf" ids - carried forward even by a run that processed nothing.
+        // They are not harmless: RestoreService rebuilds the index from this blob without
+        // consulting the live source, and their vectors are still in the cache (their hashes are
+        // in the live set this method returns, so eviction never touched them).
+        //
+        // The scheme is the source's own prefix, which is what every current id carries. The
+        // tripwire below is why this cannot quietly empty a snapshot: if NOTHING matches, the
+        // assumption is wrong for this source and the guard stands down rather than deleting the
+        // corpus. A source whose ids do not start with its own name keeps every row and says so.
+        var schemePrefix = source + "/";
+        var foreign = merged.Count(c => !c.DocumentId.StartsWith(schemePrefix, StringComparison.OrdinalIgnoreCase));
+
+        if (foreign > 0 && foreign < merged.Count)
+        {
+            merged = merged
+                .Where(c => c.DocumentId.StartsWith(schemePrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            _logger.LogWarning(
+                "Snapshot scheme guard — source '{Source}': dropped {Count} row(s) whose document id does not start with '{Prefix}'. These predate the current id scheme and no drop set could reach them.",
+                source, foreign, schemePrefix);
+        }
+        else if (foreign > 0)
+        {
+            _logger.LogError(
+                "Snapshot scheme guard — source '{Source}': ALL {Count} row(s) fail the '{Prefix}' prefix, so the prefix assumption is wrong for this source. Nothing dropped.",
+                source, foreign, schemePrefix);
+            foreign = 0;
+        }
+
         // Loud, because silence here is what let 93.4% of the rows accumulate unnoticed: a
         // merged set far larger than what came in means the drop set is not doing its job.
         _logger.LogInformation(
-            "Snapshot merge — source '{Source}': {Previous} previous row(s), {Dropped} document(s) in the drop set, {New} new row(s) → {Merged} live",
-            source, previous.Count, dropSet.Count, newChunks.Count, merged.Count);
+            "Snapshot merge — source '{Source}': {Previous} previous row(s), {Dropped} document(s) in the drop set, {New} new row(s), {Foreign} foreign-scheme row(s) dropped → {Merged} live",
+            source, previous.Count, dropSet.Count, newChunks.Count, foreign, merged.Count);
 
         var path = ReportPath.Build(startedAt, $"snapshot-{source}", instanceId);
         // Streamed - by far the largest payload in the system (the whole corpus's snapshot,
@@ -113,7 +148,10 @@ public class SnapshotService : ISnapshotService
         // document is gone", since the caller turns that into a delete.
         return new SnapshotLiveSet(
             merged.Select(c => c.ContentHash).ToHashSet(),
-            merged.Select(c => c.DocumentId).ToHashSet(StringComparer.OrdinalIgnoreCase));
+            merged.Select(c => c.DocumentId).ToHashSet(StringComparer.OrdinalIgnoreCase))
+        {
+            ForeignSchemeRowsDropped = foreign,
+        };
     }
 
     public async Task<(IReadOnlyList<SnapshotChunk> Chunks, string? InstanceId)> ReadLatestAsync(

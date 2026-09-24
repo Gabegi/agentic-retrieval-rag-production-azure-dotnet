@@ -19,6 +19,13 @@ terraform {
       source  = "hashicorp/time"
       version = "~> 0.11"
     }
+    # Used only in app_service.tf, for the interim POST /api/query shared secret (D238 §2). The
+    # value stays in Terraform state, which is why the state backend's access controls are part
+    # of that secret's threat model.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 
   backend "azurerm" {}

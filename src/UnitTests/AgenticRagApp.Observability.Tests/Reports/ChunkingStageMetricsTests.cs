@@ -187,7 +187,6 @@ public class ChunkingStageMetricsTests
         Assert.AreEqual(1, stats.Band500To1500);
         Assert.AreEqual(1, stats.Band1500Plus);
         Assert.IsNull(stats.CutBoundaries, "caller-stamped; Compute must leave it 'not measured'");
-        Assert.IsNull(stats.LineCutsEndingMidSentence);
         Assert.AreEqual(50,   stats.MinChunkSizeChars);
         Assert.AreEqual(2000, stats.MaxChunkSizeChars);
     }

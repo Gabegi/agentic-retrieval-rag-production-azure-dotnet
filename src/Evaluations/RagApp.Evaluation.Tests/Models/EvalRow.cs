@@ -27,6 +27,7 @@ public record EvalRow(
     string          ExpectedAnswer,     // Antwoord
     string          ExpectedSources,    // Bronnen — all-of
     string          EquivalentSources,  // any-of family counted as one expected document (TestQuery.EquivalentSources); blank = none
+    string          RelabelledOn,       // yyyy-MM-dd the row's labels last changed (TestQuery.RelabelledOn); blank = never. CompareEvalRuns excludes the row when this falls between two runs
 
     // Actual output
     string          Response,
@@ -73,6 +74,21 @@ public record EvalRow(
     // whole returned set (the production path sets no top-k) — containment, not rank.
     double       RecallAt5,           // 0-1 deterministic — expected documents found in the first 5 references; -1 = not scorable
     double       RecallAt50,          // 0-1 deterministic — same at k=50; always >= RecallAt5
+    // The retrieved set itself (2026-09-23, D228 step 3), so reach loss vs rank loss can be read
+    // per row without locating context text in the chunking artifact (D227 §2's approximation).
+    // Both are the k references in the service's reranker order, ' | '-joined like SubQueries,
+    // duplicates kept (two references from one document are two entries: that is how
+    // one-document dominance shows). Aligned index by index; a blank score = the service sent
+    // none. Empty on a guard-blocked or failed row.
+    string       RetrievedDocumentRanking, // document id per reference, e.g. "pdf/a.pdf | pdf/a.pdf | pdf/b.pdf"
+    string       RerankerScores,           // score per reference, F2, e.g. "2.91 | 2.64 | 1.80"
+    // The document behind each block of RetrievedContext, block order, duplicates kept (2026-09-23,
+    // D228 step 3b): what the judges were actually shown, by id. "Expected document retrieved
+    // but absent from the judged context" (D227 §5) is a set lookup on this and
+    // RetrievedDocumentRanking - CompareEvalRuns prints it per run. Do not recover block
+    // boundaries by splitting RetrievedContext on '---': chunk text may contain it; this list is
+    // the authority for block count and order.
+    string       ContextDocumentIds,       // document id per judged block, e.g. "pdf/a.pdf | pdf/a.pdf | pdf/b.pdf"
     int          UngroundedNumbers,  // count, deterministic — numeric literals in Response absent from RetrievedContext (NumericGroundingGuard): a correct-but-uncited figure is model memory wearing this context's citations; -1 = not scored (Refusal/failure rows)
 
     // Scores — Refusal scenarios only (−1 = not scored, e.g. an Answer scenario)
@@ -97,6 +113,7 @@ public record EvalRow(
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
         EquivalentSources: q.EquivalentSources,
+        RelabelledOn: q.RelabelledOn,
         Response: "",
         RetrievedContext: "",
         Succeeded: false,
@@ -118,6 +135,9 @@ public record EvalRow(
         ReciprocalRank: 0,
         RecallAt5: 0,
         RecallAt50: 0,
+        RetrievedDocumentRanking: "",
+        RerankerScores: "",
+        ContextDocumentIds: "",
         UngroundedNumbers: -1,
         RefusalScore: 0,
         RefusalRationale: "",
@@ -144,6 +164,7 @@ public record EvalRow(
         ExpectedAnswer: q.ExpectedAnswer,
         ExpectedSources: q.ExpectedSources,
         EquivalentSources: q.EquivalentSources,
+        RelabelledOn: q.RelabelledOn,
         Response: "",
         RetrievedContext: "",
         Succeeded: true,
@@ -165,6 +186,9 @@ public record EvalRow(
         ReciprocalRank: -1,
         RecallAt5: -1,
         RecallAt50: -1,
+        RetrievedDocumentRanking: "",
+        RerankerScores: "",
+        ContextDocumentIds: "",
         UngroundedNumbers: -1,
         RefusalScore: 5,
         RefusalRationale: $"Azure OpenAI content filter blocked the call before/instead of a model response: {filterMessage}",

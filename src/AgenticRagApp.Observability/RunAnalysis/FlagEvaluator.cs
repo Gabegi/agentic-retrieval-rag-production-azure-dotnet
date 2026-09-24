@@ -178,7 +178,14 @@ public static class FlagEvaluator
         // instead. See docs/2608/260827/extraction-coverage-chunking-review.md Gap 2.
         if (c.UntaggedFamilyMemberIds.Count > 0)
             flags.Add(new ReportFlag(FlagSeverity.Warning, "Chunking.UntaggedFamilyMemberIds",
-                $"{c.UntaggedFamilyMemberIds.Count} ({string.Join(", ", c.UntaggedFamilyMemberIds.Take(5))})", "0",
+                // The COUNT when the report carries one (D234 6b): the id list is capped at 20, so
+                // reading its length understated 553 as 20 on the 2026-09-23 forced run. Falls back
+                // to the list length for a report written before the field existed, and says which
+                // it is rather than printing a bare number that means different things.
+                c.UntaggedFamilyMemberCount is int n
+                    ? $"{n} ({string.Join(", ", c.UntaggedFamilyMemberIds.Take(5))}{(n > c.UntaggedFamilyMemberIds.Count ? ", …" : "")})"
+                    : $"{c.UntaggedFamilyMemberIds.Count} ids listed, count not measured ({string.Join(", ", c.UntaggedFamilyMemberIds.Take(5))})",
+                "0",
                 "These documents sit in a multi-member family but carry no DomainTag — the near-duplicate set they belong to cannot be disambiguated by sector, so retrieval can answer from the wrong one.",
                 "Check IdentityTagger in the run logs: either the DomainClassifier call failed for these documents (retried automatically next run) or the model judged that no population applies — for a multi-member family the latter is worth a human look."));
 

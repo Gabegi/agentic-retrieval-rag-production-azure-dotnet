@@ -60,4 +60,12 @@ public interface ISnapshotService
 // survived this run - which matters, because each one drives a delete.
 public sealed record SnapshotLiveSet(
     IReadOnlySet<string> ContentHashes,
-    IReadOnlySet<string> DocumentIds);
+    IReadOnlySet<string> DocumentIds)
+{
+    // Rows the scheme guard dropped this run (D234 Step 8, 2026-09-24). Reported rather than only
+    // logged because the one channel that would have carried a log line - App Insights - has
+    // received nothing since 2026-07-13, so the run report is the only place a reader can see it.
+    // 0 on every run after the one that cleans up, which is the point: a non-zero here says the
+    // snapshot was carrying rows no drop set could reach.
+    public int ForeignSchemeRowsDropped { get; init; }
+}

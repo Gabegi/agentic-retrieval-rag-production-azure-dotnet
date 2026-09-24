@@ -76,7 +76,7 @@ public static class ChunkMetricsEmitter
 
             // Cut level per chunk, every level including zeros (D224 A6) - the same counts the
             // report carries in CutBoundaries, per route here so the two routes can be compared.
-            foreach (var (level, count) in CutBoundaryCounters.Of(group.ToList()).Buckets)
+            foreach (var (level, count) in CutBoundaryCounters.Of(group.ToList()))
                 Instrumentation.ChunkCutBoundaries.Add(count, strategyTag, routeTag, new("level", level));
         }
 
@@ -87,6 +87,9 @@ public static class ChunkMetricsEmitter
 
         if (stats.TocChunksDropped > 0)
             Instrumentation.TocChunksDropped.Add(stats.TocChunksDropped, strategyTag);
+
+        if (stats.HeadingOnlyChunksDropped > 0)
+            Instrumentation.HeadingOnlyChunksDropped.Add(stats.HeadingOnlyChunksDropped, strategyTag);
 
         // The three diagram counts (D214 §2.8), same "only when non-zero" rule as the two above:
         // a run without diagrams emits nothing rather than a zero series.

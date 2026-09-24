@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using AgenticRagApp.Infrastructure.Clients.Zenya.Models;
 using Microsoft.Extensions.Logging;
 
@@ -98,6 +99,82 @@ public sealed class ZenyaClient : IZenyaClient
     public async Task<ZenyaDocumentContent> GetContentsAsync(string documentId, int version, CancellationToken ct = default) =>
         await GetJsonAsync<ZenyaDocumentContent>(
             $"documents/{Uri.EscapeDataString(documentId)}/v{version}/contents", ct);
+
+    // Same walk as ListDocumentsAsync, with the five include_* blocks on and each data[] row kept
+    // raw. The page is parsed once as a JsonDocument: the typed item comes out of the element,
+    // and the element itself (cloned, so it outlives the document) is what the harvest stores.
+    public async IAsyncEnumerable<ZenyaListedDocument> ListDocumentsWithBlocksAsync(
+        IReadOnlyCollection<string>? states = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var offset = 0;
+        while (true)
+        {
+            var query = $"documents?limit={PageSize}&offset={offset}&envelope=true&include_total=true"
+                        + Sync.ZenyaHarvester.ListingIncludes;
+            if (states is { Count: > 0 })
+                query += string.Concat(states.Select(s => $"&states={Uri.EscapeDataString(s)}"));
+
+            using var response = await SendAsync(query, HttpCompletionOption.ResponseContentRead, ct);
+            using var page = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            var root = page.RootElement;
+
+            var returned = 0;
+            if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var row in data.EnumerateArray())
+                {
+                    returned++;
+                    var item = row.Deserialize<ZenyaDocumentListItem>()
+                               ?? throw new ZenyaApiException(response.StatusCode, null, null,
+                                   $"Zenya listing row at offset {offset} could not be read as a document.");
+                    yield return new ZenyaListedDocument(item, row.Clone());
+                }
+            }
+
+            // Identical stop rule to ListDocumentsAsync - see the comment there.
+            int? total = root.TryGetProperty("pagination", out var pg) && pg.TryGetProperty("total", out var t) && t.TryGetInt32(out var tv) ? tv : null;
+            if (root.TryGetProperty("pagination", out pg) && pg.TryGetProperty("returned", out var r) && r.TryGetInt32(out var rv))
+                returned = rv;
+            offset += returned;
+            if (returned == 0 || returned < PageSize || (total is { } tt && offset >= tt))
+                yield break;
+        }
+    }
+
+    // Raw and non-throwing on purpose: the harvest records a 403 or 404 as the answer, because
+    // that status is the only thing that will later distinguish "not permitted" from "not
+    // present" (D243 Part 2). ZenyaRetryHandler still retries 429 underneath; what reaches here
+    // is final.
+    public async Task<ZenyaRawResponse> GetRawAsync(string relativePath, CancellationToken ct = default)
+    {
+        var token = await _tokens.GetTokenAsync(ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, relativePath);
+        AddCommonHeaders(request);
+        request.Headers.Authorization = new AuthenticationHeaderValue(token.Scheme, token.Token);
+
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+        var text = await response.Content.ReadAsStringAsync(ct);
+        var status = (int)response.StatusCode;
+
+        if (text.Length == 0)
+            return new ZenyaRawResponse(relativePath, status, contentType, null);
+
+        if (contentType is not null && contentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(text);
+                return new ZenyaRawResponse(relativePath, status, contentType, doc.RootElement.Clone());
+            }
+            catch (JsonException)
+            {
+                // Declared JSON, was not. Keep the bytes; the reader sees Text and no Body.
+            }
+        }
+        return new ZenyaRawResponse(relativePath, status, contentType, null, text);
+    }
 
     // --- plumbing ---------------------------------------------------------------------------
 

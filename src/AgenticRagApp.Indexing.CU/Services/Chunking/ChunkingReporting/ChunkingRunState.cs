@@ -72,6 +72,10 @@ public sealed class ChunkingRunState
     public int HeadingsWithoutOffset { get; private set; }
     public int ResidueDropped        { get; private set; }
     public int TocDropped            { get; private set; }
+    // Heading-only cuts the rule of the same name dropped (D224 A5), kept apart from residue so
+    // "is this document shedding junk cuts" and "how many stranded headings did it have" stay
+    // two questions.
+    public int HeadingOnlyDropped    { get; private set; }
 
     // Fenced diagrams (2026-09-22, D214 §2.8), summed from the same DiagramCounters read that
     // fills the per-document row, so the total is the sum of the rows by construction.
@@ -123,14 +127,16 @@ public sealed class ChunkingRunState
     // tocDropped is the part of that difference the TOC filter took, passed in rather than
     // recomputed: both rules run inside the service and only it knows which cut went to which.
     // Subtracted out so ResidueDropped keeps meaning what it has always meant - cuts too thin
-    // to be content - and a TOC drop does not read as a document shedding junk.
+    // to be content - and a TOC drop does not read as a document shedding junk. headingOnlyDropped
+    // (D224 A5) is subtracted for the same reason.
     public void Chunked(
         PdfExtractionDocument doc, IReadOnlyList<ChunkObject> kept, int cutCount, string route,
-        int tocDropped = 0)
+        int tocDropped = 0, int headingOnlyDropped = 0)
     {
-        var dropped = cutCount - kept.Count - tocDropped;
-        ResidueDropped += dropped;
-        TocDropped     += tocDropped;
+        var dropped = cutCount - kept.Count - tocDropped - headingOnlyDropped;
+        ResidueDropped     += dropped;
+        TocDropped         += tocDropped;
+        HeadingOnlyDropped += headingOnlyDropped;
 
         var diagrams = DiagramCounters.Of(kept);
         DiagramBlocks                  += diagrams.Blocks;
@@ -141,8 +147,9 @@ public sealed class ChunkingRunState
         facts.Route          = route;
         facts.Chunks         = kept;
         facts.CutCount       = cutCount;
-        facts.ResidueDropped = dropped;
-        facts.TocDropped     = tocDropped;
+        facts.ResidueDropped     = dropped;
+        facts.TocDropped         = tocDropped;
+        facts.HeadingOnlyDropped = headingOnlyDropped;
 
         // identity_skipped is reserved for a document that produced nothing AND had nothing to
         // resolve an identity from. A document with no title and no headings but with content
@@ -262,6 +269,7 @@ public sealed class DocumentRunFacts(string sourceId)
     public int CutCount              { get; set; }
     public int ResidueDropped        { get; set; }
     public int TocDropped            { get; set; }
+    public int HeadingOnlyDropped    { get; set; }
     public int HeadingsTotal         { get; set; }
     public int HeadingsLocated       { get; set; }
     public int HeadingsWithoutOffset { get; set; }

@@ -3,10 +3,11 @@ using AgenticRagApp.Indexing.CU.Services;
 
 namespace RagApp.UnitTests.Indexing;
 
-// Step 9 of the 260818 fix plan, pinned but NOT live - ChunkingService.DropHeadingOnlyChunks is
-// false until a re-index confirms the 35 mislabelled salary chunks have gone to 0. Those 35 ARE
-// heading-only chunks, so enabling this first would make that check pass whether or not
-// TableCaptionSplitter (since removed, 2026-09-09) actually worked.
+// Step 9 of the 260818 fix plan. Pinned here from 260818 while ChunkingService.DropHeadingOnlyChunks
+// was held at false (so the "35 -> 0" salary-chunk check could not be satisfied by this rule
+// instead of TableCaptionSplitter, since removed 2026-09-09); LIVE since 2026-09-23 (D224 A5).
+// These tests pin the SHAPE test alone; ChunkingServiceTests pin when the service acts on it -
+// only when the section kept another chunk carrying the heading.
 [TestClass]
 public class HeadingOnlyChunkTests
 {
@@ -50,16 +51,19 @@ public class HeadingOnlyChunkTests
     }
 
     [TestMethod]
-    public void TheRuleIsNotLiveYet()
+    public void TheRuleIsLive()
     {
-        // Pins the ordering itself: this must fail the day someone flips the flag without
-        // reading why it is off. See last-run-fixes.md - "step 9 must not precede step 6".
+        // Inverted 2026-09-23 (D224 A5). Until then this pinned the flag OFF, so that nobody could
+        // flip it without reading why ("step 9 must not precede step 6", last-run-fixes.md). The
+        // ordering constraint went with TableCaptionSplitter on 2026-09-09; the rule was then
+        // measured on run 260922/2 and switched on with the section-sibling guard. This pin now
+        // says the opposite: switching it OFF again is a decision, not an accident.
         var field = typeof(ChunkingService).GetField(
             "DropHeadingOnlyChunks",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
 
         Assert.IsNotNull(field, "DropHeadingOnlyChunks was renamed or removed.");
-        Assert.AreEqual(false, field!.GetValue(null),
-            "Enable this only after a re-index confirms the 35 mislabelled salary chunks are 0.");
+        Assert.AreEqual(true, field!.GetValue(null),
+            "The heading-only rule is live since D224 A5; read that section before turning it off.");
     }
 }

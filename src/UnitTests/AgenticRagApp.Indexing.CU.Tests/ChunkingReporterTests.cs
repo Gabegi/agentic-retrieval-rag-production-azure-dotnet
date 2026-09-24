@@ -210,6 +210,26 @@ public class ChunkingReporterTests
     }
 
     [TestMethod]
+    public async Task HeadingOnlyDrops_AreCountedApartFromResidue()
+    {
+        // D224 A5: three cuts in, none kept - one was a stranded heading, two were residue. The
+        // row says which rule took which, and the residue count no longer absorbs the heading.
+        var (reporter, reports) = BuildReporter();
+        var doc                 = Doc("split");
+        var (state, _)          = StateFor(doc);
+
+        state.Chunked(doc, [], cutCount: 3, route: "DeclaredBoundary", tocDropped: 0, headingOnlyDropped: 1);
+
+        await reporter.WriteAsync(state, CancellationToken.None);
+
+        var row = reports.Single().Documents.Single();
+        Assert.AreEqual(2, row.ResidueChunksDropped);
+        Assert.AreEqual(1, row.HeadingOnlyChunksDropped);
+        Assert.AreEqual(1, state.HeadingOnlyDropped);
+        Assert.AreEqual(2, state.ResidueDropped);
+    }
+
+    [TestMethod]
     public async Task RouteProducedNoCuts_IsADifferentReasonFromResidue()
     {
         var (reporter, reports) = BuildReporter();

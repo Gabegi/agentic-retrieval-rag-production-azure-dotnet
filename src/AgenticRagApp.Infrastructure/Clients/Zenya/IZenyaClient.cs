@@ -33,7 +33,24 @@ public interface IZenyaClient
     // GET /documents/{id}/v{version}/contents - the typed authored-content route. The `content`
     // string's shape is unknown until A8; returned opaque.
     Task<ZenyaDocumentContent> GetContentsAsync(string documentId, int version, CancellationToken ct = default);
+
+    // GET /documents with every include_* block on, yielding each data[] row raw beside the typed
+    // item. The typed item is what the sync branches on (version); the raw row is what the
+    // harvest stores, so the five gated blocks (persons, check info, read roles, writer
+    // invitations, custom fields) are kept without being modelled (D243 Part 1).
+    IAsyncEnumerable<ZenyaListedDocument> ListDocumentsWithBlocksAsync(
+        IReadOnlyCollection<string>? states = null,
+        CancellationToken ct = default);
+
+    // Any GET, answered raw. Does NOT throw on a non-2xx: the status is the result. A 403 on a
+    // route is a fact about the document for this user and the harvest records it as such
+    // (D243 Part 2). Auth failures still surface as ZenyaAnonymousException via the token provider.
+    Task<ZenyaRawResponse> GetRawAsync(string relativePath, CancellationToken ct = default);
 }
+
+// One listing row two ways: the typed item the sync's control flow reads, and the same row as
+// Zenya sent it, for the harvest. Raw is null only when the row could not be parsed at all.
+public sealed record ZenyaListedDocument(ZenyaDocumentListItem Item, System.Text.Json.JsonElement? Raw);
 
 // A streamed binary download. Owns the underlying response; dispose when done with the stream.
 public sealed class ZenyaDownload : IAsyncDisposable, IDisposable

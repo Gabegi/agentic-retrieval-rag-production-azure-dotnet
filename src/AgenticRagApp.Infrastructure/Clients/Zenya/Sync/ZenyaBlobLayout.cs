@@ -19,6 +19,21 @@ public static class ZenyaBlobLayout
     public const string PdfPrefix  = "pdf/";
     public const string DocsPrefix = "docs/";
 
+    // The harvest sidecars (D243 Part 2). meta/{document_id}.json holds every raw answer Zenya
+    // gave about that document; _tenant/{runId}.json holds what is true of the tenant rather
+    // than of one document. Both carry zenya_document_id + zenya_version metadata so the sync's
+    // own listing recognises them (not foreign) and the removal pass deletes a removed document's
+    // sidecar with its binary. The indexer never sees them: IndexDiffService keeps only *.pdf.
+    public const string MetaPrefix   = "meta/";
+    public const string TenantPrefix = "_tenant/";
+
+    public static string MetaBlobNameFor(string documentId) => $"{MetaPrefix}{documentId}.json";
+    public static string TenantBlobNameFor(DateTimeOffset runStartedUtc) =>
+        $"{TenantPrefix}{runStartedUtc.ToUniversalTime():yyyyMMddTHHmmssZ}.json";
+
+    public static bool IsSidecar(string blobName) =>
+        blobName.StartsWith(MetaPrefix, StringComparison.Ordinal) || blobName.StartsWith(TenantPrefix, StringComparison.Ordinal);
+
     // Blob metadata keys. Free-text values (title, quick code, type names) are ALWAYS
     // RFC 3986 percent-encoded (Uri.EscapeDataString): blob metadata values must be ASCII and
     // Dutch titles are not. Readers decode with Uri.UnescapeDataString. Identifiers, numbers,

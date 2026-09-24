@@ -18,8 +18,15 @@ namespace AgenticRagApp.Indexing.CU.Services;
 //                     deriving it would be new logic in a counter.
 //   Paragraph       - blank-line boundary; rarely labelled (consumed at parse time).
 //   Sentence, TableRow, ListItem, DiagramElement - clean by construction.
-//   Line            - the one ambiguous level: in CU markdown a single newline inside a paragraph
-//                     is the PDF's visual wrap, so a Line cut can land mid-sentence (D223 F4).
+//   Line            - in CU markdown a single newline inside a paragraph is the PDF's visual
+//                     wrap, so a Line cut can land mid-sentence (D223 F4). Since A4 put the
+//                     sentence rung FIRST, this level is only reached by text the sentence rung
+//                     could not cut - text with no usable ender - so on the 2026-09-23 forced run
+//                     all 204 Line pieces ended without punctuation. The companion counter that
+//                     measured that (LineCutsEndingMidSentence) was retired 2026-09-24, D234 E2:
+//                     post-A4 it equals this bucket by construction and adds nothing. Pre-A4 it
+//                     did discriminate (626 of 699 on the 260922/2 recount), which is the same
+//                     mechanism seen from the other side.
 //   Word, HardCut   - mid-sentence by construction. HardCut has its own tripwire in
 //                     ChunkingService; "HardCut 0" here is that tripwire's baseline made visible.
 //
@@ -27,10 +34,7 @@ namespace AgenticRagApp.Indexing.CU.Services;
 // level nobody counted; a written 0 can.
 public static class CutBoundaryCounters
 {
-    private static readonly char[] SentenceEnders = ['.', '!', '?'];
-
-    public static (IReadOnlyDictionary<string, int> Buckets, int LineCutsEndingMidSentence) Of(
-        IReadOnlyList<ChunkObject> chunks)
+    public static IReadOnlyDictionary<string, int> Of(IReadOnlyList<ChunkObject> chunks)
     {
         // Dictionary rather than SortedDictionary on purpose: System.Text.Json writes insertion
         // order, and enum order is the order the ladder descends, which is how the row reads.
@@ -38,23 +42,9 @@ public static class CutBoundaryCounters
         foreach (var level in Enum.GetValues<BoundaryLevel>())
             buckets[level.ToString()] = 0;
 
-        var midSentence = 0;
-
         foreach (var chunk in chunks)
-        {
             buckets[chunk.BoundaryLevel.ToString()]++;
 
-            // Same ender set as SentenceCutter, deliberately - this asks whether the seam the
-            // line cut made is one that cutter would have accepted. Upper bound: a list line or a
-            // label line ends without punctuation too, and is counted.
-            if (chunk.BoundaryLevel == BoundaryLevel.Line)
-            {
-                var body = chunk.Content.AsSpan().TrimEnd();
-                if (body.Length == 0 || Array.IndexOf(SentenceEnders, body[^1]) < 0)
-                    midSentence++;
-            }
-        }
-
-        return (buckets, midSentence);
+        return buckets;
     }
 }

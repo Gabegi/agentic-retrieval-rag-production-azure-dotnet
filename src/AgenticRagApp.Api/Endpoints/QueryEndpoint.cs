@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http.HttpResults;
+using AgenticRagApp.Api.Security;
 using AgenticRagApp.Observability;
 using AgenticRagApp.Observability.Reports;
 using AgenticRagApp.Querying.Models;
@@ -30,6 +31,13 @@ public static class QueryEndpoint
         // costs a knowledge-base retrieval plus answer synthesis and writes a per-query report,
         // so nothing (a CDN, a prefetching client, a retrying proxy) should repeat it on its own.
         app.MapPost("/api/query", HandleAsync)
+           // Interim shared-secret auth (D238 §2). On this endpoint only: GET /health must stay
+           // open for App Service's health check, and GET /openapi/v1.json is what the
+           // OutSystems side reads before it has a credential to send.
+           .AddEndpointFilter<ApiKeyEndpointFilter>()
+           // The filter's 401 is returned from a filter, not from HandleAsync's result union, so
+           // the generator cannot infer it - without this the imported client has no 401 case.
+           .ProducesProblem(StatusCodes.Status401Unauthorized)
            .WithName("Query")
            .WithSummary("Ask the knowledge base a question")
            .WithDescription(

@@ -17,10 +17,18 @@ public sealed class ZenyaSyncOptions
     public const string StorageAccountUrlKey = "STORAGE_ACCOUNT_URL";
     public const string StorageContainerKey  = "STORAGE_CONTAINER";
     public const string DryRunKey            = "ZENYA_SYNC_DRY_RUN";
+    public const string ReharvestKey         = "ZENYA_SYNC_REHARVEST";
 
     public required Uri StorageAccountUrl { get; init; }
     public required string StorageContainer { get; init; }
     public bool DryRun { get; init; } = true;
+
+    // Harvest documents whose version is UNCHANGED too (D243 Sequencing step 4). Off by default:
+    // the steady-state run must stay at one listing call per 1,000 documents. On, every unchanged
+    // document costs one metadata call plus the harvest calls, and nothing is re-downloaded. The
+    // way to adopt a newly added harvest route across the corpus without waiting for documents to
+    // change in Zenya.
+    public bool Reharvest { get; init; } = false;
 
     public static ZenyaSyncOptions FromConfiguration(IConfiguration configuration)
     {
@@ -43,11 +51,16 @@ public sealed class ZenyaSyncOptions
         if (Get(configuration, DryRunKey) is { } raw && !bool.TryParse(raw, out dryRun))
             throw new InvalidOperationException($"{DryRunKey} must be true or false, got '{raw}'.");
 
+        var reharvest = false;
+        if (Get(configuration, ReharvestKey) is { } rawReharvest && !bool.TryParse(rawReharvest, out reharvest))
+            throw new InvalidOperationException($"{ReharvestKey} must be true or false, got '{rawReharvest}'.");
+
         return new ZenyaSyncOptions
         {
             StorageAccountUrl = accountUrl,
             StorageContainer  = Get(configuration, StorageContainerKey)!,
             DryRun            = dryRun,
+            Reharvest         = reharvest,
         };
     }
 }

@@ -5,6 +5,23 @@
 # pipeline.yml's deploy_api job (2026-09-16). What the API host needs and why:
 # docs/2609/260916/query-api-project.md (D198) §4.
 
+# The interim shared secret for POST /api/query (2026-09-24, D238 §2). Generated rather than
+# taken as a variable so it never exists in git, in a .tfvars, in the public mirror or in a
+# pipeline variable - it lives in Terraform state and in the app's configuration, and is read out
+# of the app with the CLI when a consumer needs to be issued it (command in app_settings below).
+#
+# 48 alphanumeric characters, no specials: the value travels in an HTTP header and through
+# whatever configuration UI the consuming organisation uses, and every quoting or escaping bug in
+# that path is avoided by having nothing to escape. 48 chars of [A-Za-z0-9] is ~286 bits.
+#
+# keepers is empty on purpose: this must NOT regenerate on unrelated changes, because every
+# regeneration is an unannounced hard cutover for every consumer. Rotation is deliberate -
+# `terraform taint` then apply.
+resource "random_password" "query_api_key" {
+  length  = 48
+  special = false
+}
+
 resource "azurerm_service_plan" "api" {
   name                = "con-plan-api-cap-${local.env}-${local.region}-${local.instance}"
   resource_group_name = azurerm_resource_group.api.name
@@ -114,6 +131,18 @@ resource "azurerm_linux_web_app" "api" {
     # since the same date (2026-08-12), as on the Function App; absent would also mean true, this
     # is explicit so the mode is visible here. "false" restores enforcement on this host.
     "GUARDS_LOG_ONLY" = "true"
+    # Interim inbound auth for POST /api/query (2026-09-24, D238 §2). Terraform is the only
+    # writer of this value and the app only reads it: generated below, never in git, never in the
+    # public mirror. Program.cs refuses to start without it, so removing this setting takes the
+    # host down rather than quietly serving unauthenticated.
+    #
+    # To read the current token (to hand to a consuming organisation):
+    #   az webapp config appsettings list -g <apiAppRg> -n <apiAppName> \
+    #     --query "[?name=='QUERY_API_KEY'].value" -o tsv
+    # To rotate it: taint random_password.query_api_key and apply. That is a hard cutover - every
+    # consumer breaks until it has the new value, which is one of the reasons D238 §4 replaces
+    # this with per-caller Entra credentials rather than growing a second shared token.
+    "QUERY_API_KEY" = random_password.query_api_key.result
   }
 
   tags = local.common_tags

@@ -7,6 +7,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using AgenticRagApp.Api.Endpoints;
+using AgenticRagApp.Api.Security;
 using AgenticRagApp.Infrastructure;
 using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Observability;
@@ -99,15 +100,40 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 // import. Pinned to 3.0 because that importer takes specs "compliant with the OpenAPI
 // specification up to OAS 3.0" (OutSystems 11 docs, Consume one or more REST API methods,
 // read 2026-09-16), and .NET 10 emits 3.1 by default.
-builder.Services.AddOpenApi(options => options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_0);
+// The document also has to DECLARE the bearer scheme, or the OutSystems import produces a
+// client that never sends the header and gets a 401 on every call - the generator only emits
+// what the specification says. BearerSecuritySchemeTransformer adds the scheme and requires it
+// on the query operation; /health and /openapi itself stay unsecured, matching the filter.
+builder.Services.AddOpenApi(options =>
+{
+    options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_0;
+    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+});
 
 // Liveness only - no dependency probes, so a Search or Foundry hiccup does not get the instance
 // recycled by App Service's health check.
 builder.Services.AddHealthChecks();
 
-// No authentication here, deliberately for now: the App Service is private-endpoint-only, and
-// the auth layer for an OutSystems caller outside Azure (Easy Auth with Entra, or a bearer
-// scheme in code) is an open decision - docs/2609/260916/query-api-project.md (D198) §4.
+// Inbound auth, interim (2026-09-24, D238 §2): one static shared secret on
+// `Authorization: Bearer <token>`, applied to POST /api/query only. It replaces "no
+// authentication at all" - which was defensible while the App Service was reachable only from
+// inside the network and dev_allowed_ips, and stops being defensible the moment an external
+// organisation is let in. It is NOT the answer to D198 §4.4: a shared token authenticates the
+// secret, not the caller. Entra app-to-app auth is the plan (D238 §4); this is what holds until
+// it lands.
+//
+// Fail fast rather than default to open. A missing key means the app setting was not deployed,
+// and an API that silently serves without auth because its configuration is incomplete is the
+// exact failure this change exists to prevent. Terraform owns the value
+// (random_password.query_api_key -> the QUERY_API_KEY app setting in app_service.tf); nothing
+// reads it from source.
+var queryApiKey = builder.Configuration["QUERY_API_KEY"];
+if (string.IsNullOrWhiteSpace(queryApiKey))
+    throw new InvalidOperationException(
+        "QUERY_API_KEY is required. Terraform sets it from random_password.query_api_key " +
+        "(infra/app_service.tf); for a local run, set it in the environment.");
+
+builder.Services.AddSingleton(new ApiKeyGuard(queryApiKey));
 
 var app = builder.Build();
 

@@ -84,6 +84,15 @@ public sealed record ChunkingStageMetrics(
     // fields: a caller with no identity concept never sets it and says nothing false.
     public IReadOnlyList<string> UntaggedFamilyMemberIds { get; init; } = [];
 
+    // How many there ACTUALLY are, because the list above is capped (ChunkingService's
+    // MaxUntaggedFamilyIdsReported = 20) and the cap is silent: on the 2026-09-23 forced run the
+    // report read 20 ids while 553 of the 699 multi-member-family documents were untagged, and the
+    // run-analysis flag printed "2" on the nightly from the same field. A truncated list does say
+    // "more than the cap" to someone who knows the cap; this says how many (D234 6b, 2026-09-24).
+    // Null = not measured, which is what a report written before this date reads back as - never
+    // confuse it with 0, which is the healthy state.
+    public int? UntaggedFamilyMemberCount { get; init; }
+
     // Token distribution of the embedded text, from each chunk's own stored count - see
     // ChunkTokenMetrics for why it exists and what the budget-relative counts are against.
     // Null when no chunk carried a count: not measured, not zero. Init property, same
@@ -94,6 +103,12 @@ public sealed record ChunkingStageMetrics(
     // footer logo's - the "wasted vectors" D183 counted by hand. Null when no chunk carried the
     // stamped counts. See FigureTextMetrics.
     public FigureTextMetrics? FigureText { get; init; }
+
+    // Chunks the heading-only rule dropped (D224 A5, live 2026-09-23): the body was its own heading
+    // line and nothing else, and the section kept another chunk carrying that heading. Split from
+    // ResidueChunksDropped so the two rules stay readable in the ledger; caller-stamped for the
+    // same reason as that field. 0 from a pipeline without the rule says nothing false.
+    public int HeadingOnlyChunksDropped { get; init; }
 
     // Where the cutter cut, per chunk: one bucket per BoundaryLevel the pipeline knows, IN ENUM
     // ORDER and WITH ITS ZEROS (2026-09-23, D224 A6). Replaces CoherentChunks, a first/last-
@@ -112,12 +127,11 @@ public sealed record ChunkingStageMetrics(
     // Null = not measured: a pipeline with no cut-level concept, or a report from before this date.
     public IReadOnlyDictionary<string, int>? CutBoundaries { get; init; }
 
-    // Of the chunks cut at a line break, how many end without sentence punctuation (. ! ?) - the
-    // seam is inside a sentence, because in CU markdown a single newline inside a paragraph is the
-    // PDF's visual wrap, not a clause (D223 F4). AN UPPER BOUND, and reported as a count on purpose:
-    // a list line or a label line also ends without punctuation, so no ratio is derived from it
-    // and nothing flags on it. Null = not measured.
-    public int? LineCutsEndingMidSentence { get; init; }
+    // LineCutsEndingMidSentence lived here from 2026-09-23 (D224 A6) to 2026-09-24 (D234 E2). It
+    // counted Line-cut chunks not ending in . ! ? and was retired for reading 204 against
+    // CutBoundaries.Line 204 on the first run that carried it: after A4 put the sentence rung
+    // first, the Line rung is only reached by text with no usable ender, so the count equals the
+    // bucket by construction. Reports written between those dates still carry the field.
 
     // Token pressure on the identity embeddings - the one place the model's per-input limit is
     // live. Caller-stamped from step 1's diagnostics, like UntaggedFamilyMemberIds: Compute sees

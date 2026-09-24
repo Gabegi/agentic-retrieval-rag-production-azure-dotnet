@@ -28,6 +28,7 @@ public static class ZenyaSyncServiceCollectionExtensions
             new BlobServiceClient(options.StorageAccountUrl, sp.GetRequiredService<TokenCredential>())
                 .GetBlobContainerClient(options.StorageContainer),
             sp.GetRequiredService<IBlobStore>()));
+        services.AddSingleton<ZenyaHarvester>();
         services.AddSingleton<ZenyaSyncService>();
         return services;
     }

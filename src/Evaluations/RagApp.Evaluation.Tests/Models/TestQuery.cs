@@ -98,4 +98,12 @@ public record TestQuery(
     // document that is satisfied by retrieving any of them. Same shape as ExpectedSources
     // (semicolon-separated document ids). Blank on every row that has no such family, and then
     // every metric reads exactly as before - see RetrievalRankMetrics.
-    string EquivalentSources = "");
+    string EquivalentSources = "",
+
+    // ISO date (yyyy-MM-dd) on which this row's labels or expected answer were changed after an
+    // eval had already scored it (2026-09-23, D228 step 7). Blank = never. Carried onto EvalRow so
+    // a run's jsonl says which rows are not like-for-like with an earlier run: CompareEvalRuns
+    // (src/Tools) drops a row from the carried-over slice when this date falls between the two
+    // runs being compared - by code, not by remembering. The lint ties it to a Trap that starts
+    // with "Relabelled", so neither can be set without the other.
+    string RelabelledOn = "");

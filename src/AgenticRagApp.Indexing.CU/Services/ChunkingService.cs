@@ -177,13 +177,17 @@ public class ChunkingService : IChunkingService
                     //     is a separate field and is not joined on until EmbeddingText composes
                     //     it. That ordering is the whole point: a prefix is dozens of
                     //     alphanumeric characters, so residue measured after it looks substantial.
-                    //     The heading-only rule rides along here rather than in its own pass:
-                    //     it is the same judgement on the same string ("is this cut worth
-                    //     indexing"), so its drops are residue and are counted as residue.
-                    var kept = chunks
-                        .Where(c => !IsResidue(c.Content))
-                        .Where(c => !DropHeadingOnlyChunks || !IsHeadingOnly(c))
-                        .ToList();
+                    //
+                    //     PRECEDENCE (2026-09-23, D224 A5): residue, then the TOC rule, then
+                    //     heading-only LAST. Each cut is dropped by exactly one rule and counted
+                    //     once - a cut that is both residue and heading-only ("## A") is residue.
+                    //     Heading-only goes last because its guard asks "did this section keep
+                    //     another chunk", and that has to be judged on the FINAL kept set: a
+                    //     "## Inhoudsopgave" heading stranded above a TOC table would otherwise be
+                    //     dropped for having siblings, and then lose them to the TOC rule - the
+                    //     heading gone after all. On run 260922/2 no chunk matched two rules, but
+                    //     the order is fixed in code so that stays true by construction.
+                    var afterResidue = chunks.Where(c => !IsResidue(c.Content)).ToList();
 
                     // 3b-ii. Navigation, not content. A table of contents indexed as a chunk
                     //        carries the vocabulary of every section it lists and answers none
@@ -193,9 +197,18 @@ public class ChunkingService : IChunkingService
                     //        answer different questions ("is this document shedding junk cuts"
                     //        versus "did we catch its front matter"), and a merged counter
                     //        cannot tell a dropped TOC from a dropped "£ £".
-                    var beforeToc = kept.Count;
-                    kept = kept.Where(c => !TocFilter.IsTableOfContents(c)).ToList();
-                    var tocDropped = beforeToc - kept.Count;
+                    var afterToc   = afterResidue.Where(c => !TocFilter.IsTableOfContents(c)).ToList();
+                    var tocDropped = afterResidue.Count - afterToc.Count;
+
+                    // 3b-iii. Heading-only, judged against what survived both rules above. A
+                    //         heading whose section kept nothing else stays - see
+                    //         IsDroppableHeadingOnly for the 73 headings that would otherwise
+                    //         become unfindable, and for why a TOC's own title stub stays too.
+                    var kept = DropHeadingOnlyChunks
+                        ? afterToc.Where(c => !IsDroppableHeadingOnly(c, afterToc)).ToList()
+                        : afterToc;
+
+                    var headingOnlyDropped = afterToc.Count - kept.Count;
 
                     // 3c. The fall-through tripwire. HardCut is the ladder's terminator - fixed
                     //     windows, mid-word by construction - and HardCutter's own contract says
@@ -225,7 +238,7 @@ public class ChunkingService : IChunkingService
 
                     allChunks.AddRange(kept);
 
-                    state.Chunked(doc, kept, chunks.Count, strategy.Name, tocDropped);
+                    state.Chunked(doc, kept, chunks.Count, strategy.Name, tocDropped, headingOnlyDropped);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -242,14 +255,18 @@ public class ChunkingService : IChunkingService
             // the state, and gone from anything downstream. Capped for the same Durable row-size
             // reason as the metrics type's other ID lists; the count is not carried separately
             // because a truncated list already means "more than the cap".
-            var untaggedFamilyMembers = docs
+            // Materialised once and counted BEFORE the cap, so the report can say how many there
+            // are as well as name the first few (D234 6b, 2026-09-24).
+            var untaggedFamilyMemberIds = docs
                 .Where(d => state.IsInMultiMemberFamily(d.SourceId)
                          && string.IsNullOrWhiteSpace(state.FamilyOf(d.SourceId)?.DomainTag))
                 .Select(d => d.SourceId)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(id => id, StringComparer.Ordinal)
-                .Take(MaxUntaggedFamilyIdsReported)
                 .ToList();
+
+            var untaggedFamilyMemberCount = untaggedFamilyMemberIds.Count;
+            var untaggedFamilyMembers     = untaggedFamilyMemberIds.Take(MaxUntaggedFamilyIdsReported).ToList();
 
             // Identity token pressure, from step 1's diagnostics (2026-09-15). Until now it lived
             // only in the chunking artifact, so a firing tripwire was visible to nobody who did
@@ -282,15 +299,16 @@ public class ChunkingService : IChunkingService
                                         allChunks, Name, sourceDocumentIds,
                                         ChunkingBudget.TokenCeiling, ChunkingBudget.MinBodyTokenBudget)
                                     with { ResidueChunksDropped = state.ResidueDropped,
-                                           CutBoundaries             = cuts.Buckets,
-                                           LineCutsEndingMidSentence = cuts.LineCutsEndingMidSentence,
+                                           HeadingOnlyChunksDropped  = state.HeadingOnlyDropped,
+                                           CutBoundaries             = cuts,
                                            TocChunksDropped     = state.TocDropped,
                                            // Same caller-stamped contract (D214 §2.8): summed
                                            // per document on the state as the rows are built.
                                            DiagramBlocks                  = state.DiagramBlocks,
                                            DiagramBlocksCut               = state.DiagramBlocksCut,
                                            DiagramFragmentsWithoutContext = state.DiagramFragmentsWithoutContext,
-                                           UntaggedFamilyMemberIds = untaggedFamilyMembers,
+                                           UntaggedFamilyMemberIds   = untaggedFamilyMembers,
+                                           UntaggedFamilyMemberCount = untaggedFamilyMemberCount,
                                            IdentityTokens = identityTokens };
 
             state.Stats = stats;
@@ -421,14 +439,40 @@ public class ChunkingService : IChunkingService
     // the 260818 retrieved corpus had a body under 80 chars, and this is what most of them
     // were. Indexed, such a chunk matches the query its heading names and then answers nothing.
     //
-    // NOT LIVE YET. The flag was held at false so the "35 -> 0" check on the mislabelled salary
-    // chunks - the check that verified TableCaptionSplitter - could not be satisfied by this rule
-    // deleting those rows instead of that fix repairing them (docs/2608/260818/last-run-fixes.md:
-    // "step 9 must not precede step 6"). TableCaptionSplitter was removed on 2026-09-09, so that
-    // sequencing constraint is gone; whether to enable this rule is now an open decision on its
-    // own merits, not a question of ordering. A field rather than a const so the disabled branch
-    // is not unreachable code in a zero-warning build.
-    private static readonly bool DropHeadingOnlyChunks = false;
+    // LIVE since 2026-09-23 (D224 A5). Held at false from 260818 so the "35 -> 0" check on the
+    // mislabelled salary chunks - the check that verified TableCaptionSplitter - could not be
+    // satisfied by this rule deleting those rows instead of that fix repairing them
+    // (docs/2608/260818/last-run-fixes.md: "step 9 must not precede step 6"). TableCaptionSplitter
+    // went on 2026-09-09; the rule was then decided on its own merits against run 260922/2:
+    // 834 chunks match it (742 the bare heading line, 27 heading + page markup, 65 heading + under
+    // 12 alphanumerics), none of them residue, no document loses its last chunk, and because it
+    // runs after the pieces are numbered no chunk id moves - which is why it was preferred to
+    // re-attaching the heading to the next piece (A2, rejected: 2,707 id rewrites for 672 pieces).
+    // A field rather than a const so the disabled branch is not unreachable code in a zero-warning
+    // build.
+    private static readonly bool DropHeadingOnlyChunks = true;
+
+    // The rule drops a heading-only cut only when its heading survives elsewhere in the index -
+    // that is, when the section kept another chunk, whose heading_path carries the same heading.
+    // Measured on 260922/2: 712 of the 834 are piece 0 of a cut section (the heading stranded in
+    // front of a table or an oversize paragraph) and are covered that way. The other 122 are whole
+    // sections that ARE only their heading - the pairs HeadingLocator's zero-body merge refused -
+    // and for 73 of them the heading text appears in no other chunk's heading_path in the
+    // document: "Artikel 21 vervallen", "3.0 Procedure", "4.1 Algemene hygiënemaatregelen". Drop
+    // those and the heading becomes unfindable (heading_text and heading_path are searchable and
+    // semantic keyword fields, IndexService). So they stay: a heading-only chunk that is the
+    // section's only chunk is kept, and the report counts it under neither rule.
+    //
+    // survivors is the set AFTER the residue and TOC rules (step 3b-iii), so a heading whose only
+    // siblings were page furniture or a table of contents is judged alone and kept. That keeps a
+    // "## Inhoudsopgave" stub in the index once its table is gone - 80 such stubs already sit in
+    // run 260922/2 under the old order - which is the TOC filter's to take (its title signal
+    // alone would do; D224 records it as a follow-up), not this rule's.
+    // Public, like IsHeadingOnly below, so src/Tools/ChunkIdDiff.cs applies the SAME rule when it
+    // predicts a run's chunk ids - a private copy there would drift.
+    public static bool IsDroppableHeadingOnly(ChunkObject chunk, IReadOnlyList<ChunkObject> survivors) =>
+        IsHeadingOnly(chunk)
+        && survivors.Any(other => !ReferenceEquals(other, chunk) && other.SectionIndex == chunk.SectionIndex);
 
     // The floor for what counts as a body UNDER a heading. Higher than
     // MinChunkAlphanumericChars, which is calibrated against "£ £" and a bare "#" and is not
@@ -441,9 +485,9 @@ public class ChunkingService : IChunkingService
     // that condition the rule would measure the full body of any short chunk, and a genuine
     // one-line section with no heading - which the recursive route produces by design, every
     // chunk on it having HeadingSource "none" - would be dropped as if it were furniture.
-    // internal so the rule can be tested while the flag above still holds it out of the run -
-    // "built and pinned, not yet landed" is the state this is deliberately in.
-    internal static bool IsHeadingOnly(ChunkObject chunk)
+    // Public so the tests and src/Tools/ChunkIdDiff.cs read the one rule; it was internal while the
+    // flag held it out of the run ("built and pinned, not yet landed", until 2026-09-23).
+    public static bool IsHeadingOnly(ChunkObject chunk)
     {
         var content   = chunk.Content;
         var firstBreak = content.IndexOf('\n');

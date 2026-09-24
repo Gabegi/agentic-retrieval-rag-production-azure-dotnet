@@ -153,6 +153,12 @@ public static class Instrumentation
     public static readonly Counter<long> TocChunksDropped =
         Meter.CreateCounter<long>("indexer.toc_chunks_dropped", description: "Chunks dropped as table-of-contents navigation before embedding");
 
+    // Chunks the heading-only rule dropped (D224 A5): a cut that was only its heading line, in a
+    // section whose other chunks carry that heading. Its own series for the same reason as the
+    // two above - it tracks stranded headings, not extraction quality or front matter.
+    public static readonly Counter<long> HeadingOnlyChunksDropped =
+        Meter.CreateCounter<long>("indexer.heading_only_chunks_dropped", description: "Chunks dropped by the heading-only rule before embedding");
+
     // Fenced diagram blocks (2026-09-22, D214 §2.8): how many the cascade cut as diagrams, how
     // many of those needed more than one fragment, and how many cut fragments carry no figure
     // caption or description in their prefix because their fence matched no figure. Three

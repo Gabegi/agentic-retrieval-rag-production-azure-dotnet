@@ -77,6 +77,8 @@ Console.WriteLine($"  failed            {result.Failed}");
 Console.WriteLine($"  foreign blobs     {result.ForeignBlobs}");
 Console.WriteLine($"  pdf without %PDF  {result.PdfWithoutMagic}");
 Console.WriteLine($"  metadata dropped  {result.MetadataDropped}");
+Console.WriteLine($"  harvested         {result.Harvested}");
+Console.WriteLine($"  harvest failed    {result.HarvestFailed}");
 Console.WriteLine($"  bytes downloaded  {result.BytesDownloaded}");
 foreach (var (ext, count) in result.WrittenByExtension.OrderByDescending(kv => kv.Value))
     Console.WriteLine($"  written .{ext,-6} {count}");

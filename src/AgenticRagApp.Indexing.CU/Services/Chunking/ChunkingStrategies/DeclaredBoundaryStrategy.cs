@@ -102,6 +102,15 @@ public sealed class DeclaredBoundaryStrategy : IDocumentChunkingStrategy
             //    in doc.Content coordinates, so the slice invariant survives the narrowing.
             //    bodyCeiling is this section's, already floored at ChunkingBudget.MinBodyTokenBudget, so the
             //    prefix stays paid for on every piece the cut produces.
+            //
+            //    A2 (D224, 2026-09-23) was built here and REJECTED the same day: cutting the body
+            //    after the heading line and re-slicing the heading onto the first piece removed the
+            //    672 heading-only first pieces on run 260922/2, but chunk ids are ordinal within a
+            //    section, so dropping piece 0 renamed every later piece - 2,707 same-id content
+            //    changes and 708 deletions for 672 pieces, plus ~1,000 collateral boundary moves
+            //    from the ceiling reserve in headed sections that were never heading-only. The
+            //    heading-only rule (ChunkingService.DropHeadingOnlyChunks, A5) removes the same
+            //    pieces after numbering, so no id moves. The prefix carries the heading either way.
             chunks.AddRange(SectionChunkBuilder.Build(
                 section,
                 BlockCascade.Cut(doc.Content, section.Start, section.End, bodyCeiling, doc.Tables, doc.Figures)));

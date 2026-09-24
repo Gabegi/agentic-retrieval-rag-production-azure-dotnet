@@ -153,6 +153,29 @@ public class GoldenQuestionsDatasetTests
             Environment.NewLine + string.Join(Environment.NewLine, overlapping));
     }
 
+    // RelabelledOn is what CompareEvalRuns reads to drop a row from a carried-over comparison;
+    // the "Relabelled ..." Trap prefix is what a human reads. Neither may exist without the other,
+    // or the exclusion silently stops matching the history the Trap tells.
+    [TestMethod]
+    public void RelabelledOn_MatchesTheTrapPrefix_AndIsAnIsoDate()
+    {
+        var mismatched = Load()
+            .Where(r => r.Trap.StartsWith("Relabelled", StringComparison.Ordinal) != (r.RelabelledOn.Length > 0))
+            .Select(r => $"{r.Name}: Trap starts with 'Relabelled' = {r.Trap.StartsWith("Relabelled", StringComparison.Ordinal)}, RelabelledOn = '{r.RelabelledOn}'")
+            .ToList();
+        Assert.IsTrue(mismatched.Count == 0,
+            "A row is relabelled in both places or in neither: " + Environment.NewLine + string.Join(Environment.NewLine, mismatched));
+
+        var badDates = Load()
+            .Where(r => r.RelabelledOn.Length > 0
+                        && !DateOnly.TryParseExact(r.RelabelledOn, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out _))
+            .Select(r => $"{r.Name} -> '{r.RelabelledOn}'")
+            .ToList();
+        Assert.IsTrue(badDates.Count == 0,
+            "RelabelledOn must be yyyy-MM-dd (CompareEvalRuns compares it against run timestamps): " +
+            Environment.NewLine + string.Join(Environment.NewLine, badDates));
+    }
+
     private static IEnumerable<string> SplitIds(string sources) =>
         sources.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                .Select(s => s.Normalize(System.Text.NormalizationForm.FormC));

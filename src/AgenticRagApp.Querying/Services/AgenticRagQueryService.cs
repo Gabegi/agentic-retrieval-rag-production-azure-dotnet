@@ -144,7 +144,11 @@ public class AgenticRagQueryService : IRagQueryService
                       "check AgenticRagQueryService still sends KnowledgeSourceParams with IncludeReferenceSourceData");
         }
 
-        var chunks = await _neighborExpander.ExpandAsync(initialChunks, ct);
+        var contextChunks = await _neighborExpander.ExpandAsync(initialChunks, ct);
+        // One string per admitted chunk, in emission order - the blocks of RetrievedContext,
+        // exactly as the expander used to return them (D228 step 3b changed the return type,
+        // not the text). contextChunks keeps the document id behind each block.
+        var chunks = contextChunks.Select(c => c.ToContextText()).ToList();
 
         // Criterion 4. Prompt Shields analyzes userPrompt and documents together in one
         // call, so this runs once, after retrieval, covering both direct injection (in
@@ -192,6 +196,13 @@ public class AgenticRagQueryService : IRagQueryService
         var retrievedContext = string.Join("\n\n---\n\n", chunks);
 
         var endpoint = new Uri(_config.SearchEndpoint);
+        // One ordering for the ranking and its scores, so the two lists stay aligned. OrderBy is
+        // stable, so references without a score - or tied - keep the order the service returned
+        // them in. See RagQueryResult.RetrievedDocumentRanking.
+        var ranked = initialChunks
+            .OrderByDescending(c => c.RerankerScore ?? float.NegativeInfinity)
+            .ToList();
+
         return new RagQueryResult(
             Answer:             answer,
             RetrievedContext:   retrievedContext,
@@ -217,12 +228,9 @@ public class AgenticRagQueryService : IRagQueryService
             SubQueries:         KnowledgeBaseActivitySummary.CollectSubQueries(result.Activity))
         {
             ReferencesRetrieved      = initialChunks.Count,
-            // OrderBy is stable, so references without a score - or tied - keep the order the
-            // service returned them in. See RagQueryResult.RetrievedDocumentRanking.
-            RetrievedDocumentRanking = initialChunks
-                .OrderByDescending(c => c.RerankerScore ?? float.NegativeInfinity)
-                .Select(c => c.DocumentId)
-                .ToList(),
+            RetrievedDocumentRanking = ranked.Select(c => c.DocumentId).ToList(),
+            RetrievedRerankerScores  = ranked.Select(c => c.RerankerScore).ToList(),
+            ContextDocumentIds       = contextChunks.Select(c => c.DocumentId).ToList(),
         };
     }
 

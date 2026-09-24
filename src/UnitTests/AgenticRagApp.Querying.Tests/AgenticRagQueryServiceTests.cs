@@ -219,6 +219,48 @@ public class AgenticRagQueryServiceTests
     }
 
     [TestMethod]
+    public async Task AskAsync_RerankerScores_AreAlignedWithTheRanking_NullWhereTheServiceSentNone()
+    {
+        // Same fixture as the ranking test: doc1 0.9, doc2 0.5, doc4 0.5, doc3 none - the scores
+        // list must follow the ranked order, not the return order, entry for entry.
+        var references = new[]
+        {
+            new Dictionary<string, object?> { ["id"] = "c1", ["document_id"] = "doc2", ["content"] = "a", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c2", ["document_id"] = "doc1", ["content"] = "b", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c3", ["document_id"] = "doc3", ["content"] = "c", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c4", ["document_id"] = "doc4", ["content"] = "d", ["page_start"] = 1 },
+        };
+        var client  = MockRetrievalClient(references, "answer", rerankerScores: [0.5f, 0.9f, null, 0.5f]);
+        var service = BuildService(client);
+
+        var result = await service.AskAsync("question");
+
+        Assert.AreEqual(result.RetrievedDocumentRanking!.Count, result.RetrievedRerankerScores!.Count);
+        CollectionAssert.AreEqual(new float?[] { 0.9f, 0.5f, 0.5f, null }, result.RetrievedRerankerScores!.ToList());
+    }
+
+    [TestMethod]
+    public async Task AskAsync_ContextDocumentIds_OnePerJudgedBlock_InBlockOrder()
+    {
+        // No neighbours in this fixture (the search client returns none), so the judged blocks
+        // are the two hits in document-rank order; the id list follows the blocks, not the
+        // reference count, and ChunksRetrieved counts the same blocks.
+        var references = new[]
+        {
+            new Dictionary<string, object?> { ["id"] = "c1", ["document_id"] = "doc2", ["content"] = "two", ["page_start"] = 1 },
+            new Dictionary<string, object?> { ["id"] = "c2", ["document_id"] = "doc1", ["content"] = "one", ["page_start"] = 1 },
+        };
+        var client  = MockRetrievalClient(references, "answer", rerankerScores: [0.5f, 0.9f]);
+        var service = BuildService(client);
+
+        var result = await service.AskAsync("question");
+
+        CollectionAssert.AreEqual(new[] { "doc2", "doc1" }, result.ContextDocumentIds!.ToList());   // emission = service order (docRank), not reranker order
+        Assert.AreEqual(result.ChunksRetrieved, result.ContextDocumentIds!.Count);
+        Assert.AreEqual("two\n\n---\n\none", result.RetrievedContext);
+    }
+
+    [TestMethod]
     public async Task AskAsync_ReferencesRetrieved_IsThePreExpansionCount_OnePerReferenceNotPerCitation()
     {
         // Two references on the same page collapse into one Citation; the ranking keeps both,

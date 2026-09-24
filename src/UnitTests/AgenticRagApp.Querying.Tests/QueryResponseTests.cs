@@ -72,6 +72,57 @@ public class QueryResponseTests
             StringAssert.Contains(json, key, $"missing {key}");
     }
 
+    // The result carries retrieval internals the eval reads (RetrievedDocumentRanking and, since
+    // 2026-09-23, RetrievedRerankerScores - D228 step 3). They exist for the eval row, not for the
+    // OutSystems frontend: exposing them would grow the payload and change the public contract
+    // without a decision. From must not map them, under either host's serializer. Asserted as
+    // "every key is a pinned name", so any future field added to QueryResponse without a
+    // [JsonPropertyName] - or any internal that leaks through - fails here by name.
+    [TestMethod]
+    public void From_ExposesNoRetrievalInternals_EveryKeyIsAPinnedName()
+    {
+        var result = Result([new Citation("doc1", "Title", "QC1", "rel/path", Page: 2)]) with
+        {
+            ReferencesRetrieved      = 3,
+            RetrievedDocumentRanking = ["doc1", "doc2", "doc1"],
+            RetrievedRerankerScores  = [2.9f, 2.1f, null],
+            ContextDocumentIds       = ["doc1", "doc1", "doc2"],
+        };
+        var pinned = ExpectedKeys.Select(k => k.Trim('"')).ToHashSet();
+
+        foreach (var options in new[] { new JsonSerializerOptions(), new JsonSerializerOptions(JsonSerializerDefaults.Web) })
+        {
+            var json = JsonSerializer.Serialize(QueryResponse.From(result), options);
+            using var doc = JsonDocument.Parse(json);
+            var keys = new List<string>();
+            CollectKeys(doc.RootElement, keys);
+
+            var unexpected = keys.Where(k => !pinned.Contains(k)).Distinct().ToList();
+            Assert.AreEqual(0, unexpected.Count, "keys not in the pinned contract: " + string.Join(", ", unexpected));
+            Assert.IsFalse(json.Contains("rerank", StringComparison.OrdinalIgnoreCase) || json.Contains("ranking", StringComparison.OrdinalIgnoreCase)
+                           || json.Contains("ContextDocument", StringComparison.OrdinalIgnoreCase),
+                "retrieval internals leaked into the wire payload");
+        }
+    }
+
+    private static void CollectKeys(JsonElement element, List<string> keys)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    keys.Add(property.Name);
+                    CollectKeys(property.Value, keys);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    CollectKeys(item, keys);
+                break;
+        }
+    }
+
     [TestMethod]
     public void From_LabelIsTitleDashPage_AndUrlIsNullButPresent()
     {

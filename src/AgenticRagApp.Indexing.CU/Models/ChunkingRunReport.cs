@@ -134,6 +134,10 @@ public sealed record DocumentOutcome(
     int      ChunksAboveCeiling = 0,
     int      ShortChunks        = 0,
     int      DegradedChunks     = 0,
+    // Units the heading-only rule removed (D224 A5): a cut that was its own heading line and
+    // nothing else, in a section that kept another chunk carrying the same heading_path.
+    // Counted apart from ResidueChunksDropped, which keeps meaning "too thin to be content".
+    int      HeadingOnlyChunksDropped = 0,
 
     // ── The routing signals, reported rather than routed on ─────────────────
 

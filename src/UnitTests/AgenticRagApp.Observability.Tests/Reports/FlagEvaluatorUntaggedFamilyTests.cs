@@ -9,7 +9,7 @@ namespace RagApp.UnitTests.Observability;
 [TestClass]
 public class FlagEvaluatorUntaggedFamilyTests
 {
-    private static PdfIndexRunReport ReportWith(IReadOnlyList<string> untagged) => new()
+    private static PdfIndexRunReport ReportWith(IReadOnlyList<string> untagged, int? count = null) => new()
     {
         Run = new RunIdentity(
             InstanceId:   "test-instance",
@@ -20,7 +20,8 @@ public class FlagEvaluatorUntaggedFamilyTests
             ErrorMessage: null),
         Chunking = ChunkingStageMetrics.Empty("TwoAxisChunking") with
         {
-            UntaggedFamilyMemberIds = untagged,
+            UntaggedFamilyMemberIds   = untagged,
+            UntaggedFamilyMemberCount = count,
         },
     };
 
@@ -74,5 +75,34 @@ public class FlagEvaluatorUntaggedFamilyTests
         var flags = Evaluate(report);
 
         Assert.IsFalse(flags.Any(f => f.Metric == "Chunking.UntaggedFamilyMemberIds"));
+    }
+
+    // D234 6b (2026-09-24). The id list is capped at 20 by ChunkingService, and reading its length
+    // is how 553 untagged documents were reported as 20 on the 2026-09-23 forced run - and as "2"
+    // in the nightly's flag. The flag now reads the count and says the list is not all of it.
+    [TestMethod]
+    public void ReportsTheTrueCount_NotTheCappedListLength()
+    {
+        var twenty = Enumerable.Range(0, 20).Select(i => $"pdf/doc-{i:D2}.pdf").ToList();
+
+        var flags = Evaluate(ReportWith(twenty, count: 553));
+
+        var flag = flags.SingleOrDefault(f => f.Metric == "Chunking.UntaggedFamilyMemberIds");
+        Assert.IsNotNull(flag, "the untagged-family rule did not fire");
+        StringAssert.StartsWith(flag!.Observed, "553", "the flag must lead with the true count");
+        StringAssert.Contains(flag.Observed, "pdf/doc-00.pdf", "and still name the first few");
+        StringAssert.Contains(flag.Observed, "\u2026", "and say the list is truncated");
+    }
+
+    // A report written before the count existed reads back null, and null is not zero: the flag
+    // says what it has rather than printing a number that means something else.
+    [TestMethod]
+    public void SaysSoWhenTheCountWasNotMeasured()
+    {
+        var flags = Evaluate(ReportWith(["pdf/a.pdf", "pdf/b.pdf"], count: null));
+
+        var flag = flags.SingleOrDefault(f => f.Metric == "Chunking.UntaggedFamilyMemberIds");
+        Assert.IsNotNull(flag);
+        StringAssert.Contains(flag!.Observed, "count not measured");
     }
 }

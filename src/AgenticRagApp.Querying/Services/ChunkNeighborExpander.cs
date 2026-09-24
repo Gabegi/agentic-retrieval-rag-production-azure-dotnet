@@ -18,7 +18,12 @@ public sealed class ChunkNeighborExpander
 
     public ChunkNeighborExpander(SearchClient searchClient) => _searchClient = searchClient;
 
-    public async Task<IReadOnlyList<string>> ExpandAsync(IReadOnlyList<RetrievedChunk> hits, CancellationToken ct = default)
+    // Returns the admitted CHUNKS in emission order (2026-09-23, D228 step 3b), not their text:
+    // the caller renders each with ToContextText() - one chunk is one block of the context
+    // string - and can record which document each block came from. Until then the id was gone
+    // by the time the eval row was written, and "was the expected document in the judged
+    // context" had to be recovered by locating block text in the chunking artifact (D227 §2).
+    public async Task<IReadOnlyList<RetrievedChunk>> ExpandAsync(IReadOnlyList<RetrievedChunk> hits, CancellationToken ct = default)
     {
         // Rank of each document = position of its best hit; preserves relevance order later.
         var docRank = new Dictionary<string, int>();
@@ -52,15 +57,15 @@ public sealed class ChunkNeighborExpander
             .OrderBy(g => docRank.TryGetValue(g.Key, out var r) ? r : int.MaxValue)
             .SelectMany(g => g.OrderBy(c => c.Page).ThenBy(c => c.ChunkIndex));
 
-        var chunks = new List<string>();
+        var chunks = new List<RetrievedChunk>();
         int total  = 0;
         foreach (var chunk in ordered)
         {
-            var text = chunk.ToContextText();
-            if (total + text.Length > MaxContextChars)
+            var length = chunk.ToContextText().Length;
+            if (total + length > MaxContextChars)
                 continue;
-            chunks.Add(text);
-            total += text.Length;
+            chunks.Add(chunk);
+            total += length;
         }
         return chunks;
     }

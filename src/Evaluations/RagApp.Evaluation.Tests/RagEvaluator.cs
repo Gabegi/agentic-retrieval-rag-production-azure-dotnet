@@ -175,6 +175,7 @@ public sealed class RagEvaluator
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
             EquivalentSources: testQuery.EquivalentSources,
+            RelabelledOn:    testQuery.RelabelledOn,
             Response:        result.Answer,
             RetrievedContext: result.RetrievedContext,
             Succeeded:       true,
@@ -203,6 +204,9 @@ public sealed class RagEvaluator
             // the loss is - see RetrievalRankMetrics.RecallAt.
             RecallAt5:  RetrievalRankMetrics.RecallAt(testQuery.ExpectedSources, testQuery.EquivalentSources, result.RetrievedDocumentRanking, 5),
             RecallAt50: RetrievalRankMetrics.RecallAt(testQuery.ExpectedSources, testQuery.EquivalentSources, result.RetrievedDocumentRanking, 50),
+            RetrievedDocumentRanking: RetrievalTrace.Ranking(result),
+            RerankerScores:           RetrievalTrace.Scores(result),
+            ContextDocumentIds:       RetrievalTrace.ContextDocuments(result),
             // Deterministic, not a judge: a figure in the answer that appears nowhere in the
             // retrieved context is model memory wearing this context's citations. The 260818
             // run's "8,33% vakantietoeslag" rows scored Equivalence 5 while carrying exactly
@@ -248,6 +252,7 @@ public sealed class RagEvaluator
             ExpectedAnswer:  testQuery.ExpectedAnswer,
             ExpectedSources: testQuery.ExpectedSources,
             EquivalentSources: testQuery.EquivalentSources,
+            RelabelledOn:    testQuery.RelabelledOn,
             Response:        result.Answer,
             RetrievedContext: result.RetrievedContext,
             Succeeded:       true,
@@ -271,6 +276,10 @@ public sealed class RagEvaluator
             ReciprocalRank:      -1,
             RecallAt5:           -1,
             RecallAt50:          -1,
+            // Not a score, so not -1: what was retrieved is recorded on a Refusal row too.
+            RetrievedDocumentRanking: RetrievalTrace.Ranking(result),
+            RerankerScores:           RetrievalTrace.Scores(result),
+            ContextDocumentIds:       RetrievalTrace.ContextDocuments(result),
             UngroundedNumbers: -1,
             RefusalScore: refusalScore,
             RefusalRationale: refusalRationale,

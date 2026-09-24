@@ -71,6 +71,33 @@ public class ZenyaSyncServiceTests
         }
 
         public Task<ZenyaDocumentContent> GetContentsAsync(string documentId, int version, CancellationToken ct = default) => throw new NotSupportedException();
+
+        // --- harvest surface (D243) ---------------------------------------------------------
+        // Every raw GET is answered 200 with a small JSON body and recorded, so a test can assert
+        // exactly which routes the harvest asked for. FailRawFor answers 403 instead - recorded,
+        // not thrown, which is the contract GetRawAsync promises.
+        public List<string> RawCalls { get; } = [];
+        public HashSet<string> FailRawFor { get; } = new(StringComparer.Ordinal);
+
+        public async IAsyncEnumerable<ZenyaListedDocument> ListDocumentsWithBlocksAsync(IReadOnlyCollection<string>? states = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            foreach (var item in Listing)
+            {
+                await Task.Yield();
+                var row = System.Text.Json.JsonDocument.Parse($"{{\"document_id\":\"{item.DocumentId}\",\"version\":{item.Version},\"custom_field_values\":[]}}").RootElement.Clone();
+                yield return new ZenyaListedDocument(item, row);
+            }
+        }
+
+        public Task<ZenyaRawResponse> GetRawAsync(string relativePath, CancellationToken ct = default)
+        {
+            RawCalls.Add(relativePath);
+            if (FailRawFor.Any(relativePath.Contains))
+                return Task.FromResult(new ZenyaRawResponse(relativePath, 403, "application/problem+json",
+                    System.Text.Json.JsonDocument.Parse("{\"title\":\"forbidden\"}").RootElement.Clone()));
+            return Task.FromResult(new ZenyaRawResponse(relativePath, 200, "application/json",
+                System.Text.Json.JsonDocument.Parse($"{{\"route\":\"{relativePath.Split('?')[0]}\"}}").RootElement.Clone()));
+        }
     }
 
     private sealed class InMemoryStore : IZenyaDocumentStore
@@ -116,10 +143,143 @@ public class ZenyaSyncServiceTests
         }
     }
 
-    private static ZenyaSyncService Build(FakeZenya zenya, InMemoryStore store, bool dryRun = false) =>
+    private static ZenyaSyncService Build(FakeZenya zenya, InMemoryStore store, bool dryRun = false, bool reharvest = false) =>
         new(zenya, store,
-            new ZenyaSyncOptions { StorageAccountUrl = new Uri("https://acct.blob.core.windows.net"), StorageContainer = "zenya-documents", DryRun = dryRun },
+            new ZenyaSyncOptions { StorageAccountUrl = new Uri("https://acct.blob.core.windows.net"), StorageContainer = "zenya-documents", DryRun = dryRun, Reharvest = reharvest },
             NullLogger<ZenyaSyncService>.Instance);
+
+    private static System.Text.Json.JsonDocument Sidecar(InMemoryStore store, string documentId) =>
+        System.Text.Json.JsonDocument.Parse(store.Blobs[ZenyaBlobLayout.MetaBlobNameFor(documentId)].Bytes);
+
+    // ---- harvest (D243) ------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Harvest_WritesSidecar_WithEveryRouteAsked_AndVersionMetadata()
+    {
+        var zenya = new FakeZenya().WithBinary(PdfId, 3, "Harvested", "pdf", "application/pdf", PdfBytes);
+        var store = new InMemoryStore();
+
+        var result = await Build(zenya, store).RunAsync();
+
+        Assert.AreEqual(1, result.Harvested);
+        Assert.AreEqual(0, result.HarvestFailed);
+
+        var name = ZenyaBlobLayout.MetaBlobNameFor(PdfId);
+        Assert.IsTrue(store.Blobs.ContainsKey(name));
+        var (_, contentType, metadata) = store.Blobs[name];
+        Assert.AreEqual("application/json", contentType);
+        // Stamped like a managed blob: recognised by the listing, removed with the document.
+        Assert.AreEqual(PdfId, metadata[ZenyaBlobLayout.DocumentIdKey]);
+        Assert.AreEqual("3", metadata[ZenyaBlobLayout.VersionKey]);
+
+        // Every include_* flag Zenya offers is on, and the per-version route is called - that is
+        // where the person, lock and delegation fields live (D242 §2).
+        CollectionAssert.IsSubsetOf(new[]
+        {
+            $"documents/{PdfId}?include_print_forced_header=true",
+            $"documents/{PdfId}/v3?include_authors=true&include_authorizers=true&include_document_administrators=true&include_writers_group=true&include_invited_writers=true&include_check_task_delegated_to_user=true&include_lock_info=true",
+            $"documents/{PdfId}/fields?include_meta_field_type=true",
+            $"documents/{PdfId}/hyperlinks",
+            $"documents/{PdfId}/mediaitems",
+            $"documents/{PdfId}/media_items",
+        }, zenya.RawCalls);
+        Assert.IsFalse(zenya.RawCalls.Any(r => r.Contains("shown_to_readers")), "absent = all fields; present narrows");
+
+        // The envelope: version-stamped, one entry per route, the listing row carried in raw.
+        using var doc = Sidecar(store, PdfId);
+        var root = doc.RootElement;
+        Assert.AreEqual(PdfId, root.GetProperty("document_id").GetString());
+        Assert.AreEqual(3, root.GetProperty("version").GetInt32());
+        Assert.AreEqual(ZenyaHarvester.HarvestVersion, root.GetProperty("harvestVersion").GetInt32());
+        var routes = root.GetProperty("responses").EnumerateArray().Select(r => r.GetProperty("route").GetString()).ToList();
+        CollectionAssert.Contains(routes, ZenyaHarvester.RouteListingRow);
+        CollectionAssert.Contains(routes, ZenyaHarvester.RouteVersion);
+        CollectionAssert.DoesNotContain(routes, ZenyaHarvester.RouteContents);
+    }
+
+    [TestMethod]
+    public async Task Harvest_ForbiddenRoute_IsRecordedWithItsStatus_NotThrown()
+    {
+        var zenya = new FakeZenya().WithBinary(PdfId, 1, "Partly visible", "pdf", "application/pdf", PdfBytes);
+        zenya.FailRawFor.Add("/hyperlinks");
+        var store = new InMemoryStore();
+
+        var result = await Build(zenya, store).RunAsync();
+
+        // The document synced, the sidecar was written, and the 403 is IN it - that status is what
+        // later separates "not permitted" from "not present" (D243 Part 2).
+        Assert.AreEqual(1, result.New);
+        Assert.AreEqual(1, result.Harvested);
+        Assert.AreEqual(0, result.HarvestFailed);
+        using var doc = Sidecar(store, PdfId);
+        var hyperlinks = doc.RootElement.GetProperty("responses").EnumerateArray()
+            .Single(r => r.GetProperty("route").GetString() == ZenyaHarvester.RouteHyperlinks);
+        Assert.AreEqual(403, hyperlinks.GetProperty("status").GetInt32());
+    }
+
+    [TestMethod]
+    public async Task Reharvest_HarvestsAnUnchangedDocument_WithoutDownloading()
+    {
+        var zenya = new FakeZenya().WithBinary(PdfId, 3, "Same", "pdf", "application/pdf", PdfBytes);
+        var store = new InMemoryStore().WithSynced($"pdf/{PdfId}.pdf", PdfId, 3);
+
+        var result = await Build(zenya, store, reharvest: true).RunAsync();
+
+        Assert.AreEqual(1, result.Unchanged);
+        Assert.AreEqual(1, result.Harvested);
+        Assert.AreEqual(1, zenya.MetadataCalls, "one metadata call for the routing flag");
+        Assert.AreEqual(0, zenya.DownloadCalls, "the binary is already current");
+        Assert.IsTrue(store.Blobs.ContainsKey(ZenyaBlobLayout.MetaBlobNameFor(PdfId)));
+    }
+
+    [TestMethod]
+    public async Task Removal_DeletesTheSidecarWithItsDocument()
+    {
+        var zenya = new FakeZenya();   // empty listing: the document is gone from Zenya
+        var store = new InMemoryStore()
+            .WithSynced($"pdf/{PdfId}.pdf", PdfId, 3)
+            .WithSynced(ZenyaBlobLayout.MetaBlobNameFor(PdfId), PdfId, 3);
+
+        var result = await Build(zenya, store).RunAsync();
+
+        Assert.AreEqual(1, result.Removed);
+        CollectionAssert.AreEquivalent(new[] { $"pdf/{PdfId}.pdf", ZenyaBlobLayout.MetaBlobNameFor(PdfId) }, store.Deletes);
+        Assert.AreEqual(0, result.ForeignBlobs, "a stamped sidecar is managed, not foreign");
+    }
+
+    [TestMethod]
+    public async Task ChangedDocument_OverwritesTheSidecar_NeverDeletesItAsStale()
+    {
+        var zenya = new FakeZenya().WithBinary(PdfId, 4, "Updated", "pdf", "application/pdf", PdfBytes);
+        var store = new InMemoryStore()
+            .WithSynced($"pdf/{PdfId}.pdf", PdfId, 3)
+            .WithSynced(ZenyaBlobLayout.MetaBlobNameFor(PdfId), PdfId, 3);
+
+        var result = await Build(zenya, store).RunAsync();
+
+        // A sidecar carrying the OLD version is not "unchanged" evidence and not a stale binary:
+        // the document counts as changed, and the sidecar is overwritten, not deleted.
+        Assert.AreEqual(1, result.Changed);
+        Assert.AreEqual(0, store.Deletes.Count);
+        Assert.AreEqual("4", store.Blobs[ZenyaBlobLayout.MetaBlobNameFor(PdfId)].Metadata[ZenyaBlobLayout.VersionKey]);
+    }
+
+    [TestMethod]
+    public async Task TenantHarvest_IsWrittenOnce_OnlyWhenSomethingWasHarvested()
+    {
+        var zenya = new FakeZenya()
+            .WithBinary(PdfId, 1, "A", "pdf", "application/pdf", PdfBytes)
+            .WithBinary(DocxId, 1, "B", "pdf", "application/pdf", PdfBytes);
+        var store = new InMemoryStore();
+
+        await Build(zenya, store).RunAsync();
+
+        var tenantFiles = store.Blobs.Keys.Where(n => n.StartsWith(ZenyaBlobLayout.TenantPrefix, StringComparison.Ordinal)).ToList();
+        Assert.AreEqual(1, tenantFiles.Count, "one tenant file per run, not per document");
+        CollectionAssert.Contains(zenya.RawCalls, "documents/custom_fields");
+        CollectionAssert.Contains(zenya.RawCalls, "users/me");
+        Assert.AreEqual(1, zenya.RawCalls.Count(r => r == "documents/custom_fields"), "the catalogue is fetched once");
+    }
 
     // ---- layout + metadata ----------------------------------------------------------------------
 
@@ -201,7 +361,11 @@ public class ZenyaSyncServiceTests
         Assert.AreEqual(1, result.Unchanged);
         Assert.AreEqual(0, zenya.MetadataCalls);
         Assert.AreEqual(0, zenya.DownloadCalls);
+        // Includes the sidecars: an unchanged run harvests nothing and writes no tenant file
+        // either, so the steady-state cost stays at the listing call (D243 Part 1 blast radius).
         Assert.AreEqual(0, store.Uploads.Count);
+        Assert.AreEqual(0, result.Harvested);
+        Assert.AreEqual(0, zenya.RawCalls.Count);
     }
 
     [TestMethod]
@@ -268,8 +432,17 @@ public class ZenyaSyncServiceTests
 
         Assert.AreEqual(1, result.AuthoredSkipped);
         Assert.AreEqual(1, result.New);
-        Assert.AreEqual(1, store.Blobs.Count);
+        Assert.AreEqual(1, store.Blobs.Keys.Count(n => !ZenyaBlobLayout.IsSidecar(n)), "exactly one BINARY blob");
         Assert.AreEqual(1, zenya.DownloadCalls);
+
+        // Since D243 the authored document is not "not written" - it has no binary, but it gets a
+        // sidecar like every other document, and because it has no binary its harvest is the one
+        // that asks for /contents. The PDF's harvest does not.
+        Assert.IsTrue(store.Blobs.ContainsKey(ZenyaBlobLayout.MetaBlobNameFor(HtmlId)));
+        Assert.IsTrue(store.Blobs.ContainsKey(ZenyaBlobLayout.MetaBlobNameFor(PdfId)));
+        Assert.AreEqual(2, result.Harvested);
+        Assert.IsTrue(zenya.RawCalls.Any(r => r == $"documents/{HtmlId}/v1/contents"), "authored document asks for contents");
+        Assert.IsFalse(zenya.RawCalls.Any(r => r == $"documents/{PdfId}/v1/contents"), "binary document does not");
     }
 
     [TestMethod]
@@ -283,7 +456,11 @@ public class ZenyaSyncServiceTests
         var result = await Build(zenya, store).RunAsync();
 
         Assert.AreEqual(1, result.NotDownloadable);
-        Assert.AreEqual(0, store.Blobs.Count);
+        Assert.AreEqual(0, store.Blobs.Keys.Count(n => !ZenyaBlobLayout.IsSidecar(n)), "no BINARY blob");
+        // The harvest runs before the routing decision on purpose: a document Zenya lets us
+        // fetch nothing of still has metadata worth keeping, so it still gets a sidecar.
+        Assert.IsTrue(store.Blobs.ContainsKey(ZenyaBlobLayout.MetaBlobNameFor(HtmlId)));
+        Assert.AreEqual(1, result.Harvested);
     }
 
     // ---- dry run + failures ------------------------------------------------------------------------

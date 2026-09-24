@@ -67,6 +67,7 @@ public static class DocumentRowBuilder
             ChunksAboveCeiling:    tokens.Count(t => t > ChunkingBudget.TokenCeiling),
             ShortChunks:           tokens.Count(t => t < ShortChunkTokens),
             DegradedChunks:        chunks.Count(c => c.Degraded),
+            HeadingOnlyChunksDropped: facts?.HeadingOnlyDropped ?? 0,
 
             // How many headings the document declared, whatever the route did with them. On a
             // Recursive row this is how many headings the route discarded - which is what the

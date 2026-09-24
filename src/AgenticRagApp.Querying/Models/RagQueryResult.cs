@@ -60,4 +60,14 @@ public record RagQueryResult(
     // untouched. 0 / null on a guard-blocked row.
     public int                    ReferencesRetrieved      { get; init; }
     public IReadOnlyList<string>? RetrievedDocumentRanking { get; init; }
+    // The reranker score behind each entry of RetrievedDocumentRanking, same order, same length
+    // (2026-09-23, D228 step 3). Null entry = the service sent no score for that reference.
+    // Read by the eval row only; QueryResponse.From does not map it, so - like the ranking - it
+    // never reaches an HTTP caller (QueryResponseTests pins that).
+    public IReadOnlyList<float?>? RetrievedRerankerScores  { get; init; }
+    // The document behind each block of RetrievedContext, in block order, same length as the
+    // number of blocks (2026-09-23, D228 step 3b). Direct hits AND neighbours, after the context
+    // cap - so "is the expected document in what the judges read" is a lookup, not a text
+    // search. Eval-row only, like the two above; QueryResponse.From does not map it.
+    public IReadOnlyList<string>?  ContextDocumentIds       { get; init; }
 }
