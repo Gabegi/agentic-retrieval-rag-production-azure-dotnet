@@ -1,4 +1,6 @@
+using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
+using AgenticRagApp.Infrastructure.Clients.Blob;
 using AgenticRagApp.Infrastructure.Clients.Search;
 using AgenticRagApp.Indexing.CU.Models;
 using AgenticRagApp.Infrastructure.Configuration;
@@ -13,6 +15,8 @@ public class RestoreService : IRestoreService
     private const string Source = "pdf";
 
     private readonly ISnapshotService     _snapshotService;
+    private readonly BlobContainerClient  _sourceContainer;
+    private readonly IBlobStore           _blobStore;
     private readonly IVectorCache         _vectorCache;
     private readonly IUploadService       _uploadService;
     private readonly IIndexService        _indexService;
@@ -25,6 +29,8 @@ public class RestoreService : IRestoreService
     // a cached vector can outlive the index generation it was made for.
     public RestoreService(
         ISnapshotService        snapshotService,
+        BlobContainerClient     sourceContainer,
+        IBlobStore              blobStore,
         IVectorCache            vectorCache,
         IUploadService          uploadService,
         IIndexService           indexService,
@@ -32,6 +38,8 @@ public class RestoreService : IRestoreService
         ILogger<RestoreService> logger)
     {
         _snapshotService = snapshotService;
+        _sourceContainer = sourceContainer;
+        _blobStore       = blobStore;
         _vectorCache     = vectorCache;
         _uploadService   = uploadService;
         _indexService    = indexService;
@@ -50,10 +58,55 @@ public class RestoreService : IRestoreService
                 _config.SearchIndexName, _config.OpenAiEmbeddingModelName, _config.OpenAiEmbeddingDeployment);
         }
 
-        var chunks        = new List<ChunkObject>(snapshotChunks.Count);
+        // ── Reconcile against the live source (2026-09-24, D234 Step 8) ────────────────────
+        //
+        // A restore used to trust the blob completely: every row in the snapshot became an index
+        // document. Measured on 2026-09-24, that snapshot held 3,723 rows under 51 bare-filename
+        // ids from the retired pre-Zenya corpus, with their vectors still in the cache - a restore
+        // would have written all of them back as live content, and nothing downstream could tell
+        // them from the real corpus.
+        //
+        // REFUSES rather than degrades when the listing cannot be read. A restore runs when things
+        // are already broken, so "the source listing failed, carry on trusting the blob" is the
+        // one behaviour that turns a recovery into a corruption. Same stance as the HardCut
+        // tripwire in ChunkingService: fail the stage rather than write something unreadable.
+        HashSet<string> liveIds;
+        try
+        {
+            var blobs = await _blobStore.ListBlobsAsync(_sourceContainer, ct: ct);
+            liveIds = blobs
+                .Select(b => b.Name)
+                .Where(n => n.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "Restore refused: the live source listing could not be read, so snapshot rows cannot be " +
+                "reconciled against the documents that still exist. Restoring the snapshot unchecked would " +
+                "re-index documents that have been removed.", ex);
+        }
+
+        if (liveIds.Count == 0)
+            throw new InvalidOperationException(
+                $"Restore refused: the live source listing came back empty while the snapshot holds " +
+                $"{snapshotChunks.Count} chunk(s). An empty listing is indistinguishable from a listing " +
+                "failure here, and restoring on it would re-index the entire retired corpus.");
+
+        var reconciled = snapshotChunks
+            .Where(s => liveIds.Contains(s.DocumentId))
+            .ToList();
+        var skipped = snapshotChunks.Count - reconciled.Count;
+
+        if (skipped > 0)
+            _logger.LogWarning(
+                "Restore reconcile — {Skipped} of {Total} snapshot chunk(s) belong to documents that are no longer in the source and were skipped.",
+                skipped, snapshotChunks.Count);
+
+        var chunks        = new List<ChunkObject>(reconciled.Count);
         var missingVector = 0;
 
-        foreach (var s in snapshotChunks)
+        foreach (var s in reconciled)
         {
             var vector = (await _vectorCache.TryGetAsync(s.ContentHash, ct))?.Vector;
             if (vector is null) missingVector++;
@@ -185,6 +238,9 @@ public class RestoreService : IRestoreService
             uploadResult.IndexStorageSizeBytesSnapshot,
             _config.SearchIndexName,
             _config.OpenAiEmbeddingModelName,
-            _config.OpenAiEmbeddingDeployment);
+            _config.OpenAiEmbeddingDeployment)
+        {
+            ChunksSkippedNotInSource = skipped,
+        };
     }
 }

@@ -175,5 +175,8 @@ public class IndexRestoreFunction
             IndexStorageSizeBytesSnapshot: result?.IndexStorageSizeBytesSnapshot,
             SearchIndexName:               result?.SearchIndexName      ?? "",
             EmbeddingModel:                result?.EmbeddingModel       ?? "",
-            EmbeddingDeployment:           result?.EmbeddingDeployment  ?? "");
+            EmbeddingDeployment:           result?.EmbeddingDeployment  ?? "")
+        {
+            ChunksSkippedNotInSource = result?.ChunksSkippedNotInSource ?? 0,
+        };
 }

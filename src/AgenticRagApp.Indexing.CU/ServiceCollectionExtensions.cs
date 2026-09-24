@@ -115,7 +115,20 @@ public static class ServiceCollectionExtensions
 
         // Index-recovery path — reads Observability's rolling snapshot (registered by the
         // host, see Program.cs) instead of re-extracting from source.
-        services.AddSingleton<IRestoreService, RestoreService>();
+        //
+        // Registered through a factory rather than by type since 2026-09-24 (D234 Step 8): the
+        // restore reconciles the snapshot against the live source listing before uploading, so it
+        // needs the same keyed "source-documents" container the diff and the extraction use. By
+        // type, DI cannot resolve a keyed dependency.
+        services.AddSingleton<IRestoreService>(sp => new RestoreService(
+            sp.GetRequiredService<ISnapshotService>(),
+            sp.GetRequiredKeyedService<BlobContainerClient>("source-documents"),
+            sp.GetRequiredService<IBlobStore>(),
+            sp.GetRequiredService<IVectorCache>(),
+            sp.GetRequiredService<IUploadService>(),
+            sp.GetRequiredService<IIndexService>(),
+            sp.GetRequiredService<IndexerConfig>(),
+            sp.GetRequiredService<ILogger<RestoreService>>()));
 
         return services;
     }

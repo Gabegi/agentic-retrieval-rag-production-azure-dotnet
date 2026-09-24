@@ -36,4 +36,12 @@ public record PdfRestoreRunReport(
     string SearchIndexName,
     string EmbeddingModel,
     string EmbeddingDeployment
-);
+)
+{
+    // Snapshot rows skipped because their document is no longer in the live source
+    // (2026-09-24, D234 Step 8). An init property rather than a positional parameter so every
+    // existing report and call site stays valid and an older report reads back 0 rather than
+    // failing to deserialize. A non-zero means the snapshot was still carrying rows for
+    // documents that no longer exist - 3,723 of them on the 2026-09-24 snapshot.
+    public int ChunksSkippedNotInSource { get; init; }
+}

@@ -26,4 +26,15 @@ public record RestoreResult(
     long?   IndexStorageSizeBytesSnapshot,
     string  SearchIndexName,
     string  EmbeddingModel,
-    string  EmbeddingDeployment);
+    string  EmbeddingDeployment)
+{
+    // Snapshot rows skipped because their document is no longer in the live source listing
+    // (2026-09-24, D234 Step 8). Init property rather than positional so every existing
+    // construction site keeps compiling and says nothing false by omission.
+    //
+    // Structurally 0 once the scheme guard in SnapshotService has cleaned a snapshot, and that is
+    // the point of reporting it: a non-zero here means the blob still holds rows for documents
+    // that no longer exist, which before this guard would have been restored into the index as
+    // live content - 3,723 of them on the 2026-09-24 snapshot.
+    public int ChunksSkippedNotInSource { get; init; }
+}

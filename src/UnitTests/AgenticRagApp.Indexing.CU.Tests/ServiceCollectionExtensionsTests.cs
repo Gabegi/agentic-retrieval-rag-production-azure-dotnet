@@ -131,7 +131,15 @@ public class ServiceCollectionExtensionsTests
         AssertSingleton<IEmbeddingService, EmbeddingService>(services);
         AssertSingleton<IUploadService, UploadService>(services);
         Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IVectorCache)));
-        AssertSingleton<IRestoreService, RestoreService>(services);
+        Assert.IsTrue(services.Any(d => d.ServiceType == typeof(IRestoreService)));
+
+        // A factory since 2026-09-24 (D234 Step 8), like IExtractionService above and for the same
+        // reason: the restore reconciles against the keyed "source-documents" container before
+        // it uploads, and the container cannot resolve a keyed dependency by type. Pinned as a
+        // factory below so the registration shape is asserted rather than just its presence.
+        var restore = services.Single(d => d.ServiceType == typeof(IRestoreService));
+        Assert.AreEqual(ServiceLifetime.Singleton, restore.Lifetime);
+        Assert.IsNotNull(restore.ImplementationFactory);
     }
 
     [TestMethod]

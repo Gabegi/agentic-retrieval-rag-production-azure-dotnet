@@ -323,4 +323,87 @@ public class SnapshotServiceTests
         Assert.IsTrue(live.ContentHashes.Contains("new-hash"));
         Assert.IsFalse(live.ContentHashes.Contains("old-hash"));
     }
+
+    // ── The scheme guard (2026-09-24, D234 Step 8) ──────────────────────────────────────────
+    //
+    // The drop set is built from this run's ids, so a row written under a previous id scheme can
+    // never be named by it. The 2026-09-24 snapshot carried 3,723 such rows over 51 bare-filename
+    // ids from the pre-Zenya corpus, beside 33,223 "pdf/<guid>.pdf" rows, and a restore would have
+    // written every one of them back into the index.
+    [TestMethod]
+    public async Task UpdateAsync_DropsRowsWrittenUnderAPreviousIdScheme()
+    {
+        var blobStore = new Mock<IBlobStore>();
+        SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
+        var previousChunks = new List<SnapshotChunk>
+        {
+            TestChunk.Snapshot("live-id",  "pdf/11111111-2222-3333-4444-555555555555.pdf", "Live",  "live body",  "live-hash"),
+            TestChunk.Snapshot("ghost-id", "Aanbrengbonus (Versie 5).pdf",                 "Ghost", "ghost body", "ghost-hash"),
+        };
+        blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
+                It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(previousChunks);
+        var service = BuildService(blobStore);
+        var newChunks = new List<TestChunk>
+        {
+            new("new-id", "pdf/66666666-7777-8888-9999-000000000000.pdf", "New", null, "new content", null, 0, 0, "new-hash"),
+        };
+
+        var live = await service.UpdateAsync("pdf", newChunks, staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(1, live.ForeignSchemeRowsDropped);
+        Assert.IsFalse(live.ContentHashes.Contains("ghost-hash"), "the old-scheme row must not stay live");
+        Assert.IsFalse(live.DocumentIds.Contains("Aanbrengbonus (Versie 5).pdf"));
+        // Its hash leaving the live set is what finally lets the vector cache evict its vector.
+        Assert.IsTrue(live.ContentHashes.Contains("live-hash"));
+        Assert.IsTrue(live.ContentHashes.Contains("new-hash"));
+    }
+
+    // The tripwire. A source whose ids do not carry its own name as a prefix must keep every row
+    // rather than have the snapshot silently emptied - "drop everything" is never the right answer
+    // to "the prefix assumption does not hold here".
+    [TestMethod]
+    public async Task UpdateAsync_KeepsEveryRow_WhenNoneMatchesTheSchemeAtAll()
+    {
+        var blobStore = new Mock<IBlobStore>();
+        SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
+        var previousChunks = new List<SnapshotChunk>
+        {
+            TestChunk.Snapshot("a", "CAO VVT (Versie 6).pdf",   "A", "a body", "hash-a"),
+            TestChunk.Snapshot("b", "CAO GHZ (Versie 4).pdf",   "B", "b body", "hash-b"),
+        };
+        blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
+                It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(previousChunks);
+        var service = BuildService(blobStore);
+
+        var live = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(0, live.ForeignSchemeRowsDropped, "nothing may be dropped when nothing matches");
+        Assert.AreEqual(2, live.ContentHashes.Count);
+    }
+
+    // The prefix is the source's own name, compared case-insensitively like every other id
+    // comparison on this path.
+    [TestMethod]
+    public async Task UpdateAsync_SchemeMatchIsCaseInsensitive()
+    {
+        var blobStore = new Mock<IBlobStore>();
+        SetupExistingPointer(blobStore, ("2024/01/01/ts-snapshot-pdf-instance-old.json", "instance-old"));
+        var previousChunks = new List<SnapshotChunk>
+        {
+            TestChunk.Snapshot("upper", "PDF/UPPER.pdf",        "Upper", "upper body", "hash-upper"),
+            TestChunk.Snapshot("ghost", "Ontruimingsplan.pdf",  "Ghost", "ghost body", "hash-ghost"),
+        };
+        blobStore.Setup(s => s.DownloadJsonAsync<List<SnapshotChunk>>(
+                It.IsAny<BlobContainerClient>(), "2024/01/01/ts-snapshot-pdf-instance-old.json", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(previousChunks);
+        var service = BuildService(blobStore);
+
+        var live = await service.UpdateAsync("pdf", new List<TestChunk>(), staleDocumentIds: [], processedDocumentIds: [], instanceId: "run-2", startedAt: StartedAt);
+
+        Assert.AreEqual(1, live.ForeignSchemeRowsDropped);
+        Assert.IsTrue(live.ContentHashes.Contains("hash-upper"));
+        Assert.IsFalse(live.ContentHashes.Contains("hash-ghost"));
+    }
 }
